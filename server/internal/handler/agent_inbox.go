@@ -388,6 +388,13 @@ func (h *Handler) ReportAgentInboxMessages(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to persist task messages")
+		return
+	}
+	defer func() { _ = tx.Rollback(r.Context()) }()
+	qtx := h.Queries.WithTx(tx)
 	userFacingMessages := make([]protocol.TaskMessagePayload, 0, len(req.Messages))
 	for _, msg := range req.Messages {
 		msg.Content = redact.Text(msg.Content)
@@ -396,7 +403,28 @@ func (h *Handler) ReportAgentInboxMessages(w http.ResponseWriter, r *http.Reques
 		if canonicalTool, known := taskMessageCanonicalToolName(msg.Tool, msg.Input); known {
 			msg.Tool = canonicalTool
 		}
-		if taskMessageRequestVisibility(msg) != "user_facing" {
+		visibility := taskMessageRequestVisibility(msg)
+		var inputJSON []byte
+		if msg.Input != nil {
+			inputJSON, _ = json.Marshal(msg.Input)
+		}
+		if _, _, err := h.TaskService.RecordTaskMessageBoundaryTx(r.Context(), qtx, tx, service.TaskMessageBoundaryInput{
+			Task: event,
+			Message: db.CreateTaskMessageParams{
+				Seq:        int32(msg.Seq),
+				Type:       msg.Type,
+				Tool:       pgtype.Text{String: msg.Tool, Valid: msg.Tool != ""},
+				Content:    pgtype.Text{String: msg.Content, Valid: msg.Content != ""},
+				Input:      inputJSON,
+				Output:     pgtype.Text{String: msg.Output, Valid: msg.Output != ""},
+				Visibility: visibility,
+			},
+			BoundaryKind: service.DAGBoundaryInbound,
+		}); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to persist task message")
+			return
+		}
+		if visibility != "user_facing" {
 			continue
 		}
 		details := map[string]any{
@@ -431,6 +459,10 @@ func (h *Handler) ReportAgentInboxMessages(w http.ResponseWriter, r *http.Reques
 		if payload, ok := agentInboxTaskMessagePayload(event, msg, kind, details); ok {
 			userFacingMessages = append(userFacingMessages, payload)
 		}
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to persist task messages")
+		return
 	}
 	if isResearchV6WorkInboxEvent(event) && len(userFacingMessages) > 0 {
 		writer, ok := h.ResearchRun.(researchrun.V6WorkActivityWriter)
@@ -767,7 +799,7 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 			return
 		}
 		if !isChannelOnboarding {
-			chatDonePayload, err = h.completedAgentInboxChatPayload(r.Context(), qtx, event, req.TaskCompleteRequest)
+			chatDonePayload, err = h.completedAgentInboxChatPayload(r.Context(), qtx, tx, event, req.TaskCompleteRequest)
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, "failed to save inbox chat output")
 				return
@@ -797,14 +829,17 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 			writeError(w, http.StatusInternalServerError, "failed to advance collaboration turn")
 			return
 		}
+		if err := h.TaskService.RecordTerminalTaskBoundaryTx(r.Context(), qtx, tx, event); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to record inbox terminal boundary")
+			return
+		}
 		if err := tx.Commit(r.Context()); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to commit inbox completion")
 			return
 		}
-		// The chat-session branch acks the delivery itself and never reaches
-		// completeTask, so it owes the terminal side effects the work-task
-		// branch gets for free. Rollout agents always run in a chat session.
-		h.TaskService.FinalizeTerminalTaskSideEffects(r.Context(), event)
+		// The chat-session branch records its universal terminal boundary before
+		// commit; only non-authoritative side effects remain here.
+		h.TaskService.FinalizeTerminalTaskPostCommitSideEffects(r.Context(), event)
 	}
 	h.persistChatRuntimeTokenStats(r.Context(), event.ChatSessionID, req.RuntimeStats)
 	if workCompletion != nil && workCompletion.CompletedNow {
@@ -1229,17 +1264,18 @@ func (h *Handler) completeFailedAgentInboxEvent(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusInternalServerError, "failed to finalize inbox execution ledger")
 		return
 	}
+	if event.ChatSessionID.Valid {
+		if err := h.TaskService.RecordTerminalTaskBoundaryTx(r.Context(), qtx, tx, event); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to record inbox failure terminal boundary")
+			return
+		}
+	}
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to commit inbox failure")
 		return
 	}
 	if event.ChatSessionID.Valid {
-		// Same gap as the completion path: a chat-session failure is acked here
-		// and never reaches failTask. A failed rollout still has to close its
-		// segment (an unclosed one makes the whole assembled DAG unusable) and
-		// release its sandbox. Work-task failures route via failTask instead, so
-		// they are excluded to avoid closing twice.
-		h.TaskService.FinalizeTerminalTaskSideEffects(r.Context(), event)
+		h.TaskService.FinalizeTerminalTaskPostCommitSideEffects(r.Context(), event)
 	}
 	h.finishFailedAgentInboxEvent(
 		w, r, event, deliveryID, errText, failureReason, reasonCode, alreadyReplied, collaborationWakes, ackedSeq,
@@ -1309,8 +1345,16 @@ type ChannelCancelAgentInboxEventResponse struct {
 }
 
 func (h *Handler) cancelAgentInboxEventCore(ctx context.Context, workspaceUUID, inboxEventID pgtype.UUID) (cancelledAgentInboxEventRow, error) {
+	if h == nil || h.TxStarter == nil || h.TaskService == nil {
+		return cancelledAgentInboxEventRow{}, errors.New("agent inbox cancellation transaction unavailable")
+	}
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return cancelledAgentInboxEventRow{}, err
+	}
+	defer tx.Rollback(ctx)
 	var row cancelledAgentInboxEventRow
-	err := h.DB.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		WITH latest_delivery AS (
 			SELECT d.id, d.runtime_id
 			FROM agent_event_delivery d
@@ -1366,6 +1410,17 @@ func (h *Handler) cancelAgentInboxEventCore(ctx context.Context, workspaceUUID, 
 		if errors.Is(err, pgx.ErrNoRows) {
 			return cancelledAgentInboxEventRow{}, errAgentInboxEventNotCancellable
 		}
+		return cancelledAgentInboxEventRow{}, err
+	}
+	qtx := h.Queries.WithTx(tx)
+	task, err := qtx.GetAgentTask(ctx, inboxEventID)
+	if err != nil {
+		return cancelledAgentInboxEventRow{}, err
+	}
+	if err := h.TaskService.RecordTerminalTaskBoundaryTx(ctx, qtx, tx, task); err != nil {
+		return cancelledAgentInboxEventRow{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return cancelledAgentInboxEventRow{}, err
 	}
 	return row, nil
@@ -2363,7 +2418,7 @@ func (h *Handler) populateAgentInboxInitiator(ctx context.Context, sourceMessage
 	}
 }
 
-func (h *Handler) completedAgentInboxChatPayload(ctx context.Context, q *db.Queries, event db.AgentInboxEvent, req TaskCompleteRequest) (*protocol.ChatDonePayload, error) {
+func (h *Handler) completedAgentInboxChatPayload(ctx context.Context, q *db.Queries, tx pgx.Tx, event db.AgentInboxEvent, req TaskCompleteRequest) (*protocol.ChatDonePayload, error) {
 	if !event.ChatSessionID.Valid {
 		return nil, nil
 	}
@@ -2407,6 +2462,15 @@ func (h *Handler) completedAgentInboxChatPayload(ctx context.Context, q *db.Quer
 			slog.Error("agent inbox complete: failed to save assistant chat message", "inbox_event_id", uuidToString(event.ID), "error", err)
 			return nil, err
 		} else {
+			if h.TaskService == nil {
+				return nil, errors.New("task service unavailable for inbox chat output")
+			}
+			if _, err := h.TaskService.RecordVisibleTaskActionTx(
+				ctx, q, tx, event, service.DAGCloseMessage, row.ID, row.Content,
+				pgtype.UUID{}, event.ChannelID, pgtype.UUID{}, pgtype.UUID{}, "",
+			); err != nil {
+				return nil, fmt.Errorf("record inbox chat output boundary: %w", err)
+			}
 			msg = &row
 			if err := q.SetUnreadSinceIfNull(ctx, event.ChatSessionID); err != nil {
 				slog.Warn("agent inbox complete: failed to set unread_since", "chat_session_id", uuidToString(event.ChatSessionID), "error", err)

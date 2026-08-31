@@ -313,7 +313,7 @@ func TestGraphMemoryAgentGatewayBindsManagedPrincipalAndSurvivesStatelessRequest
 		t.Fatal("managed Agent delivery did not receive Graph tool capability")
 	}
 
-	testHandler.GraphMemoryAgentGateway = service.NewGraphMemoryAgentGateway(testPool)
+	testHandler.GraphMemoryAgentGateway = service.NewGraphMemoryAgentGateway(testPool, graphMemoryTestProviderResolver("test-provider", "test-model"))
 	callAs := func(principalAgentID, operation, body string) *httptest.ResponseRecorder {
 		t.Helper()
 		req := httptest.NewRequest(http.MethodPost, "/api/agent/channels/"+channelID.String()+"/graph-memory/"+operation, bytes.NewBufferString(body))

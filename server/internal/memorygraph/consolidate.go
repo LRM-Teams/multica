@@ -190,49 +190,92 @@ type ConsolidateResult struct {
 // place; in TTT mode T trajectories edit isolated candidate version copies
 // and a backtest selects the winner.
 type Consolidator struct {
-	store    *Store
-	backend  AgentBackend
-	cfg      ConsolidateConfig
-	provider string // agent CLI provider name (e.g. "pi"); integration-time wiring
-	oplog    *OpLogger
-	traces   *TraceRecorder // nil → trajectories are drained but not persisted
+	store   *Store
+	backend AgentBackend
+	cfg     ConsolidateConfig
+	scope   ProviderScope
+	oplog   *OpLogger
+	traces  *TraceRecorder // nil → trajectories are drained but not persisted
 
-	runner FullBacktestRunner // nil → full backtests count as misses
+	runner *ScopedFullBacktestRunner // nil → full backtests count as misses
 	// emb enables the vector channel of the per-candidate backtest retrieval
 	// (design Q13/A2: the backtest retriever must mirror production); nil
 	// keeps backtests BM25-only through the same two-channel merge.
 	emb *CachedEmbedder
+
+	runnerBindingErr   error
+	embedderBindingErr error
 }
 
-// NewConsolidator returns a Consolidator over the given store. cfg zero
-// values fall back to DefaultConsolidateConfig. oplog may be nil, in which
-// case a fresh OpLogger over store is used. provider is informational until
-// provider wiring lands at integration time. traces may be nil, in which
-// case trajectories are not persisted.
-func NewConsolidator(store *Store, backend AgentBackend, cfg ConsolidateConfig, provider string, oplog *OpLogger, traces *TraceRecorder) *Consolidator {
+// NewConsolidator returns a Consolidator over the given store. The provider
+// scope must come from the server resolver; cfg.Model is overwritten by its
+// resolved model. oplog and traces may be nil.
+func NewConsolidator(store *Store, backend AgentBackend, cfg ConsolidateConfig, scope ProviderScope, oplog *OpLogger, traces *TraceRecorder) *Consolidator {
 	if oplog == nil {
 		oplog = NewOpLogger(store)
 	}
+	cfg.Model = scope.Model
 	return &Consolidator{
-		store:    store,
-		backend:  backend,
-		cfg:      cfg.normalized(),
-		provider: provider,
-		oplog:    oplog,
-		traces:   traces,
+		store:   store,
+		backend: backend,
+		cfg:     cfg.normalized(),
+		scope:   scope,
+		oplog:   oplog,
+		traces:  traces,
 	}
 }
 
-// SetRunner installs the FullBacktestRunner used when a candidate's
-// retrieval distance regresses (design Q13: distance increase triggers a
-// full agent explore backtest). In production this rebuilds an Explorer
-// against the candidate version; in tests a fake.
-func (c *Consolidator) SetRunner(r FullBacktestRunner) { c.runner = r }
+// SetRunner installs a FullBacktestRunner with the Consolidator's resolved identity.
+func (c *Consolidator) SetRunner(r *ScopedFullBacktestRunner) error {
+	if r == nil {
+		c.runner = nil
+		c.runnerBindingErr = nil
+		return nil
+	}
+	if err := validateProviderScope(c.scope, ProviderPurposeConsolidate); err != nil {
+		c.runnerBindingErr = err
+		return err
+	}
+	if err := validateProviderScope(r.scope, ProviderPurposeConsolidate); err != nil {
+		c.runnerBindingErr = err
+		return err
+	}
+	if !providerScopeIdentityEqual(c.scope, r.scope) {
+		err := fmt.Errorf("consolidate: runner scope identity does not match consolidation scope identity")
+		c.runnerBindingErr = err
+		return err
+	}
+	c.runner = r
+	c.runnerBindingErr = nil
+	return nil
+}
 
 // SetEmbedder installs the embedding channel used by the per-candidate
 // backtest retrievers so backtests mirror the production hybrid retrieval
 // (design Q13/A2). Nil keeps backtests BM25-only.
-func (c *Consolidator) SetEmbedder(emb *CachedEmbedder) { c.emb = emb }
+func (c *Consolidator) SetEmbedder(emb *CachedEmbedder) error {
+	if emb == nil {
+		c.emb = nil
+		c.embedderBindingErr = nil
+		return nil
+	}
+	if err := validateProviderScope(c.scope, ProviderPurposeConsolidate); err != nil {
+		c.embedderBindingErr = err
+		return err
+	}
+	if err := validateProviderScope(emb.scope, ProviderPurposeEmbed); err != nil {
+		c.embedderBindingErr = err
+		return err
+	}
+	if !providerScopeIdentityEqual(c.scope, emb.scope) {
+		err := fmt.Errorf("consolidate: embedder scope identity does not match consolidation scope identity")
+		c.embedderBindingErr = err
+		return err
+	}
+	c.emb = emb
+	c.embedderBindingErr = nil
+	return nil
+}
 
 // stagingSummary is one pending staging segment embedded in the prompt.
 type stagingSummary struct {
@@ -246,6 +289,15 @@ const maxStagingPromptChars = 2000
 // Consolidate runs one consolidation cycle against the current version
 // (design §5.4). The caller is expected to have gated on ShouldConsolidate.
 func (c *Consolidator) Consolidate(ctx context.Context) (*ConsolidateResult, error) {
+	if err := validateProviderScope(c.scope, ProviderPurposeConsolidate); err != nil {
+		return nil, fmt.Errorf("consolidate: %w", err)
+	}
+	if c.runnerBindingErr != nil {
+		return nil, c.runnerBindingErr
+	}
+	if c.embedderBindingErr != nil {
+		return nil, c.embedderBindingErr
+	}
 	if c.backend == nil {
 		return nil, fmt.Errorf("consolidate: agent backend not configured")
 	}
@@ -378,6 +430,7 @@ func (c *Consolidator) consolidateTTT(ctx context.Context, current int, staging 
 	btCfg := BacktestConfig{
 		RecallTolerance: c.cfg.RecallTolerance,
 		Embedder:        c.emb,
+		Scope:           c.scope,
 		Runner:          c.runner,
 		// Cold start (spec §7): below the threshold the window baselines are
 		// too thin to trust, so the statistical gates (recall, rounds

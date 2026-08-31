@@ -33,20 +33,6 @@ var (
 	commit  = "unknown"
 )
 
-// graphMemoryDiveModelBackend keeps the process Explore-model default for
-// empty Dive overrides while allowing an approved Dive model to win per run.
-type graphMemoryDiveModelBackend struct {
-	memorygraph.AgentBackend
-	defaultModel string
-}
-
-func (b graphMemoryDiveModelBackend) Execute(ctx context.Context, prompt string, opts agentpkg.ExecOptions) (*agentpkg.Session, error) {
-	if opts.Model == "" {
-		opts.Model = b.defaultModel
-	}
-	return b.AgentBackend.Execute(ctx, prompt, opts)
-}
-
 func newNamedRedisClient(base *redis.Options, suffix string) *redis.Client {
 	opts := *base
 	opts.ClientName = redisClientName(opts.ClientName, suffix)
@@ -285,6 +271,9 @@ func main() {
 	defer analyticsClient.Close()
 
 	queries := db.New(pool)
+	memoryProviderPolicy := service.NewMemoryProviderPolicyResolver(
+		queries, service.LoadMemoryProviderPolicyResolverConfig(os.Getenv),
+	)
 	hub.SetAuthorizer(newScopeAuthorizer(queries))
 	// Order matters: subscriber listeners must register BEFORE notification listeners.
 	// The notification listener queries the subscriber table to determine recipients,
@@ -386,6 +375,7 @@ func main() {
 	h.ReminderNotifier = reminderNotifier
 	h.AgentDeliveryNotifier = agentDeliveryNotifier
 	h.AgentRestartNotifier = agentRestartNotifier
+	h.GraphMemoryConsolidation = service.NewGraphMemoryConsolidationService(queries, pool, "", memoryProviderPolicy)
 
 	srv := &http.Server{
 		Addr:    ":" + port,
@@ -411,31 +401,19 @@ func main() {
 		slog.Info("training bridge not configured (AREAL_BRIDGE_STUB_URL unset) — training hooks disabled")
 	}
 
-	// The Dive backend follows the PI environment contract. An approved provider
-	// selects its registered backend; the approved model wins per execution and
-	// an empty override inherits MULTICA_PI_MODEL through the adapter above.
+	// Dive constructs only the provider/model selected by the Workspace policy.
 	diveWorker := service.NewGraphMemoryDiveWorker(
-		pool, service.NewGraphMemoryDiveService(pool), rlSvc, service.LoadGraphMemoryLimits(os.Getenv), "",
-		func(_ context.Context, model, provider string) (memorygraph.AgentBackend, error) {
-			provider = strings.TrimSpace(provider)
-			if provider == "" {
-				provider = "pi"
-			}
+		pool, service.NewGraphMemoryDiveService(pool), rlSvc, service.LoadGraphMemoryLimits(os.Getenv), "", memoryProviderPolicy,
+		func(_ context.Context, policy service.ResolvedMemoryProvider) (memorygraph.AgentBackend, error) {
 			cfg := agentpkg.Config{}
-			if provider == "pi" {
+			if policy.Provider == "pi" {
 				path := strings.TrimSpace(os.Getenv("MULTICA_PI_PATH"))
 				if path == "" {
 					path = "pi"
 				}
 				cfg.ExecutablePath = path
 			}
-			backend, err := agentpkg.New(provider, cfg)
-			if err != nil {
-				return nil, err
-			}
-			return graphMemoryDiveModelBackend{
-				AgentBackend: backend, defaultModel: strings.TrimSpace(os.Getenv("MULTICA_PI_MODEL")),
-			}, nil
+			return agentpkg.New(policy.Provider, cfg)
 		},
 	)
 
@@ -452,19 +430,23 @@ func main() {
 	h.GraphMemoryRecall = service.NewGraphMemoryRecallService(
 		pool, service.LoadGraphMemoryLimits(os.Getenv), "", "", service.GraphMemoryHybridSeeder{})
 	h.GraphMemoryAgentControl = service.NewPostgresGraphMemoryAgentControlPlane(pool)
-	h.GraphMemoryAgentGateway = service.NewGraphMemoryAgentGateway(pool)
-	// Recall execution uses the same PI environment contract as the graph
-	// scheduler. The model is also passed through to Explore audit records.
+	h.GraphMemoryAgentGateway = service.NewGraphMemoryAgentGateway(pool, memoryProviderPolicy)
+	// Recall execution constructs only the provider/model selected by the
+	// same Workspace policy resolver used by the gateway and Dive worker.
 	h.GraphMemoryRecallExecutor = service.NewGraphMemoryRecallExecutor(
-		pool, service.NewGraphMemoryDiveService(pool),
-		func(context.Context, *service.GraphMemoryRecallPlan) (memorygraph.AgentBackend, error) {
-			path := strings.TrimSpace(os.Getenv("MULTICA_PI_PATH"))
-			if path == "" {
-				path = "pi"
+		pool, service.NewGraphMemoryDiveService(pool), memoryProviderPolicy,
+		func(_ context.Context, policy service.ResolvedMemoryProvider) (memorygraph.AgentBackend, error) {
+			cfg := agentpkg.Config{}
+			if policy.Provider == "pi" {
+				path := strings.TrimSpace(os.Getenv("MULTICA_PI_PATH"))
+				if path == "" {
+					path = "pi"
+				}
+				cfg.ExecutablePath = path
 			}
-			return agentpkg.New("pi", agentpkg.Config{ExecutablePath: path})
+			return agentpkg.New(policy.Provider, cfg)
 		},
-		nil, nil, strings.TrimSpace(os.Getenv("MULTICA_PI_MODEL")),
+		nil, nil,
 	)
 	// LRM-1049: Autopilot scheduler/listeners/failure-monitor are retired.
 	// Reminder owns agent self-wake; API paths return 410.
@@ -536,7 +518,7 @@ func main() {
 	// per-workspace scoped_writer_ready gate (jobs_graph_memory.go) keeps it
 	// inert until the scoped writer acceptance gates pass, so no
 	// process-level switch is needed or permitted to activate it early.
-	if err := schedulerMgr.Register(scheduler.GraphMemoryJobs(pool, businessMetrics)); err != nil {
+	if err := schedulerMgr.Register(scheduler.GraphMemoryJobs(pool, businessMetrics, memoryProviderPolicy)); err != nil {
 		slog.Warn("scheduler: failed to register graph memory consolidation job", "error", err)
 	} else {
 		schedulerRegistered = true

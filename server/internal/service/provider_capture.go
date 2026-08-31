@@ -21,6 +21,7 @@ import (
 // authenticating the runner and proving the run-agent identity; this service
 // verifies the persisted hierarchy again before writing any capture data.
 type TrustedTurnCapture struct {
+	WorkspaceID  pgtype.UUID
 	RunID        pgtype.UUID
 	RunAgentID   pgtype.UUID
 	TurnID       pgtype.UUID
@@ -103,6 +104,7 @@ func (s *ProviderCaptureService) AcceptTrustedTurnCapture(ctx context.Context, i
 	if err != nil {
 		return TrustedTurnCaptureResult{}, err
 	}
+	input.WorkspaceID = run.WorkspaceID
 	if run.Status == "completed" || run.Status == "failed_timeout" {
 		eventID := input.LateEventID
 		if !eventID.Valid {
@@ -180,8 +182,12 @@ func (s *ProviderCaptureService) AcceptTrustedTurnCapture(ctx context.Context, i
 			return TrustedTurnCaptureResult{}, err
 		}
 	}
-	if err := assignMixedRLSegmentsForCapture(ctx, qtx, ledger, input); err != nil {
-		return TrustedTurnCaptureResult{}, err
+	var providerCaptureConflict error
+	if err := assignMixedRLSegmentsForCapture(ctx, qtx, tx, ledger, input); err != nil {
+		if !errors.Is(err, ErrDAGProviderCaptureConflict) {
+			return TrustedTurnCaptureResult{}, err
+		}
+		providerCaptureConflict = err
 	}
 	completedAt := input.CompletedAt
 	if completedAt.IsZero() {
@@ -198,7 +204,11 @@ func (s *ProviderCaptureService) AcceptTrustedTurnCapture(ctx context.Context, i
 	if err := tx.Commit(ctx); err != nil {
 		return TrustedTurnCaptureResult{}, err
 	}
-	return TrustedTurnCaptureResult{Run: mixedRLRunRecord(run), Turn: residentTurnRecord(turn)}, nil
+	result := TrustedTurnCaptureResult{Run: mixedRLRunRecord(run), Turn: residentTurnRecord(turn)}
+	if providerCaptureConflict != nil {
+		return result, providerCaptureConflict
+	}
+	return result, nil
 }
 
 // AcceptTrustedTurnCaptureGap writes the gap audit event, settles its active
@@ -383,7 +393,7 @@ func sha256Prefixed(raw []byte) string {
 // assignMixedRLSegmentsForCapture creates message/reaction segments for
 // successful actions and assigns unowned calls in canonical order with
 // first-success owned + sibling shared_producer associations.
-func assignMixedRLSegmentsForCapture(ctx context.Context, qtx *db.Queries, ledger *ProviderCallLedger, input TrustedTurnCapture) error {
+func assignMixedRLSegmentsForCapture(ctx context.Context, qtx *db.Queries, tx pgx.Tx, ledger *ProviderCallLedger, input TrustedTurnCapture) error {
 	actions := append([]VisibleActionInput(nil), input.Actions...)
 	sort.SliceStable(actions, func(i, j int) bool {
 		if actions[i].CreatedAt.Equal(actions[j].CreatedAt) {
@@ -470,6 +480,112 @@ func assignMixedRLSegmentsForCapture(ctx context.Context, qtx *db.Queries, ledge
 				return err
 			}
 			owned[call.CallID] = segmentID
+		}
+	}
+	if err := attachUniversalDAGCapture(ctx, qtx, tx, input, actions); err != nil {
+		return err
+	}
+	return nil
+}
+
+func attachUniversalDAGCapture(
+	ctx context.Context,
+	qtx *db.Queries,
+	tx pgx.Tx,
+	input TrustedTurnCapture,
+	actions []VisibleActionInput,
+) error {
+	if len(actions) == 0 {
+		return nil
+	}
+	var universalTablePresent bool
+	if err := tx.QueryRow(ctx, `SELECT to_regclass('interaction_dag_segment') IS NOT NULL`).Scan(&universalTablePresent); err != nil {
+		return err
+	}
+	if !universalTablePresent {
+		return nil
+	}
+	successful := make([]VisibleActionInput, 0, len(actions))
+	for _, action := range actions {
+		if action.Status == "succeeded" {
+			successful = append(successful, action)
+		}
+	}
+	if len(successful) == 0 {
+		return nil
+	}
+	calls := append([]ProviderCallInput(nil), input.Calls...)
+	sort.SliceStable(calls, func(i, j int) bool { return calls[i].CallOrdinal < calls[j].CallOrdinal })
+	assigned := make(map[string]struct{}, len(calls))
+	dag := NewUniversalInteractionDAG()
+	for actionIndex, action := range successful {
+		producerOrdinal := int64(0)
+		for _, call := range calls {
+			if call.CallID == action.ProducerCallID {
+				producerOrdinal = call.CallOrdinal
+				break
+			}
+		}
+		if producerOrdinal == 0 {
+			return fmt.Errorf("universal DAG producer call %q is missing", action.ProducerCallID)
+		}
+		links := make([]ProviderCallAssociation, 0, len(calls))
+		if _, shared := assigned[action.ProducerCallID]; shared {
+			links = append(links, ProviderCallAssociation{
+				ProviderCallID: action.ProducerCallID,
+				Role:           "shared_producer",
+				Ordinal:        producerOrdinal,
+				RunID:          input.RunID,
+				RunAgentID:     input.RunAgentID,
+				CaptureVersion: 1,
+				CorrelationKey: input.Batch.CaptureBoundary,
+			})
+		} else {
+			for _, call := range calls {
+				if call.CallOrdinal > producerOrdinal {
+					break
+				}
+				if _, alreadyAssigned := assigned[call.CallID]; alreadyAssigned {
+					continue
+				}
+				links = append(links, ProviderCallAssociation{
+					ProviderCallID: call.CallID,
+					Role:           "owned",
+					Ordinal:        call.CallOrdinal,
+					RunID:          input.RunID,
+					RunAgentID:     input.RunAgentID,
+					CaptureVersion: 1,
+					CorrelationKey: input.Batch.CaptureBoundary,
+				})
+				assigned[call.CallID] = struct{}{}
+			}
+		}
+		if actionIndex == len(successful)-1 {
+			for _, call := range calls {
+				if _, alreadyAssigned := assigned[call.CallID]; alreadyAssigned {
+					continue
+				}
+				links = append(links, ProviderCallAssociation{
+					ProviderCallID: call.CallID,
+					Role:           "audit",
+					Ordinal:        call.CallOrdinal,
+					RunID:          input.RunID,
+					RunAgentID:     input.RunAgentID,
+					CaptureVersion: 1,
+					CorrelationKey: input.Batch.CaptureBoundary,
+				})
+				assigned[call.CallID] = struct{}{}
+			}
+		}
+		segment, err := qtx.GetUniversalDAGSegmentByVisibleAction(ctx, db.GetUniversalDAGSegmentByVisibleActionParams{
+			WorkspaceID:      input.WorkspaceID,
+			VisibleActionKey: pgtype.Text{String: action.Kind + ":" + action.CanonicalID.String(), Valid: true},
+		})
+		if err != nil {
+			return fmt.Errorf("resolve universal DAG visible action: %w", err)
+		}
+		if err := dag.AttachProviderCaptureTx(ctx, qtx, tx, segment.SegmentID, input.Batch.CaptureBatchID.String(), links); err != nil {
+			return err
 		}
 	}
 	return nil

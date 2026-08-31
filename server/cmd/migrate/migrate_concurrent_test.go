@@ -48,10 +48,11 @@ import (
 // postgres://multica:multica@localhost:5432/multica?sslmode=disable),
 // matching the harness pattern already used in
 // server/internal/handler/handler_test.go and
-// server/internal/metrics/business_sampler_pgsleep_test.go. If
-// Postgres is unreachable the suite skips cleanly, the same way every
-// other live-Postgres test in the repo skips, so CI without a database
-// sees SKIP rather than failure.
+// server/internal/metrics/business_sampler_pgsleep_test.go. Tests that
+// use the shared openTestPool helper hard-fail when Postgres is
+// unavailable. The deliberately separate small-pool stress test below
+// retains its baseline skip behavior for DATABASE_URL parse, pool-open,
+// or ping failures.
 //
 // Each test isolates itself by creating a unique throwaway schema
 // (migrate_test_<timestamp>_<rand>) and using a unique advisory-lock
@@ -82,11 +83,11 @@ func openTestPool(t *testing.T) *pgxpool.Pool {
 	defer cancel()
 	pool, err := pgxpool.New(ctx, dbURL)
 	if err != nil {
-		t.Skipf("could not connect to %s: %v", dbURL, err)
+		t.Fatalf("PostgreSQL required at %s: %v", dbURL, err)
 	}
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
-		t.Skipf("database not reachable at %s: %v", dbURL, err)
+		t.Fatalf("PostgreSQL required at %s: %v", dbURL, err)
 	}
 	t.Cleanup(pool.Close)
 	return pool

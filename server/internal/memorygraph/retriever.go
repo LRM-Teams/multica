@@ -123,12 +123,13 @@ func (r *HybridRetriever) RebuildForVersion(ctx context.Context, version int) er
 			texts[i] = d.body
 		}
 		embeddings, err := r.emb.Embed(ctx, texts)
-		if err != nil {
-			return fmt.Errorf("retriever rebuild: embed docs: %w", err)
+		if err == nil {
+			for i, d := range docs {
+				vecs[d.id] = embeddings[i]
+			}
 		}
-		for i, d := range docs {
-			vecs[d.id] = embeddings[i]
-		}
+		// Provider outage degrades this index generation to BM25. The
+		// resolved provider is never replaced and later rebuilds may retry it.
 	}
 
 	r.mu.Lock()
@@ -190,6 +191,11 @@ func (r *HybridRetriever) Search(ctx context.Context, query string) ([]ScoredDoc
 	vecs := r.vecs
 	r.mu.RUnlock()
 	docs, err := hybridSearch(ctx, index, vecs, r.emb, r.cfg, query)
+	if err != nil && r.emb != nil {
+		// Query-time embedding outage follows the same deterministic BM25
+		// degradation as rebuild; never retry through another provider.
+		docs, err = hybridSearch(ctx, index, nil, nil, r.cfg, query)
+	}
 	if err != nil {
 		return nil, err
 	}

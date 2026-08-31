@@ -147,7 +147,7 @@ func (s *IssueExecutionService) ReconcileTx(ctx context.Context, tx pgx.Tx, issu
 		return outcome, fmt.Errorf("load active issue execution: %w", claimErr)
 	}
 	if opts.PreserveRunID.Valid {
-		preserved, preserveErr := s.preserveCurrentRunTx(ctx, q, state, claim, hasClaim, opts.PreserveRunID)
+		preserved, preserveErr := s.preserveCurrentRunTx(ctx, q, tx, state, claim, hasClaim, opts.PreserveRunID)
 		if preserveErr != nil {
 			return outcome, preserveErr
 		}
@@ -199,6 +199,13 @@ func (s *IssueExecutionService) ReconcileTx(ctx context.Context, tx pgx.Tx, issu
 			return outcome, fmt.Errorf("cancel superseded issue runs: %w", cancelErr)
 		}
 		outcome.Cancelled = cancelled
+		if s.TaskService != nil {
+			for _, task := range cancelled {
+				if err := s.TaskService.RecordTerminalTaskBoundaryTx(ctx, q, tx, task); err != nil {
+					return outcome, fmt.Errorf("record superseded issue run terminal boundary: %w", err)
+				}
+			}
+		}
 		if _, deleteErr := q.DeleteActiveIssueExecutionForIssue(ctx, db.DeleteActiveIssueExecutionForIssueParams{
 			WorkspaceID: state.WorkspaceID, IssueID: state.ID,
 		}); deleteErr != nil {
@@ -270,6 +277,7 @@ func (s *IssueExecutionService) ReconcileTx(ctx context.Context, tx pgx.Tx, issu
 func (s *IssueExecutionService) preserveCurrentRunTx(
 	ctx context.Context,
 	q *db.Queries,
+	tx pgx.Tx,
 	state db.GetIssueExecutionStateForUpdateRow,
 	claim db.ActiveIssueExecution,
 	hasClaim bool,
@@ -301,8 +309,14 @@ func (s *IssueExecutionService) preserveCurrentRunTx(
 		}); cancelErr != nil && !errors.Is(cancelErr, pgx.ErrNoRows) {
 			return false, fmt.Errorf("cancel replaced dispatch intent: %w", cancelErr)
 		}
-		if _, cancelErr := q.CancelAgentTask(ctx, claim.RunID); cancelErr != nil && !errors.Is(cancelErr, pgx.ErrNoRows) {
+		cancelled, cancelErr := q.CancelAgentTask(ctx, claim.RunID)
+		if cancelErr != nil && !errors.Is(cancelErr, pgx.ErrNoRows) {
 			return false, fmt.Errorf("cancel replaced canonical run: %w", cancelErr)
+		}
+		if cancelErr == nil && s.TaskService != nil {
+			if err := s.TaskService.RecordTerminalTaskBoundaryTx(ctx, q, tx, cancelled); err != nil {
+				return false, fmt.Errorf("record replaced canonical run terminal boundary: %w", err)
+			}
 		}
 		if _, deleteErr := q.DeleteActiveIssueExecutionForIssue(ctx, db.DeleteActiveIssueExecutionForIssueParams{
 			WorkspaceID: state.WorkspaceID, IssueID: state.ID,

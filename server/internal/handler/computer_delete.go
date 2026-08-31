@@ -191,6 +191,23 @@ func (h *Handler) DeleteComputer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to cancel active work")
 		return
 	}
+	archivedAgentSet := make(map[pgtype.UUID]struct{}, len(archivedAgentIDs))
+	for _, agentID := range archivedAgentIDs {
+		archivedAgentSet[agentID] = struct{}{}
+	}
+	for _, task := range cancelledTasks {
+		// Archived agents and their inbox events are permanently deleted later in
+		// this transaction. A durable Segment cannot outlive its required Task FK,
+		// so only record terminal boundaries for cancelled Tasks that survive the
+		// computer deletion (for example, another Agent's runtime snapshot).
+		if _, deletingTaskOwner := archivedAgentSet[task.AgentID]; deletingTaskOwner {
+			continue
+		}
+		if err := h.TaskService.RecordTerminalTaskBoundaryTx(r.Context(), qtx, tx, task); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to record cancelled work")
+			return
+		}
+	}
 	if err := qtx.DeleteDaemonUpdateStatus(r.Context(), db.DeleteDaemonUpdateStatusParams{
 		WorkspaceID: parseUUID(workspaceID),
 		DaemonID:    daemonID,

@@ -126,7 +126,7 @@ func TestConsolidateNonTTTAppliesValidOps(t *testing.T) {
 	}}
 	cfg := DefaultConsolidateConfig()
 	cfg.TTVTrajectories = 1
-	c := NewConsolidator(store, backend, cfg, "test", nil, nil)
+	c := NewConsolidator(store, backend, cfg, testConsolidateScope(), nil, nil)
 
 	res, err := c.Consolidate(context.Background())
 	if err != nil {
@@ -217,7 +217,7 @@ func TestConsolidateNonTTTCycleRejectedBatchContinues(t *testing.T) {
 	}}
 	cfg := DefaultConsolidateConfig()
 	cfg.TTVTrajectories = 1
-	c := NewConsolidator(store, backend, cfg, "test", nil, nil)
+	c := NewConsolidator(store, backend, cfg, testConsolidateScope(), nil, nil)
 
 	res, err := c.Consolidate(context.Background())
 	if err != nil {
@@ -322,8 +322,8 @@ func TestConsolidateTTTSelectsMinCostWinner(t *testing.T) {
 	// Warm mode: the rounds-overflow regression assertion below needs the
 	// statistical gates active despite the single-query window.
 	cfg.Budget = BacktestBudget{B: 16, Epsilon: 0.2, ColdStartThreshold: 1}
-	c := NewConsolidator(store, backend, cfg, "test", nil, nil)
-	c.SetRunner(runner)
+	c := NewConsolidator(store, backend, cfg, testConsolidateScope(), nil, nil)
+	c.SetRunner(mustScopedBacktestRunner(t, runner))
 
 	res, err := c.Consolidate(context.Background())
 	if err != nil {
@@ -493,8 +493,8 @@ func TestConsolidateTTTBudgetUnionMeasurement(t *testing.T) {
 	cfg := DefaultConsolidateConfig()
 	cfg.TTVTrajectories = 2
 	cfg.Budget = BacktestBudget{B: 1, Epsilon: 0.2, ColdStartThreshold: 20}
-	c := NewConsolidator(store, backend, cfg, "test", nil, nil)
-	c.SetRunner(runner)
+	c := NewConsolidator(store, backend, cfg, testConsolidateScope(), nil, nil)
+	c.SetRunner(mustScopedBacktestRunner(t, runner))
 
 	res, err := c.Consolidate(context.Background())
 	if err != nil {
@@ -605,7 +605,7 @@ func TestConsolidateTTTColdStartSkipsRecallGate(t *testing.T) {
 	}}
 	cfg := DefaultConsolidateConfig()
 	cfg.TTVTrajectories = 2
-	c := NewConsolidator(store, backend, cfg, "test", nil, nil)
+	c := NewConsolidator(store, backend, cfg, testConsolidateScope(), nil, nil)
 
 	res, err := c.Consolidate(context.Background())
 	if err != nil {
@@ -676,7 +676,7 @@ func TestConsolidateTTTWindowCountEnablesRecallGate(t *testing.T) {
 	}}
 	cfg := DefaultConsolidateConfig()
 	cfg.TTVTrajectories = 2
-	c := NewConsolidator(store, backend, cfg, "test", nil, nil)
+	c := NewConsolidator(store, backend, cfg, testConsolidateScope(), nil, nil)
 
 	res, err := c.Consolidate(context.Background())
 	if err != nil {
@@ -703,4 +703,91 @@ func TestConsolidateTTTWindowCountEnablesRecallGate(t *testing.T) {
 		}
 	}
 	t.Fatalf("winner op log has no select_version entry")
+}
+
+func TestConsolidatorRejectsMismatchedRunnerScopeBeforeBackend(t *testing.T) {
+	base := testConsolidateScope()
+	cases := []struct {
+		name   string
+		mutate func(*ProviderScope)
+	}{
+		{name: "workspace", mutate: func(s *ProviderScope) { s.WorkspaceID = "other-workspace" }},
+		{name: "provider", mutate: func(s *ProviderScope) { s.Provider = "other-provider" }},
+		{name: "model", mutate: func(s *ProviderScope) { s.Model = "other-model" }},
+		{name: "region", mutate: func(s *ProviderScope) { s.Region = "other-region" }},
+		{name: "policy version", mutate: func(s *ProviderScope) { s.PolicyVersion = "other-policy" }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newTestStore(t)
+			backend := &fakeConsolidateBackend{respond: func(string, int) string {
+				return consolidateOpsJSON(ConsolidateOp{Op: OpSubmit})
+			}}
+			cfg := DefaultConsolidateConfig()
+			cfg.TTVTrajectories = 1
+			c := NewConsolidator(store, backend, cfg, base, nil, nil)
+			mismatched := base
+			tc.mutate(&mismatched)
+			runner, err := newScopedFullBacktestRunner(&fakeFullBacktestRunner{}, mismatched)
+			if err != nil {
+				t.Fatalf("newScopedFullBacktestRunner: %v", err)
+			}
+			if err := c.SetRunner(runner); err == nil {
+				t.Fatal("SetRunner accepted a mismatched scope identity")
+			}
+			if _, err := c.Consolidate(context.Background()); err == nil {
+				t.Fatal("Consolidate accepted a runner with a mismatched scope identity")
+			}
+			backend.mu.Lock()
+			calls := backend.calls
+			backend.mu.Unlock()
+			if calls != 0 {
+				t.Fatalf("backend calls = %d, want 0", calls)
+			}
+		})
+	}
+}
+
+func TestConsolidatorRejectsMismatchedEmbedderScopeBeforeBackend(t *testing.T) {
+	base := testConsolidateScope()
+	cases := []struct {
+		name   string
+		mutate func(*ProviderScope)
+	}{
+		{name: "workspace", mutate: func(s *ProviderScope) { s.WorkspaceID = "other-workspace" }},
+		{name: "provider", mutate: func(s *ProviderScope) { s.Provider = "other-provider" }},
+		{name: "model", mutate: func(s *ProviderScope) { s.Model = "other-model" }},
+		{name: "region", mutate: func(s *ProviderScope) { s.Region = "other-region" }},
+		{name: "policy version", mutate: func(s *ProviderScope) { s.PolicyVersion = "other-policy" }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newTestStore(t)
+			backend := &fakeConsolidateBackend{respond: func(string, int) string {
+				return consolidateOpsJSON(ConsolidateOp{Op: OpSubmit})
+			}}
+			cfg := DefaultConsolidateConfig()
+			cfg.TTVTrajectories = 1
+			c := NewConsolidator(store, backend, cfg, base, nil, nil)
+			embedScope := base
+			embedScope.Purpose = ProviderPurposeEmbed
+			tc.mutate(&embedScope)
+			emb, err := NewCachedEmbedder(NewHashEmbedder(), store, embedScope)
+			if err != nil {
+				t.Fatalf("NewCachedEmbedder: %v", err)
+			}
+			if err := c.SetEmbedder(emb); err == nil {
+				t.Fatal("SetEmbedder accepted a mismatched scope identity")
+			}
+			if _, err := c.Consolidate(context.Background()); err == nil {
+				t.Fatal("Consolidate accepted an embedder with a mismatched scope identity")
+			}
+			backend.mu.Lock()
+			calls := backend.calls
+			backend.mu.Unlock()
+			if calls != 0 {
+				t.Fatalf("backend calls = %d, want 0", calls)
+			}
+		})
+	}
 }

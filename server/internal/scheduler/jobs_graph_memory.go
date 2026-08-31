@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -89,7 +90,7 @@ func (s *graphConsolidationState) dir(path string) *graphDirState {
 // process env MULTICA_MEMORY_TYPE, then "legacy". pool may be nil (tests,
 // DB-less deployments), in which case only the env fallback is available.
 // bm may be nil; every BusinessMetrics method tolerates a nil receiver.
-func GraphMemoryJobs(pool *pgxpool.Pool, bm *obsmetrics.BusinessMetrics) JobSpec {
+func GraphMemoryJobs(pool *pgxpool.Pool, bm *obsmetrics.BusinessMetrics, policy *service.MemoryProviderPolicyResolver) JobSpec {
 	return JobSpec{
 		Name:              JobNameGraphMemoryConsolidation,
 		Cadence:           time.Hour,
@@ -104,7 +105,7 @@ func GraphMemoryJobs(pool *pgxpool.Pool, bm *obsmetrics.BusinessMetrics) JobSpec
 		MaxAttempts:       2,
 		RetryBackoff:      []time.Duration{10 * time.Minute},
 		Scopes:            StaticScopes(ScopeGlobal),
-		Handler:           makeGraphMemoryConsolidationHandler(pool, bm),
+		Handler:           makeGraphMemoryConsolidationHandler(pool, bm, policy),
 	}
 }
 
@@ -208,7 +209,7 @@ func graphDirWorkspaceID(dir string) (string, bool) {
 	return ws, true
 }
 
-func makeGraphMemoryConsolidationHandler(pool *pgxpool.Pool, bm *obsmetrics.BusinessMetrics) Handler {
+func makeGraphMemoryConsolidationHandler(pool *pgxpool.Pool, bm *obsmetrics.BusinessMetrics, policy *service.MemoryProviderPolicyResolver) Handler {
 	return func(ctx context.Context, in HandlerInput) (HandlerResult, error) {
 		envType := strings.ToLower(strings.TrimSpace(os.Getenv("MULTICA_MEMORY_TYPE")))
 		lookup := graphMemoryGateLookupForPool(pool)
@@ -244,7 +245,7 @@ func makeGraphMemoryConsolidationHandler(pool *pgxpool.Pool, bm *obsmetrics.Busi
 			// Per-workspace errors are logged and the loop continues: one
 			// broken graph must not starve the others.
 			exploreMaxRounds, tttEnabled := resolveGraphMemoryProfile(ctx, dir, profileLookup)
-			ok, err := consolidateOneGraphWithPool(ctx, pool, dir, exploreMaxRounds, tttEnabled, state.dir(dir), bm)
+			ok, err := consolidateOneGraphWithPool(ctx, pool, policy, dir, exploreMaxRounds, tttEnabled, state.dir(dir), bm)
 			if err != nil {
 				slog.Warn("graph memory consolidation failed", "dir", dir, "error", err)
 				continue
@@ -301,61 +302,99 @@ func graphMemoryConsolidationConfigs(model string, exploreMaxRounds int, tttEnab
 	return cfg, exploreCfg
 }
 
-// consolidateOneGraph runs one gated consolidation cycle against the
-// memory_graph store at dir, updating ds in place. It reports whether a
-// consolidation ran.
-func consolidateOneGraph(ctx context.Context, dir string, exploreMaxRounds int, tttEnabled bool, ds *graphDirState, bm *obsmetrics.BusinessMetrics) (bool, error) {
-	return consolidateOneGraphWithPool(ctx, nil, dir, exploreMaxRounds, tttEnabled, ds, bm)
-}
-
-// consolidateOneGraphWithPool keeps the scheduler's workspace profile budget
-// and attaches dev's server-authoritative BacktestItem ground truth.
-func consolidateOneGraphWithPool(ctx context.Context, pool *pgxpool.Pool, dir string, exploreMaxRounds int, tttEnabled bool, ds *graphDirState, bm *obsmetrics.BusinessMetrics) (bool, error) {
+// consolidateOneGraphWithPool keeps the scheduler's Workspace profile budget
+// and resolves every external provider only after the trigger fires.
+func consolidateOneGraphWithPool(ctx context.Context, pool *pgxpool.Pool, policy *service.MemoryProviderPolicyResolver, dir string, exploreMaxRounds int, tttEnabled bool, ds *graphDirState, bm *obsmetrics.BusinessMetrics) (bool, error) {
 	store := memorygraph.NewStore(dir)
 	if err := store.Init(); err != nil {
 		return false, fmt.Errorf("init store: %w", err)
 	}
-	cfg, exploreCfg := graphMemoryConsolidationConfigs(strings.TrimSpace(os.Getenv("MULTICA_PI_MODEL")), exploreMaxRounds, tttEnabled)
+	identity, err := memorygraph.ReadGraphIdentity(dir)
+	if err != nil {
+		return false, err
+	}
+	workspaceUUID, err := serviceWorkspaceUUID(identity.WorkspaceID)
+	if err != nil {
+		return false, err
+	}
+	cfg, exploreCfg := graphMemoryConsolidationConfigs("", exploreMaxRounds, tttEnabled)
 	if pool != nil {
-		identity, err := memorygraph.ReadGraphIdentity(dir)
-		if err != nil {
-			return false, err
-		}
 		catalog := service.NewGraphMemoryInfoCatalogService(pool)
 		cfg.BacktestGroundTruth = func(ctx context.Context, _ *memorygraph.Store, _ int, queries []*memorygraph.BacktestQuery) error {
 			return catalog.AttachBacktestGroundTruth(ctx, identity.Kind, identity.OwnerID, queries)
 		}
 	}
 	run := func(ctx context.Context) (*memorygraph.ConsolidateResult, error) {
-		backend, err := graphMemoryPIBackend()
+		resolved, err := policy.Resolve(ctx, workspaceUUID, service.ProviderConsolidate)
 		if err != nil {
 			return nil, err
 		}
-		consolidator := memorygraph.NewConsolidator(store, backend, cfg, "pi", nil, memorygraph.NewTraceRecorder(dir))
+		cfg.Model = resolved.Model
+		exploreCfg.Model = resolved.Model
+		scope := graphMemoryProviderScope(identity.WorkspaceID, service.ProviderConsolidate, resolved)
+		backend, err := graphMemoryPIBackend(resolved)
+		if err != nil {
+			return nil, err
+		}
+		consolidator := memorygraph.NewConsolidator(store, backend, cfg, scope, nil, memorygraph.NewTraceRecorder(dir))
 		if cfg.TTVTrajectories > 1 {
-			// R2: wire the production full-backtest runner so a candidate
-			// whose retrieval coverage rises runs a real explore backtest
-			// (rebuilt against the candidate version) instead of taking the
-			// conservative pass. The embedder (when configured) keeps the
-			// backtest retrieval identical to production (A2).
-			emb := graphMemoryEmbedder(store)
-			consolidator.SetRunner(memorygraph.NewExploreBacktestRunner(store, emb, backend, memorygraph.DefaultRetrievalConfig(), exploreCfg, "pi"))
-			consolidator.SetEmbedder(emb)
+			emb, err := graphMemoryEmbedder(ctx, store, identity.WorkspaceID, workspaceUUID, policy)
+			if err != nil {
+				return nil, err
+			}
+			runner, err := memorygraph.NewExploreBacktestRunner(store, emb, backend, memorygraph.DefaultRetrievalConfig(), exploreCfg, scope)
+			if err != nil {
+				return nil, err
+			}
+			if err := consolidator.SetRunner(runner); err != nil {
+				return nil, err
+			}
+			if err := consolidator.SetEmbedder(emb); err != nil {
+				return nil, err
+			}
 		}
 		return consolidator.Consolidate(ctx)
 	}
 	return consolidateOneGraphWith(ctx, dir, store, cfg, ds, bm, run, time.Now().UTC())
 }
 
-// graphMemoryEmbedder builds the shared embedding cache for a store from the
-// MULTICA_GRAPH_EMBED_* env contract; it returns nil when no endpoint is
-// configured (BM25-only retrieval, same as the daemon).
-func graphMemoryEmbedder(store *memorygraph.Store) *memorygraph.CachedEmbedder {
-	emb, err := memorygraph.NewOpenAIEmbedderFromEnv()
+func serviceWorkspaceUUID(workspaceID string) (pgtype.UUID, error) {
+	parsed, err := uuid.Parse(workspaceID)
 	if err != nil {
-		return nil
+		return pgtype.UUID{}, fmt.Errorf("graph memory policy workspace id: %w", err)
 	}
-	return memorygraph.NewCachedEmbedder(emb, store)
+	var out pgtype.UUID
+	copy(out.Bytes[:], parsed[:])
+	out.Valid = true
+	return out, nil
+}
+
+func graphMemoryProviderScope(workspaceID string, purpose service.MemoryProviderPurpose, resolved service.ResolvedMemoryProvider) memorygraph.ProviderScope {
+	return memorygraph.ProviderScope{
+		WorkspaceID: workspaceID, Purpose: memorygraph.ProviderPurpose(purpose),
+		Provider: resolved.Provider, Model: resolved.Model, Region: resolved.Region, PolicyVersion: resolved.PolicyVersion,
+	}
+}
+
+// graphMemoryEmbedder resolves the Workspace embedding identity and builds
+// only that provider's cache. Disabled/unavailable embedding degrades to BM25.
+func graphMemoryEmbedder(ctx context.Context, store *memorygraph.Store, workspaceID string, workspaceUUID pgtype.UUID, policy *service.MemoryProviderPolicyResolver) (*memorygraph.CachedEmbedder, error) {
+	resolved, err := policy.Resolve(ctx, workspaceUUID, service.ProviderEmbed)
+	if err != nil {
+		if service.MemoryProviderPolicyAllowsDegradation(err, service.ProviderEmbed, service.DegradeBM25) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	scope := graphMemoryProviderScope(workspaceID, service.ProviderEmbed, resolved)
+	emb, err := memorygraph.NewOpenAIEmbedderFromEnv(scope)
+	if errors.Is(err, memorygraph.ErrEmbedNotConfigured) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return memorygraph.NewCachedEmbedder(emb, store, scope)
 }
 
 // consolidateOneGraphWith implements the A3-hardened trigger (design Q10):
@@ -512,14 +551,18 @@ func recordConsolidationFailure(ds *graphDirState, totalStaging int, dir, cause 
 // graphMemoryPIBackend builds the pi agent backend for the consolidation
 // trajectory, reading the same env contract the daemon uses
 // (MULTICA_PI_PATH / MULTICA_PI_MODEL).
-func graphMemoryPIBackend() (memorygraph.AgentBackend, error) {
-	path := strings.TrimSpace(os.Getenv("MULTICA_PI_PATH"))
-	if path == "" {
-		path = "pi"
+func graphMemoryPIBackend(policy service.ResolvedMemoryProvider) (memorygraph.AgentBackend, error) {
+	cfg := agentpkg.Config{}
+	if policy.Provider == "pi" {
+		path := strings.TrimSpace(os.Getenv("MULTICA_PI_PATH"))
+		if path == "" {
+			path = "pi"
+		}
+		cfg.ExecutablePath = path
 	}
-	backend, err := agentpkg.New("pi", agentpkg.Config{ExecutablePath: path})
+	backend, err := agentpkg.New(policy.Provider, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("pi backend: %w", err)
+		return nil, fmt.Errorf("graph memory backend: %w", err)
 	}
 	return backend, nil
 }

@@ -17,78 +17,142 @@ SELECT session_id, project_id, agent_run_id, issue_id, created_at
 FROM interaction_dag_session_run
 WHERE session_id = $1;
 
--- name: InsertInteractionDAGSegmentWithSnapshot :exec
--- Atomically inserts a segment row AND its 1:1 env_snapshot in a single
--- data-modifying CTE. segment_id ($1) is a text PK computed by the service
--- (<sessionID>-<trajectoryID>) and reused as the snapshot FK, so both inserts
--- commit or roll back together - a snapshot failure can never orphan the
--- segment (paired operations stay together). PostgreSQL executes the seg CTE
--- even though its result is not read by the outer INSERT, and the FK check sees
--- the seg row within the same statement. tensor_ref is the opaque tensor-ref
--- object decoded from the areal export (stored verbatim as jsonb); start_seq/
--- end_seq are the task_message.seq turn range captured at close (Task 2);
--- sandbox_ids and env_state are opaque jsonb (NOT NULL); issue_snapshot_id is
--- nullable.
-WITH seg AS (
-  INSERT INTO interaction_dag_segment (segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, start_seq, end_seq, trajectory_source, trainable, trajectory)
-  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+-- name: InsertInteractionDAGSegmentWithSnapshot :one
+-- Retained pre-canonical writers insert only the approved legacy_unverified
+-- exception. A per-workspace/task counter serializes generation allocation
+-- until Task 2 replaces this compatibility path with its boundary cursor.
+WITH task_owner AS MATERIALIZED (
+  SELECT task.id AS agent_run_id, task.workspace_id, task.channel_id,
+         project.id AS project_id
+  FROM agent_inbox_event AS task
+  JOIN project ON project.id::text = sqlc.arg(project_id)::text
+              AND project.workspace_id = task.workspace_id
+  WHERE task.id = sqlc.arg(agent_run_id)
+), allocated AS (
+  INSERT INTO interaction_dag_segment_generation_sequence (
+    workspace_id, agent_run_id, next_generation
+  )
+  SELECT task_owner.workspace_id, task_owner.agent_run_id,
+         COALESCE((
+           SELECT MAX(segment.generation) + 2
+           FROM interaction_dag_segment AS segment
+           WHERE segment.workspace_id = task_owner.workspace_id
+             AND segment.agent_run_id = task_owner.agent_run_id
+         ), 2)
+  FROM task_owner
+  ON CONFLICT (workspace_id, agent_run_id) DO UPDATE SET
+    next_generation = GREATEST(
+      interaction_dag_segment_generation_sequence.next_generation + 1,
+      COALESCE((
+        SELECT MAX(segment.generation) + 2
+        FROM interaction_dag_segment AS segment
+        WHERE segment.workspace_id = EXCLUDED.workspace_id
+          AND segment.agent_run_id = EXCLUDED.agent_run_id
+      ), 2)
+    ),
+    updated_at = now()
+  RETURNING workspace_id, agent_run_id,
+            (next_generation - 1)::bigint AS generation
+), seg AS (
+  INSERT INTO interaction_dag_segment (
+    segment_id, project_id, agent_run_id, issue_id, task_id,
+    trajectory_id, tensor_ref, closing_event, closing_event_target_segment,
+    start_seq, end_seq, trajectory_source, trainable, trajectory,
+    workspace_id, generation, project_id_at_event, channel_id_at_event,
+    memory_type_at_event, graph_projection_eligible_at_event, derivative,
+    trainable_eligible, content_status, provider_capture_status
+  )
+  SELECT
+    sqlc.arg(segment_id), task_owner.project_id::text,
+    task_owner.agent_run_id, sqlc.narg(issue_id), sqlc.narg(task_id),
+    sqlc.narg(trajectory_id), sqlc.narg(tensor_ref), sqlc.narg(closing_event),
+    sqlc.narg(closing_event_target_segment), sqlc.arg(start_seq),
+    sqlc.arg(end_seq), sqlc.arg(trajectory_source),
+    (sqlc.arg(trainable)::boolean AND false), sqlc.arg(trajectory), task_owner.workspace_id,
+    allocated.generation, task_owner.project_id,
+    task_owner.channel_id, 'legacy', false, false, false,
+    'legacy_unverified', 'not_expected'
+  FROM task_owner
+  JOIN allocated
+    ON allocated.workspace_id = task_owner.workspace_id
+   AND allocated.agent_run_id = task_owner.agent_run_id
+  RETURNING segment_id
 )
-INSERT INTO interaction_dag_env_snapshot (segment_id, sandbox_ids, issue_snapshot_id, env_state)
-VALUES ($1, $15, $16, $17);
+INSERT INTO interaction_dag_env_snapshot (
+  segment_id, sandbox_ids, issue_snapshot_id, env_state
+)
+SELECT seg.segment_id, sqlc.arg(sandbox_ids),
+       sqlc.narg(issue_snapshot_id), sqlc.arg(env_state)
+FROM seg
+RETURNING segment_id;
 
 -- name: GetInteractionDAGSegmentByAgentRun :one
--- Resolves a task's segment by agent_run_id (= task.ID, D8). For change 1 each
--- trained task has exactly one segment; ORDER BY created_at DESC LIMIT 1 keeps
--- this stable if a future multi-segment model adds more. Used by the
--- DELEGATION-edge recorder (D11) to find the parent's segment at the child's
--- close. Returns no rows when the parent's segment has not been recorded yet.
-SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, start_seq, end_seq, trajectory_source, trainable, trajectory, created_at
+-- Legacy-unverified payload fields are masked at the SQL boundary; callers also
+-- fail closed on content_status before resolving task-message content.
+SELECT segment_id, project_id, agent_run_id, issue_id, task_id,
+       COALESCE(CASE WHEN content_status = 'legacy_unverified' THEN NULL ELSE trajectory_id END, 0)::bigint AS trajectory_id,
+       (CASE WHEN content_status = 'legacy_unverified' THEN NULL::jsonb ELSE tensor_ref END)::jsonb AS tensor_ref,
+       closing_event, closing_event_target_segment, start_seq, end_seq,
+       trajectory_source,
+       (CASE WHEN content_status = 'legacy_unverified' THEN false ELSE trainable END)::boolean AS trainable,
+       (CASE WHEN content_status = 'legacy_unverified' THEN '[]'::jsonb ELSE trajectory END)::jsonb AS trajectory,
+       created_at, workspace_id, project_id_at_event, content_status, trainable_eligible
 FROM interaction_dag_segment
 WHERE agent_run_id = $1
-ORDER BY created_at DESC
+ORDER BY generation DESC, created_at DESC
 LIMIT 1;
 
 -- name: GetLastEndSeqForAgentRun :one
--- Returns the highest end_seq recorded for an agent_run, or 0 when no segment
--- exists yet. Used by CloseSegmentForEvent to compute the next segment's
--- start_seq (lastEnd + 1). MAX over end_seq (not "last row") so an empty [0,0]
--- segment never regresses the running start point.
 SELECT COALESCE(MAX(end_seq), 0)::integer AS last_end_seq
 FROM interaction_dag_segment
 WHERE agent_run_id = $1;
 
 -- name: GetInteractionDAGSegmentByID :one
--- GetInteractionDAGSegmentByID resolves a segment by its segment_id.
--- Returns pgx.ErrNoRows when no segment exists for the given ID.
-SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, start_seq, end_seq, trajectory_source, trainable, trajectory, created_at FROM interaction_dag_segment
+-- Payload fields are always absent/empty for legacy_unverified rows.
+SELECT segment_id, project_id, agent_run_id, issue_id, task_id,
+       COALESCE(CASE WHEN content_status = 'legacy_unverified' THEN NULL ELSE trajectory_id END, 0)::bigint AS trajectory_id,
+       (CASE WHEN content_status = 'legacy_unverified' THEN NULL::jsonb ELSE tensor_ref END)::jsonb AS tensor_ref,
+       closing_event, closing_event_target_segment, start_seq, end_seq,
+       trajectory_source,
+       (CASE WHEN content_status = 'legacy_unverified' THEN false ELSE trainable END)::boolean AS trainable,
+       (CASE WHEN content_status = 'legacy_unverified' THEN '[]'::jsonb ELSE trajectory END)::jsonb AS trajectory,
+       created_at, workspace_id, project_id_at_event, content_status, trainable_eligible
+FROM interaction_dag_segment
 WHERE segment_id = $1;
 
--- name: InsertInteractionDAGEdge :exec
--- Typed DAG edge. type is CHECK-constrained to delegation/mention/completion;
--- no FK to interaction_dag_segment so an edge can be recorded before both
--- endpoints are known (best-effort, validated at assembly).
-INSERT INTO interaction_dag_edge (project_id, src_segment_id, dst_segment_id, type)
-VALUES ($1, $2, $3, $4);
+-- name: GetUniversalDAGProjectWorkspace :one
+SELECT workspace_id
+FROM project
+WHERE id::text = sqlc.arg(project_id)::text;
 
 -- name: ListInteractionDAGSegmentsForProject :many
--- Read-only assembly query (U8 AssembleAssembledDag): all segments for a
--- project, ordered by created_at for deterministic assembly. SELECTs the full
--- row to scan into InteractionDAGSegment cleanly (mirrors
--- GetInteractionDAGSegmentByAgentRun), including the start_seq/end_seq turn
--- range (Task 2). No scores or message-text columns live on this table; step
--- rewards live in interaction_dag_step_reward (Task 5).
-SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, start_seq, end_seq, trajectory_source, trainable, trajectory, created_at
+SELECT segment_id, project_id, agent_run_id, issue_id, task_id,
+       COALESCE(CASE WHEN content_status = 'legacy_unverified' THEN NULL ELSE trajectory_id END, 0)::bigint AS trajectory_id,
+       (CASE WHEN content_status = 'legacy_unverified' THEN NULL::jsonb ELSE tensor_ref END)::jsonb AS tensor_ref,
+       closing_event, closing_event_target_segment, start_seq, end_seq,
+       trajectory_source,
+       (CASE WHEN content_status = 'legacy_unverified' THEN false ELSE trainable END)::boolean AS trainable,
+       (CASE WHEN content_status = 'legacy_unverified' THEN '[]'::jsonb ELSE trajectory END)::jsonb AS trajectory,
+       created_at, workspace_id, project_id_at_event, content_status, trainable_eligible
 FROM interaction_dag_segment
-WHERE project_id = $1
-ORDER BY created_at;
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND project_id_at_event::text = sqlc.arg(project_id)::text
+ORDER BY generation, created_at, segment_id;
 
 -- name: ListInteractionDAGEdgesForProject :many
--- Read-only assembly query (U8): all typed edges for a project, ordered by id
--- (insertion order) for deterministic assembly.
-SELECT id, project_id, src_segment_id, dst_segment_id, type, created_at
-FROM interaction_dag_edge
-WHERE project_id = $1
-ORDER BY id;
+SELECT edge.id, edge.project_id, edge.src_segment_id, edge.dst_segment_id,
+       edge.type, edge.created_at
+FROM interaction_dag_edge AS edge
+JOIN interaction_dag_segment AS source
+  ON source.workspace_id = edge.workspace_id
+ AND source.segment_id = edge.src_segment_id
+JOIN interaction_dag_segment AS target
+  ON target.workspace_id = edge.workspace_id
+ AND target.segment_id = edge.dst_segment_id
+WHERE edge.workspace_id = sqlc.arg(workspace_id)
+  AND source.project_id_at_event::text = sqlc.arg(project_id)::text
+  AND target.project_id_at_event::text = sqlc.arg(project_id)::text
+ORDER BY edge.edge_seq, edge.id;
 
 -- name: ListInteractionDAGSessionRunsForProject :many
 -- Read-only assembly query (U8): all session_id -> agent_run_id mappings for a
@@ -104,7 +168,8 @@ WHERE project_id = $1;
 SELECT e.segment_id, e.sandbox_ids, e.issue_snapshot_id, e.env_state
 FROM interaction_dag_env_snapshot e
 JOIN interaction_dag_segment s ON s.segment_id = e.segment_id
-WHERE s.project_id = $1;
+WHERE s.workspace_id = sqlc.arg(workspace_id)
+  AND s.project_id_at_event::text = sqlc.arg(project_id)::text;
 
 -- name: InsertInteractionDAGStepReward :exec
 -- InsertInteractionDAGStepReward upserts a per-step reward keyed by
@@ -121,7 +186,8 @@ ON CONFLICT (segment_id, seq) DO UPDATE SET score = EXCLUDED.score, rationale = 
 SELECT sr.segment_id, sr.seq, sr.score, sr.rationale, sr.created_at
 FROM interaction_dag_step_reward sr
 JOIN interaction_dag_segment s ON sr.segment_id = s.segment_id
-WHERE s.project_id = $1
+WHERE s.workspace_id = sqlc.arg(workspace_id)
+  AND s.project_id_at_event::text = sqlc.arg(project_id)::text
 ORDER BY sr.segment_id, sr.seq;
 
 -- name: CreateInteractionDAGDiagnosisRun :exec
@@ -605,3 +671,338 @@ SELECT
           AND gap.kind = 'capture_gap'
       )
   ) AS uncovered_settled_turn_count;
+
+-- name: LockUniversalDAGTaskCursor :one
+-- Locks the canonical per-task generation cursor before allocating or closing a range.
+SELECT *
+FROM interaction_dag_task_cursor
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND agent_run_id = sqlc.arg(agent_run_id)
+FOR UPDATE;
+
+-- name: UpsertUniversalDAGTaskCursor :one
+-- Creates or replaces the canonical generation and open-range state for one task.
+INSERT INTO interaction_dag_task_cursor (
+  workspace_id, agent_run_id, next_generation, open_start_seq,
+  last_closed_seq, open_generation, open_end_seq
+) VALUES (
+  sqlc.arg(workspace_id), sqlc.arg(agent_run_id), sqlc.arg(next_generation),
+  sqlc.narg(open_start_seq), sqlc.arg(last_closed_seq),
+  sqlc.narg(open_generation), sqlc.narg(open_end_seq)
+)
+ON CONFLICT (workspace_id, agent_run_id) DO UPDATE SET
+  next_generation = EXCLUDED.next_generation,
+  open_start_seq = EXCLUDED.open_start_seq,
+  last_closed_seq = EXCLUDED.last_closed_seq,
+  open_generation = EXCLUDED.open_generation,
+  open_end_seq = EXCLUDED.open_end_seq,
+  updated_at = now()
+RETURNING *;
+
+-- name: InsertUniversalDAGSegment :one
+-- Inserts canonical workspace-scoped Segment metadata backed by task_messages.
+INSERT INTO interaction_dag_segment (
+  segment_id, workspace_id, agent_run_id, generation, issue_id,
+  start_seq, end_seq, trajectory_source, trainable, trajectory,
+  project_id_at_event, channel_id_at_event, route_generation_at_event,
+  memory_type_at_event, graph_projection_eligible_at_event,
+  close_action_kind, canonical_action_id, visible_action_key,
+  derivative, trainable_eligible, publish_status, content_status,
+  sanitizer_version, policy_version, provider_capture_status,
+  provider_capture_correlation_key, run_id, run_agent_id
+) VALUES (
+  sqlc.arg(segment_id), sqlc.arg(workspace_id), sqlc.arg(agent_run_id),
+  sqlc.arg(generation), NULLIF(sqlc.arg(issue_id)::text, ''),
+  sqlc.arg(start_seq), sqlc.arg(end_seq), 'task_messages',
+  sqlc.arg(trainable_eligible), '[]'::jsonb,
+  sqlc.narg(project_id_at_event), sqlc.narg(channel_id_at_event),
+  sqlc.narg(route_generation_at_event), sqlc.arg(memory_type_at_event),
+  sqlc.arg(graph_projection_eligible_at_event), sqlc.arg(close_action_kind)::text,
+  sqlc.narg(canonical_action_id), NULLIF(sqlc.arg(visible_action_key)::text, ''),
+  sqlc.arg(derivative), sqlc.arg(trainable_eligible),
+  'pending',
+  CASE WHEN sqlc.arg(close_action_kind)::text = 'metadata_only' THEN 'empty' ELSE 'pending' END,
+  NULLIF(sqlc.arg(sanitizer_version)::text, ''), NULLIF(sqlc.arg(policy_version)::text, ''),
+  CASE
+    WHEN NULLIF(sqlc.arg(provider_capture_correlation_key)::text, '') IS NULL
+      THEN 'not_expected'
+    ELSE 'pending'
+  END,
+  NULLIF(sqlc.arg(provider_capture_correlation_key)::text, ''), sqlc.narg(run_id),
+  sqlc.narg(run_agent_id)
+)
+RETURNING *;
+
+-- name: InsertUniversalDAGPublishOutbox :one
+-- Persists the initial durable publication request and retry schedule for a Segment.
+INSERT INTO interaction_dag_publish_outbox (
+  workspace_id, segment_id, request_hash, status, attempts, next_attempt_at
+) VALUES (
+  sqlc.arg(workspace_id), sqlc.arg(segment_id), sqlc.arg(request_hash),
+  'pending', 0, sqlc.narg(next_attempt_at)
+)
+RETURNING *;
+
+-- name: InsertUniversalDAGProviderCallLink :one
+-- Idempotently associates a finalized provider call with its canonical Segment.
+INSERT INTO interaction_dag_universal_provider_call (
+  segment_id, provider_call_id, role, ordinal, run_id, run_agent_id, capture_id
+) VALUES (
+  sqlc.arg(segment_id), sqlc.arg(provider_call_id), sqlc.arg(role),
+  sqlc.arg(ordinal), sqlc.arg(run_id), sqlc.arg(run_agent_id),
+  sqlc.arg(capture_id)
+)
+ON CONFLICT (segment_id, provider_call_id) DO UPDATE SET
+  segment_id = EXCLUDED.segment_id
+WHERE interaction_dag_universal_provider_call.role = EXCLUDED.role
+  AND interaction_dag_universal_provider_call.ordinal = EXCLUDED.ordinal
+  AND interaction_dag_universal_provider_call.run_id = EXCLUDED.run_id
+  AND interaction_dag_universal_provider_call.run_agent_id = EXCLUDED.run_agent_id
+  AND interaction_dag_universal_provider_call.capture_id = EXCLUDED.capture_id
+RETURNING *;
+
+-- name: FinalizeUniversalDAGProviderCapture :one
+-- Finalizes a pending provider capture while allowing an identical retry to succeed.
+UPDATE interaction_dag_segment
+SET provider_capture_status = 'finalized',
+    provider_capture_id = sqlc.arg(capture_id)::text,
+    provider_capture_version = sqlc.arg(capture_version)::bigint,
+    updated_at = CASE
+      WHEN provider_capture_status = 'pending' THEN now()
+      ELSE updated_at
+    END
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND segment_id = sqlc.arg(segment_id)
+  AND provider_capture_correlation_key = sqlc.arg(provider_capture_correlation_key)::text
+  AND (
+    provider_capture_status = 'pending'
+    OR (
+      provider_capture_status = 'finalized'
+      AND provider_capture_id = sqlc.arg(capture_id)::text
+      AND provider_capture_version = sqlc.arg(capture_version)::bigint
+    )
+  )
+RETURNING *;
+
+-- name: MarkUniversalDAGProviderCaptureConflict :exec
+-- Marks a pending or finalized provider capture as conflicted without replacing prior identity.
+UPDATE interaction_dag_segment
+SET provider_capture_status = 'conflict',
+    provider_capture_id = COALESCE(
+      provider_capture_id, sqlc.arg(capture_id)::text
+    ),
+    provider_capture_version = COALESCE(
+      provider_capture_version, sqlc.arg(capture_version)::bigint
+    ),
+    updated_at = now()
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND segment_id = sqlc.arg(segment_id)
+  AND provider_capture_correlation_key = sqlc.arg(provider_capture_correlation_key)::text
+  AND provider_capture_status IN ('pending', 'finalized');
+
+-- name: GetUniversalDAGSegment :one
+-- Reads one complete canonical Segment by its workspace-scoped identity.
+SELECT *
+FROM interaction_dag_segment
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND segment_id = sqlc.arg(segment_id)
+  AND content_status <> 'legacy_unverified';
+
+-- name: InsertUniversalDAGEdge :one
+-- Inserts a canonical typed Edge with the required durable trigger identity semantics.
+INSERT INTO interaction_dag_edge (
+  workspace_id, edge_seq, src_segment_id, dst_segment_id, type,
+  trigger_message_id
+)
+SELECT
+  sqlc.arg(workspace_id), sqlc.arg(edge_seq), sqlc.arg(src_segment_id),
+  sqlc.arg(dst_segment_id), sqlc.arg(edge_type),
+  sqlc.narg(trigger_message_id)
+WHERE (
+    sqlc.arg(edge_type)::text = 'continues'
+    AND sqlc.narg(trigger_message_id)::uuid IS NULL
+  ) OR (
+    sqlc.arg(edge_type)::text IN ('responds_to', 'delegates_to', 'mentions')
+  )
+RETURNING *;
+
+-- name: AllocateUniversalDAGEdgeSeq :one
+-- Atomically reserves a workspace edge sequence. Canonical AddEdge uses the
+-- combined insert below so a failed insert cannot consume a sequence.
+INSERT INTO interaction_dag_edge_sequence (workspace_id, next_edge_seq)
+VALUES (
+  sqlc.arg(workspace_id),
+  COALESCE((SELECT MAX(edge_seq) + 2 FROM interaction_dag_edge
+            WHERE workspace_id = sqlc.arg(workspace_id)), 2)
+)
+ON CONFLICT (workspace_id) DO UPDATE SET
+  next_edge_seq = GREATEST(
+    interaction_dag_edge_sequence.next_edge_seq + 1,
+    COALESCE((SELECT MAX(edge_seq) + 2 FROM interaction_dag_edge
+              WHERE workspace_id = sqlc.arg(workspace_id)), 2)
+  ),
+  updated_at = now()
+RETURNING (next_edge_seq - 1)::bigint AS edge_seq;
+
+-- name: InsertUniversalDAGEdgeAtomic :one
+-- Resolves durable trigger provenance, allocates edge_seq, and inserts in one
+-- statement. The sequence-row update serializes concurrent workspace writers.
+WITH source AS MATERIALIZED (
+  SELECT segment.workspace_id, segment.segment_id, segment.agent_run_id,
+         segment.start_seq, segment.end_seq, trigger.id AS trigger_message_id
+  FROM interaction_dag_segment AS segment
+  LEFT JOIN LATERAL (
+    SELECT message.id
+    FROM task_message AS message
+    WHERE message.task_id = segment.agent_run_id
+      AND message.seq BETWEEN segment.start_seq AND segment.end_seq
+    ORDER BY message.seq DESC, message.id DESC
+    LIMIT 1
+  ) AS trigger ON sqlc.arg(edge_type)::text <> 'continues'
+  WHERE segment.workspace_id = sqlc.arg(workspace_id)
+    AND segment.segment_id = sqlc.arg(src_segment_id)
+    AND (
+      sqlc.arg(edge_type)::text = 'continues'
+      OR trigger.id IS NOT NULL
+    )
+), allocated AS (
+  INSERT INTO interaction_dag_edge_sequence (workspace_id, next_edge_seq)
+  SELECT source.workspace_id,
+         COALESCE((SELECT MAX(edge_seq) + 2 FROM interaction_dag_edge
+                   WHERE workspace_id = source.workspace_id), 2)
+  FROM source
+  ON CONFLICT (workspace_id) DO UPDATE SET
+    next_edge_seq = GREATEST(
+      interaction_dag_edge_sequence.next_edge_seq + 1,
+      COALESCE((SELECT MAX(edge_seq) + 2 FROM interaction_dag_edge
+                WHERE workspace_id = EXCLUDED.workspace_id), 2)
+    ),
+    updated_at = now()
+  RETURNING next_edge_seq - 1 AS edge_seq, workspace_id
+)
+INSERT INTO interaction_dag_edge (
+  workspace_id, edge_seq, src_segment_id, dst_segment_id, type,
+  trigger_message_id
+)
+SELECT allocated.workspace_id, allocated.edge_seq, source.segment_id,
+       sqlc.arg(dst_segment_id), sqlc.arg(edge_type),
+       CASE WHEN sqlc.arg(edge_type)::text = 'continues'
+            THEN NULL::uuid ELSE source.trigger_message_id END
+FROM allocated
+JOIN source ON source.workspace_id = allocated.workspace_id
+RETURNING interaction_dag_edge.*;
+
+-- name: GetUniversalDAGEdgeTriggerMessageID :one
+-- Resolves the source Segment's final persisted task-message identity. Legacy
+-- seam writers do not yet carry canonical_action_id, so their closing visible
+-- action is the final message inside the source Segment's frozen range.
+SELECT message.id
+FROM interaction_dag_segment AS segment
+JOIN task_message AS message
+  ON message.task_id = segment.agent_run_id
+ AND message.seq BETWEEN segment.start_seq AND segment.end_seq
+WHERE segment.workspace_id = sqlc.arg(workspace_id)
+  AND segment.segment_id = sqlc.arg(segment_id)
+ORDER BY message.seq DESC, message.id DESC
+LIMIT 1;
+
+-- name: ListUniversalDAGSegmentsByRun :many
+-- Lists complete canonical Segments for one dispatch run in deterministic agent/generation order.
+SELECT *
+FROM interaction_dag_segment
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND run_id = sqlc.arg(run_id)
+  AND content_status <> 'legacy_unverified'
+ORDER BY run_agent_id, agent_run_id, generation, segment_id;
+
+-- name: ListUniversalDAGEdgesAtWatermark :many
+-- Lists canonical Edges visible at a fixed workspace Edge watermark.
+SELECT *
+FROM interaction_dag_edge
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND edge_seq <= sqlc.arg(edge_seq_max)
+ORDER BY edge_seq, id;
+
+-- name: EnsureUniversalDAGTaskCursor :exec
+-- Creates the first cursor state without overwriting a concurrent writer.
+INSERT INTO interaction_dag_task_cursor (
+  workspace_id, agent_run_id, next_generation, last_closed_seq
+) VALUES (
+  sqlc.arg(workspace_id), sqlc.arg(agent_run_id), 1, 0
+)
+ON CONFLICT (workspace_id, agent_run_id) DO NOTHING;
+
+-- name: GetUniversalDAGSegmentByVisibleAction :one
+-- Resolves an idempotent visible/terminal boundary replay.
+SELECT *
+FROM interaction_dag_segment
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND visible_action_key = sqlc.arg(visible_action_key)
+  AND content_status <> 'legacy_unverified';
+
+-- name: GetUniversalDAGSegmentByTaskGeneration :one
+SELECT *
+FROM interaction_dag_segment
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND agent_run_id = sqlc.arg(agent_run_id)
+  AND generation = sqlc.arg(generation)
+  AND content_status <> 'legacy_unverified';
+
+-- name: GetFirstUniversalDAGSegmentByTask :one
+SELECT *
+FROM interaction_dag_segment
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND agent_run_id = sqlc.arg(agent_run_id)
+  AND content_status <> 'legacy_unverified'
+ORDER BY generation, segment_id
+LIMIT 1;
+
+-- name: ListUniversalDAGSegmentsByTask :many
+SELECT *
+FROM interaction_dag_segment
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND agent_run_id = sqlc.arg(agent_run_id)
+  AND content_status <> 'legacy_unverified'
+ORDER BY generation, segment_id;
+
+-- name: LockUniversalDAGSegmentForProviderCapture :one
+-- Serializes finalize/replay/conflict decisions for one globally unique Segment.
+SELECT *
+FROM interaction_dag_segment
+WHERE segment_id = sqlc.arg(segment_id)
+  AND content_status <> 'legacy_unverified'
+FOR UPDATE;
+
+-- name: LockUniversalDAGEdgeIdentity :exec
+-- Serializes idempotent linkage creation without requiring a schema-level key.
+SELECT pg_advisory_xact_lock(hashtextextended(
+  jsonb_build_array(
+    sqlc.arg(workspace_id)::text,
+    sqlc.arg(src_segment_id)::text,
+    sqlc.arg(dst_segment_id)::text,
+    sqlc.arg(edge_type)::text,
+    sqlc.narg(trigger_message_id)::text
+  )::text,
+  454
+));
+
+-- name: GetUniversalDAGEdgeByIdentity :one
+SELECT *
+FROM interaction_dag_edge
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND src_segment_id = sqlc.arg(src_segment_id)
+  AND dst_segment_id = sqlc.arg(dst_segment_id)
+  AND type = sqlc.arg(edge_type)
+  AND trigger_message_id IS NOT DISTINCT FROM sqlc.narg(trigger_message_id)::uuid
+ORDER BY edge_seq
+LIMIT 1;
+
+-- name: LockUniversalDAGBoundaryActionKey :exec
+-- Serializes the workspace-unique idempotency decision before Segment insertion.
+SELECT pg_advisory_xact_lock(hashtextextended(
+  jsonb_build_array(
+    sqlc.arg(workspace_id)::text,
+    sqlc.arg(visible_action_key)::text
+  )::text,
+  455
+));

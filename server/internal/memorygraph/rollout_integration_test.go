@@ -99,8 +99,8 @@ func TestGraphMemoryRolloutWipeColdStartAndShadowBacktest(t *testing.T) {
 	coldRunner := &fakeFullBacktestRunner{t: t, rounds: 5, found: true}
 	coldCfg := DefaultConsolidateConfig()
 	coldCfg.TTVTrajectories = 2
-	cold := NewConsolidator(store, coldBackend, coldCfg, "test", nil, nil)
-	cold.SetRunner(coldRunner)
+	cold := NewConsolidator(store, coldBackend, coldCfg, testConsolidateScope(), nil, nil)
+	cold.SetRunner(mustScopedBacktestRunner(t, coldRunner))
 	coldResult, err := cold.Consolidate(ctx)
 	if err != nil {
 		t.Fatalf("cold-start Consolidate: %v", err)
@@ -135,8 +135,8 @@ func TestGraphMemoryRolloutWipeColdStartAndShadowBacktest(t *testing.T) {
 	warmBackend := &fakeConsolidateBackend{respond: func(string, int) string {
 		return consolidateOpsJSON(ConsolidateOp{Op: OpSubmit})
 	}}
-	warm := NewConsolidator(store, warmBackend, coldCfg, "test", nil, nil)
-	warm.SetRunner(&fakeFullBacktestRunner{t: t, rounds: 5, found: true})
+	warm := NewConsolidator(store, warmBackend, coldCfg, testConsolidateScope(), nil, nil)
+	warm.SetRunner(mustScopedBacktestRunner(t, &fakeFullBacktestRunner{t: t, rounds: 5, found: true}))
 	warmResult, err := warm.Consolidate(ctx)
 	if err != nil {
 		t.Fatalf("threshold-recovery Consolidate: %v", err)
@@ -202,7 +202,7 @@ func TestGraphMemoryRolloutWipeColdStartAndShadowBacktest(t *testing.T) {
 		}
 		return 4, true
 	}}
-	backtester := NewBacktester(store, BacktestConfig{Runner: shadowRunner})
+	backtester := NewBacktester(store, BacktestConfig{Runner: mustScopedBacktestRunner(t, shadowRunner)})
 	alphaStats := backtester.EvaluateCandidate(ctx, alphaCandidate, baseline, plan.Union)
 	betaStats := backtester.EvaluateCandidate(ctx, betaCandidate, baseline, plan.Union)
 	if !alphaStats.Passed || !betaStats.Passed || shadowRunner.callCount() != 4 {

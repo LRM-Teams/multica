@@ -3,7 +3,9 @@ package memorygraph
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -30,9 +33,11 @@ const openAIEmbedBatchSize = 32
 
 // Environment variables read by NewOpenAIEmbedderFromEnv.
 const (
-	envEmbedBaseURL = "MULTICA_GRAPH_EMBED_BASE_URL"
-	envEmbedAPIKey  = "MULTICA_GRAPH_EMBED_API_KEY"
-	envEmbedModel   = "MULTICA_GRAPH_EMBED_MODEL"
+	envEmbedBaseURL  = "MULTICA_GRAPH_EMBED_BASE_URL"
+	envEmbedAPIKey   = "MULTICA_GRAPH_EMBED_API_KEY"
+	envEmbedProvider = "MULTICA_GRAPH_EMBED_PROVIDER"
+	envEmbedModel    = "MULTICA_GRAPH_EMBED_MODEL"
+	envEmbedRegion   = "MULTICA_GRAPH_EMBED_REGION"
 )
 
 // EmbeddingProvider converts texts into embedding vectors (design §5.2
@@ -47,12 +52,45 @@ type EmbeddingProvider interface {
 // OpenAI-compatible HTTP embedder
 // ---------------------------------------------------------------------------
 
+// ProviderPurpose identifies the external memory model seam protected by a
+// server-resolved policy.
+type ProviderPurpose string
+
+const (
+	ProviderPurposeEmbed       ProviderPurpose = "embed"
+	ProviderPurposeRerank      ProviderPurpose = "rerank"
+	ProviderPurposeDive        ProviderPurpose = "dive"
+	ProviderPurposeConsolidate ProviderPurpose = "consolidate"
+)
+
+// ProviderScope is the immutable call and cache identity received from the
+// server policy resolver. Memorygraph never resolves or substitutes it.
+type ProviderScope struct {
+	WorkspaceID   string
+	Purpose       ProviderPurpose
+	Provider      string
+	Model         string
+	Region        string
+	PolicyVersion string
+}
+
+func validateProviderScope(scope ProviderScope, purpose ProviderPurpose) error {
+	if strings.TrimSpace(scope.WorkspaceID) == "" || scope.Purpose != purpose ||
+		strings.TrimSpace(scope.Provider) == "" || strings.TrimSpace(scope.Model) == "" ||
+		strings.TrimSpace(scope.Region) == "" || strings.TrimSpace(scope.PolicyVersion) == "" {
+		return fmt.Errorf("memorygraph: incomplete %s provider scope", purpose)
+	}
+	return nil
+}
+
 // OpenAIEmbedderConfig configures an OpenAI-compatible embeddings endpoint.
 type OpenAIEmbedderConfig struct {
-	BaseURL string        // e.g. "https://api.openai.com" ("/v1/embeddings" is appended)
-	APIKey  string        // optional bearer token
-	Model   string        // embedding model name
-	Timeout time.Duration // per-request timeout; <= 0 uses a default
+	BaseURL  string        // e.g. "https://api.openai.com" ("/v1/embeddings" is appended)
+	APIKey   string        // optional bearer token
+	Provider string        // endpoint provider assertion; must match resolved policy
+	Model    string        // endpoint model assertion; must match resolved policy
+	Region   string        // endpoint processing region assertion; must match resolved policy
+	Timeout  time.Duration // per-request timeout; <= 0 uses a default
 }
 
 // defaultEmbedTimeout applies when OpenAIEmbedderConfig.Timeout is unset.
@@ -62,20 +100,28 @@ const defaultEmbedTimeout = 30 * time.Second
 // /v1/embeddings HTTP endpoint. Texts are sent in batches of at most 32.
 type OpenAIEmbedder struct {
 	cfg    OpenAIEmbedderConfig
+	scope  ProviderScope
 	client *http.Client
 
 	mu  sync.Mutex
 	dim int // learned from the first response; 0 until then
 }
 
-// NewOpenAIEmbedder validates cfg and returns the embedder. Missing
-// BaseURL or Model yields ErrEmbedNotConfigured; malformed values (bad
-// URL, negative timeout) are hard errors.
-func NewOpenAIEmbedder(cfg OpenAIEmbedderConfig) (*OpenAIEmbedder, error) {
+// NewOpenAIEmbedder validates cfg and the server-resolved scope. Endpoint
+// provider, model, and region must exactly match the resolved identity.
+func NewOpenAIEmbedder(cfg OpenAIEmbedderConfig, scope ProviderScope) (*OpenAIEmbedder, error) {
+	if err := validateProviderScope(scope, ProviderPurposeEmbed); err != nil {
+		return nil, err
+	}
 	cfg.BaseURL = strings.TrimSpace(cfg.BaseURL)
+	cfg.Provider = strings.TrimSpace(cfg.Provider)
 	cfg.Model = strings.TrimSpace(cfg.Model)
-	if cfg.BaseURL == "" || cfg.Model == "" {
+	cfg.Region = strings.TrimSpace(cfg.Region)
+	if cfg.BaseURL == "" || cfg.Provider == "" || cfg.Model == "" || cfg.Region == "" {
 		return nil, ErrEmbedNotConfigured
+	}
+	if cfg.Provider != scope.Provider || cfg.Model != scope.Model || cfg.Region != scope.Region {
+		return nil, fmt.Errorf("memorygraph: configured embed endpoint identity does not match resolved policy")
 	}
 	u, err := url.Parse(cfg.BaseURL)
 	if err != nil || u.Scheme == "" || u.Host == "" {
@@ -89,20 +135,21 @@ func NewOpenAIEmbedder(cfg OpenAIEmbedderConfig) (*OpenAIEmbedder, error) {
 	}
 	return &OpenAIEmbedder{
 		cfg:    cfg,
+		scope:  scope,
 		client: &http.Client{Timeout: cfg.Timeout},
 	}, nil
 }
 
-// NewOpenAIEmbedderFromEnv builds an OpenAIEmbedder from
-// MULTICA_GRAPH_EMBED_BASE_URL / _API_KEY / _MODEL. When the endpoint is
-// not configured it returns ErrEmbedNotConfigured so callers can silently
-// disable the vector channel.
-func NewOpenAIEmbedderFromEnv() (*OpenAIEmbedder, error) {
+// NewOpenAIEmbedderFromEnv builds an OpenAIEmbedder from the endpoint and
+// credential environment while preserving the resolved provider identity.
+func NewOpenAIEmbedderFromEnv(scope ProviderScope) (*OpenAIEmbedder, error) {
 	return NewOpenAIEmbedder(OpenAIEmbedderConfig{
-		BaseURL: os.Getenv(envEmbedBaseURL),
-		APIKey:  os.Getenv(envEmbedAPIKey),
-		Model:   os.Getenv(envEmbedModel),
-	})
+		BaseURL:  os.Getenv(envEmbedBaseURL),
+		APIKey:   os.Getenv(envEmbedAPIKey),
+		Provider: os.Getenv(envEmbedProvider),
+		Model:    os.Getenv(envEmbedModel),
+		Region:   os.Getenv(envEmbedRegion),
+	}, scope)
 }
 
 // Dim returns the embedding dimension learned from the first response, or
@@ -196,37 +243,60 @@ func (e *OpenAIEmbedder) embedBatch(ctx context.Context, texts []string) ([][]fl
 // Content-hash disk cache
 // ---------------------------------------------------------------------------
 
-// CachedEmbedder wraps an EmbeddingProvider with the cross-version on-disk
-// embedding cache (shared/embeddings/<content_hash>.vec, design §4.1). The
-// cache key is ComputeContentHash(text), so identical texts never hit the
-// network twice. Queries are cached the same way: the cache is
-// content-addressed, so caching them is safe.
+// CachedEmbedder wraps an EmbeddingProvider with a Workspace- and
+// provider-policy-scoped on-disk cache. Legacy content-only paths are never
+// read, so plaintext or embeddings cannot be reused across Workspaces.
 type CachedEmbedder struct {
-	inner EmbeddingProvider
-	store *Store
+	inner    EmbeddingProvider
+	store    *Store
+	scope    ProviderScope
+	cacheDir string
 }
 
-// NewCachedEmbedder wraps inner with the disk cache rooted at store.
-func NewCachedEmbedder(inner EmbeddingProvider, store *Store) *CachedEmbedder {
-	return &CachedEmbedder{inner: inner, store: store}
+// NewCachedEmbedder validates the complete cache identity before returning a
+// usable embedder.
+func NewCachedEmbedder(inner EmbeddingProvider, store *Store, scope ProviderScope) (*CachedEmbedder, error) {
+	if inner == nil || store == nil {
+		return nil, fmt.Errorf("memorygraph: embedding provider and store are required")
+	}
+	if err := validateProviderScope(scope, ProviderPurposeEmbed); err != nil {
+		return nil, err
+	}
+	identity := strings.Join([]string{
+		scope.WorkspaceID,
+		scope.PolicyVersion,
+		scope.Provider,
+		scope.Model,
+		scope.Region,
+	}, "\x00")
+	digest := sha256.Sum256([]byte(identity))
+	cacheDir := filepath.Join(store.Root, "shared", "embeddings-v2", hex.EncodeToString(digest[:]))
+	return &CachedEmbedder{inner: inner, store: store, scope: scope, cacheDir: cacheDir}, nil
 }
+
+// Scope returns the immutable cache and provider identity.
+func (c *CachedEmbedder) Scope() ProviderScope { return c.scope }
 
 // Dim delegates to the wrapped provider.
 func (c *CachedEmbedder) Dim() int { return c.inner.Dim() }
 
-// Embed returns one vector per text, serving cache hits from disk and
-// embedding (then persisting) only the misses. Result order matches input.
+func (c *CachedEmbedder) embeddingPath(contentHash string) string {
+	return filepath.Join(c.cacheDir, contentHash+".vec")
+}
+
+// Embed returns one vector per text, serving only same-Workspace,
+// same-policy cache hits and embedding then persisting misses.
 func (c *CachedEmbedder) Embed(ctx context.Context, texts []string) ([][]float32, error) {
 	out := make([][]float32, len(texts))
 	var missTexts []string
 	seenMiss := make(map[string]bool)
 	for i, text := range texts {
 		hash := ComputeContentHash(text)
-		if vec, ok := readVecFile(c.store.EmbeddingPath(hash)); ok {
+		if vec, ok := readVecFile(c.embeddingPath(hash)); ok {
 			out[i] = vec
 			continue
 		}
-		out[i] = nil // placeholder, filled below
+		out[i] = nil
 		if !seenMiss[hash] {
 			seenMiss[hash] = true
 			missTexts = append(missTexts, text)
@@ -242,8 +312,9 @@ func (c *CachedEmbedder) Embed(ctx context.Context, texts []string) ([][]float32
 		}
 		byHash := make(map[string][]float32, len(vecs))
 		for j, vec := range vecs {
-			byHash[ComputeContentHash(missTexts[j])] = vec
-			if err := writeVecFile(c.store.EmbeddingPath(ComputeContentHash(missTexts[j])), vec); err != nil {
+			hash := ComputeContentHash(missTexts[j])
+			byHash[hash] = vec
+			if err := writeVecFile(c.embeddingPath(hash), vec); err != nil {
 				return nil, err
 			}
 		}
@@ -291,6 +362,9 @@ func writeVecFile(path string, vec []float32) error {
 	binary.LittleEndian.PutUint32(buf[:4], uint32(len(vec)))
 	for i, v := range vec {
 		binary.LittleEndian.PutUint32(buf[4+4*i:], math.Float32bits(v))
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("memorygraph: create embedding cache directory: %w", err)
 	}
 	if err := os.WriteFile(path, buf, 0o644); err != nil {
 		return fmt.Errorf("memorygraph: write embedding cache %s: %w", path, err)

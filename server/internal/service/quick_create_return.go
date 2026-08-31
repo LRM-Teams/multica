@@ -74,7 +74,7 @@ func (s *TaskService) handleQuickCreateSourceReturn(ctx context.Context, task db
 	requesterMention := s.quickCreateRequesterMention(ctx, qc.RequesterID)
 	content := buildQuickCreateReturnContent(requesterMention, identifier, util.UUIDToString(issue.ID), issue.Status, issue.Title)
 	clientMessageID := "quick-create-return:" + util.UUIDToString(task.ID)
-	msg, created, err := s.insertQuickCreateReturnMessage(ctx, workspaceID, task.AgentID, agentName, target, content, clientMessageID)
+	msg, created, err := s.insertQuickCreateReturnMessage(ctx, task, workspaceID, task.AgentID, agentName, target, content, clientMessageID)
 	if err != nil {
 		slog.Warn("quick-create completion: source return insert failed",
 			"task_id", util.UUIDToString(task.ID),
@@ -229,7 +229,7 @@ func (s *TaskService) resolveQuickCreateReturnTarget(ctx context.Context, worksp
 	}, "", true
 }
 
-func (s *TaskService) insertQuickCreateReturnMessage(ctx context.Context, workspaceID, agentID pgtype.UUID, agentName string, target quickCreateReturnTarget, content, clientMessageID string) (quickCreateReturnMessage, bool, error) {
+func (s *TaskService) insertQuickCreateReturnMessage(ctx context.Context, task db.AgentInboxEvent, workspaceID, agentID pgtype.UUID, agentName string, target quickCreateReturnTarget, content, clientMessageID string) (quickCreateReturnMessage, bool, error) {
 	if s.TxStarter == nil {
 		return quickCreateReturnMessage{}, false, errors.New("missing transaction starter")
 	}
@@ -279,6 +279,13 @@ func (s *TaskService) insertQuickCreateReturnMessage(ctx context.Context, worksp
 			LIMIT 1`
 		msg, err = scanQuickCreateReturnMessage(tx.QueryRow(ctx, selectSQL, workspaceID, target.channelID, agentID, clientMessageID))
 		return msg, false, err
+	}
+
+	if _, err := s.RecordVisibleTaskActionTx(
+		ctx, s.Queries.WithTx(tx), tx, task, DAGCloseMessage, msg.id, content,
+		pgtype.UUID{}, target.channelID, pgtype.UUID{}, pgtype.UUID{}, "",
+	); err != nil {
+		return quickCreateReturnMessage{}, false, fmt.Errorf("record quick-create return boundary: %w", err)
 	}
 
 	var afterCommit func(context.Context)
@@ -423,19 +430,28 @@ func (s *TaskService) recordQuickCreateTaskActivity(ctx context.Context, taskID 
 	if !taskID.Valid || strings.TrimSpace(content) == "" {
 		return
 	}
-	var nextSeq int32
-	if err := s.queryRow(ctx, `SELECT COALESCE(MAX(seq), 0) + 1 FROM task_message WHERE task_id = $1`, taskID).Scan(&nextSeq); err != nil {
-		slog.Warn("quick-create completion: load next task message seq failed", "task_id", util.UUIDToString(taskID), "error", err)
-		return
-	}
-	if _, err := s.Queries.CreateTaskMessage(ctx, db.CreateTaskMessageParams{
-		TaskID:     taskID,
-		Seq:        nextSeq,
-		Type:       "text",
-		Content:    pgtype.Text{String: content, Valid: true},
-		Visibility: "user_facing",
+	if err := s.runInTxWithTx(ctx, func(qtx *db.Queries, tx pgx.Tx) error {
+		task := db.AgentInboxEvent{ID: taskID}
+		if err := tx.QueryRow(ctx, `
+			SELECT workspace_id, channel_id
+			FROM agent_inbox_event
+			WHERE id = $1`, taskID).Scan(&task.WorkspaceID, &task.ChannelID); err != nil {
+			return fmt.Errorf("load quick-create task identity: %w", err)
+		}
+		_, _, err := s.RecordTaskMessageBoundaryTx(ctx, qtx, tx, TaskMessageBoundaryInput{
+			Task: task,
+			Message: db.CreateTaskMessageParams{
+				Type:       "text",
+				Content:    pgtype.Text{String: content, Valid: true},
+				Visibility: "user_facing",
+			},
+			BoundaryKind:    DAGBoundaryVisible,
+			CloseActionKind: DAGCloseMessage,
+			ChannelID:       task.ChannelID,
+		})
+		return err
 	}); err != nil {
-		slog.Warn("quick-create completion: record task activity failed", "task_id", util.UUIDToString(taskID), "error", err)
+		slog.Warn("quick-create completion: record canonical task activity failed", "task_id", util.UUIDToString(taskID), "error", err)
 	}
 }
 

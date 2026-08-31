@@ -7093,7 +7093,7 @@ func (h *Handler) handleChannelChatDone(e events.Event) {
 		reactionTargetID = threadRootMessageID
 	}
 	if outputType == protocol.ChatOutputKindReaction {
-		h.handleChannelReactionPayload(ctx, channelID, workspaceID, agentID, reactionTargetID, payload.Reaction)
+		h.handleChannelReactionPayload(ctx, taskID, channelID, workspaceID, agentID, reactionTargetID, payload.Reaction)
 		return
 	}
 	if outputType == protocol.ChatOutputKindNoReply {
@@ -7112,7 +7112,7 @@ func (h *Handler) handleChannelChatDone(e events.Event) {
 		return
 	}
 	initiatorID := h.channelInitiatorForChatSession(ctx, parseUUID(payload.ChatSessionID))
-	h.handleResolvedChannelChatDone(ctx, chatOutputOrigin{channelID: channelID, workspaceID: workspaceID, agentID: agentID}, payload, content, parts, initiatorID, threadRootMessageID, threadID, triggerDepth)
+	h.handleResolvedChannelChatDone(ctx, taskID, chatOutputOrigin{channelID: channelID, workspaceID: workspaceID, agentID: agentID}, payload, content, parts, initiatorID, threadRootMessageID, threadID, triggerDepth)
 }
 
 func (h *Handler) channelReactionTargetFromPrompt(ctx context.Context, chatSessionID, taskID pgtype.UUID) pgtype.UUID {
@@ -7135,7 +7135,7 @@ func (h *Handler) channelReactionTargetFromPrompt(ctx context.Context, chatSessi
 	return pgtype.UUID{}
 }
 
-func (h *Handler) handleChannelReactionPayload(ctx context.Context, channelID, workspaceID, agentID, triggerMessageID pgtype.UUID, reaction *protocol.ChatReactionPayload) bool {
+func (h *Handler) handleChannelReactionPayload(ctx context.Context, taskID, channelID, workspaceID, agentID, triggerMessageID pgtype.UUID, reaction *protocol.ChatReactionPayload) bool {
 	if reaction == nil {
 		return true
 	}
@@ -7151,14 +7151,23 @@ func (h *Handler) handleChannelReactionPayload(ctx context.Context, channelID, w
 		}
 		messageID = parsed
 	}
-	return h.insertChannelReactionCommand(ctx, channelID, workspaceID, agentID, messageID, strings.TrimSpace(reaction.Emoji))
+	return h.insertChannelReactionCommand(ctx, taskID, channelID, workspaceID, agentID, messageID, strings.TrimSpace(reaction.Emoji))
 }
 
-func (h *Handler) insertChannelReactionCommand(ctx context.Context, channelID, workspaceID, agentID, messageID pgtype.UUID, emoji string) bool {
+func (h *Handler) insertChannelReactionCommand(ctx context.Context, taskID, channelID, workspaceID, agentID, messageID pgtype.UUID, emoji string) bool {
 	if !messageID.Valid || strings.TrimSpace(emoji) == "" {
 		return true
 	}
-	reaction, found, err := h.insertAgentChannelReaction(ctx, h.DB, channelID, workspaceID, agentID, messageID, emoji)
+	if h == nil || h.TxStarter == nil {
+		return true
+	}
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		slog.Warn("channel reaction command begin failed", "channel", uuidToString(channelID), "agent", uuidToString(agentID), "error", err)
+		return true
+	}
+	defer tx.Rollback(ctx)
+	reaction, found, created, err := h.insertAgentChannelReaction(ctx, tx, channelID, workspaceID, agentID, messageID, emoji)
 	if err != nil {
 		slog.Warn("channel reaction command failed", "channel", uuidToString(channelID), "agent", uuidToString(agentID), "error", err)
 		return true
@@ -7166,13 +7175,24 @@ func (h *Handler) insertChannelReactionCommand(ctx context.Context, channelID, w
 	if !found {
 		return true
 	}
+	if created && taskID.Valid {
+		if err := h.recordVisibleTaskActionTx(ctx, tx, taskID, service.DAGCloseReaction, parseUUID(reaction.ID), reaction.Emoji, channelID); err != nil {
+			slog.Warn("channel reaction universal boundary failed", "channel", uuidToString(channelID), "agent", uuidToString(agentID), "error", err)
+			return true
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		slog.Warn("channel reaction command commit failed", "channel", uuidToString(channelID), "agent", uuidToString(agentID), "error", err)
+		return true
+	}
 	h.publishChannelToMembers(ctx, protocol.EventChannelReactionAdded, uuidToString(workspaceID), "agent", uuidToString(agentID), channelID, map[string]any{"reaction": reaction, "channel_id": uuidToString(channelID), "message_id": uuidToString(messageID)})
 	return true
 }
 
-func (h *Handler) insertAgentChannelReaction(ctx context.Context, exec dbExecutor, channelID, workspaceID, agentID, messageID pgtype.UUID, emoji string) (ChannelReactionResponse, bool, error) {
+func (h *Handler) insertAgentChannelReaction(ctx context.Context, exec dbExecutor, channelID, workspaceID, agentID, messageID pgtype.UUID, emoji string) (ChannelReactionResponse, bool, bool, error) {
 	var id, returnedMessageID, actorID pgtype.UUID
 	var createdAt pgtype.Timestamptz
+	var created bool
 	err := exec.QueryRow(ctx, `
 		INSERT INTO channel_message_reaction (channel_message_id, workspace_id, actor_type, actor_id, emoji)
 		SELECT cm.id, cm.workspace_id, 'agent', $3, $4
@@ -7183,12 +7203,12 @@ func (h *Handler) insertAgentChannelReaction(ctx context.Context, exec dbExecuto
 		  AND cm.author_type <> 'system'
 		  AND cm.deleted_at IS NULL
 		ON CONFLICT (channel_message_id, actor_type, actor_id, emoji) DO UPDATE SET created_at = channel_message_reaction.created_at
-		RETURNING id, channel_message_id, actor_id, created_at`, messageID, channelID, agentID, emoji, workspaceID).Scan(&id, &returnedMessageID, &actorID, &createdAt)
+		RETURNING id, channel_message_id, actor_id, created_at, (xmax = 0)`, messageID, channelID, agentID, emoji, workspaceID).Scan(&id, &returnedMessageID, &actorID, &createdAt, &created)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return ChannelReactionResponse{}, false, nil
+		return ChannelReactionResponse{}, false, false, nil
 	}
 	if err != nil {
-		return ChannelReactionResponse{}, false, err
+		return ChannelReactionResponse{}, false, false, err
 	}
 	reaction := ChannelReactionResponse{
 		ID:        uuidToString(id),
@@ -7199,7 +7219,7 @@ func (h *Handler) insertAgentChannelReaction(ctx context.Context, exec dbExecuto
 		Emoji:     emoji,
 		CreatedAt: timestampToString(createdAt),
 	}
-	return reaction, true, nil
+	return reaction, true, created, nil
 }
 
 func (h *Handler) channelMessageBelongsToChannel(ctx context.Context, channelID, workspaceID, messageID pgtype.UUID) bool {
@@ -7609,6 +7629,10 @@ func (h *Handler) insertChannelMessage(ctx context.Context, channelID, workspace
 }
 
 func (h *Handler) insertChannelMessageWithParts(ctx context.Context, channelID, workspaceID pgtype.UUID, authorType string, authorID pgtype.UUID, authorName, content string, parts []protocol.MessagePart, source string, externalID *string, replyToMessageID, threadRootMessageID pgtype.UUID, threadID *string, triggerDepth int) (ChannelMessageResponse, error) {
+	return h.insertChannelMessageWithPartsAndTask(ctx, pgtype.UUID{}, channelID, workspaceID, authorType, authorID, authorName, content, parts, source, externalID, replyToMessageID, threadRootMessageID, threadID, triggerDepth)
+}
+
+func (h *Handler) insertChannelMessageWithPartsAndTask(ctx context.Context, taskID, channelID, workspaceID pgtype.UUID, authorType string, authorID pgtype.UUID, authorName, content string, parts []protocol.MessagePart, source string, externalID *string, replyToMessageID, threadRootMessageID pgtype.UUID, threadID *string, triggerDepth int) (ChannelMessageResponse, error) {
 	if h == nil || h.TxStarter == nil {
 		return ChannelMessageResponse{}, errors.New("channel transaction starter unavailable")
 	}
@@ -7621,10 +7645,30 @@ func (h *Handler) insertChannelMessageWithParts(ctx context.Context, channelID, 
 	if err != nil {
 		return ChannelMessageResponse{}, err
 	}
+	if taskID.Valid {
+		if err := h.recordVisibleTaskActionTx(ctx, tx, taskID, service.DAGCloseMessage, parseUUID(inserted.Message.ID), inserted.Message.Content, channelID); err != nil {
+			return ChannelMessageResponse{}, err
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return ChannelMessageResponse{}, err
 	}
 	return inserted.Message, nil
+}
+
+func (h *Handler) recordVisibleTaskActionTx(ctx context.Context, tx pgx.Tx, taskID pgtype.UUID, kind service.DAGCloseActionKind, actionID pgtype.UUID, content string, channelID pgtype.UUID) error {
+	if h == nil || h.TaskService == nil || tx == nil {
+		return errors.New("task visible action requires handler task service and transaction")
+	}
+	qtx := h.Queries.WithTx(tx)
+	task, err := qtx.GetAgentTask(ctx, taskID)
+	if err != nil {
+		return fmt.Errorf("load visible action task: %w", err)
+	}
+	if _, err := h.TaskService.RecordVisibleTaskActionTx(ctx, qtx, tx, task, kind, actionID, content, pgtype.UUID{}, channelID, pgtype.UUID{}, pgtype.UUID{}, ""); err != nil {
+		return fmt.Errorf("record visible task action: %w", err)
+	}
+	return nil
 }
 
 type channelMessageInsertResult struct {

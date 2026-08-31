@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/multica-ai/multica/server/internal/service"
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -94,7 +95,7 @@ func TestDiagnosisRunAPI_InputAssembly_PagesMultiPageSegmentToCompletion(t *test
 		env.pager.addMessage(int32(i), typ, fmt.Sprintf("message-%02d body", i))
 	}
 	env.deps.segments = &fakeDiagnosisRunSegmentLookup{segments: map[string]db.GetInteractionDAGSegmentByIDRow{
-		"seg-1": {SegmentID: "seg-1", ProjectID: "project-1", AgentRunID: "task-1", StartSeq: 1, EndSeq: total},
+		"seg-1": {SegmentID: "seg-1", ProjectIDAtEvent: util.MustParseUUID("22222222-2222-2222-2222-222222222222"), AgentRunID: util.MustParseUUID("11111111-1111-1111-1111-111111111111"), StartSeq: 1, EndSeq: total, ContentStatus: "published"},
 	}}
 	env.store.addSegment(service.SegmentDiagnosisCheckpoint{
 		RunID: "run-1", SegmentID: "seg-1", Status: service.SegmentDiagnosisInProgress,

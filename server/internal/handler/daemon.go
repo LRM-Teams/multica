@@ -21,6 +21,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/messageparts"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/middleware"
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -2144,6 +2145,14 @@ func (h *Handler) ReportTaskMessages(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to persist task messages")
+		return
+	}
+	defer func() { _ = tx.Rollback(r.Context()) }()
+	qtx := h.Queries.WithTx(tx)
+	published := make([]protocol.TaskMessagePayload, 0, len(req.Messages))
 	for _, msg := range req.Messages {
 		// Redact sensitive information before persisting or broadcasting.
 		msg.Content = redact.Text(msg.Content)
@@ -2158,28 +2167,34 @@ func (h *Handler) ReportTaskMessages(w http.ResponseWriter, r *http.Request) {
 		if msg.Input != nil {
 			inputJSON, _ = json.Marshal(msg.Input)
 		}
-		created, createErr := h.Queries.CreateTaskMessage(r.Context(), db.CreateTaskMessageParams{
-			TaskID:     parseUUID(taskID),
-			Seq:        int32(msg.Seq),
-			Type:       msg.Type,
-			Tool:       pgtype.Text{String: msg.Tool, Valid: msg.Tool != ""},
-			Content:    pgtype.Text{String: msg.Content, Valid: msg.Content != ""},
-			Input:      inputJSON,
-			Output:     pgtype.Text{String: msg.Output, Valid: msg.Output != ""},
-			Visibility: visibility,
+		created, _, createErr := h.TaskService.RecordTaskMessageBoundaryTx(r.Context(), qtx, tx, service.TaskMessageBoundaryInput{
+			Task: task,
+			Message: db.CreateTaskMessageParams{
+				Seq:        int32(msg.Seq),
+				Type:       msg.Type,
+				Tool:       pgtype.Text{String: msg.Tool, Valid: msg.Tool != ""},
+				Content:    pgtype.Text{String: msg.Content, Valid: msg.Content != ""},
+				Input:      inputJSON,
+				Output:     pgtype.Text{String: msg.Output, Valid: msg.Output != ""},
+				Visibility: visibility,
+			},
+			BoundaryKind: service.DAGBoundaryInbound,
 		})
 		if createErr != nil {
-			slog.Error("failed to create task message", "task_id", taskID, "seq", msg.Seq, "error", createErr)
+			slog.Error("failed to create canonical task message", "task_id", taskID, "seq", msg.Seq, "error", createErr)
 			writeError(w, http.StatusInternalServerError, "failed to persist task message")
 			return
 		}
-
-		if workspaceID != "" {
-			if visibility == "user_facing" {
-				h.publishTask(protocol.EventTaskMessage, workspaceID, "system", "", taskID,
-					taskMessageToPayload(created, taskID, uuidToString(task.IssueID)))
-			}
+		if workspaceID != "" && visibility == "user_facing" {
+			published = append(published, taskMessageToPayload(created, taskID, uuidToString(task.IssueID)))
 		}
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to persist task messages")
+		return
+	}
+	for _, payload := range published {
+		h.publishTask(protocol.EventTaskMessage, workspaceID, "system", "", taskID, payload)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})

@@ -630,6 +630,9 @@ func (l *ProviderCallLedger) FreezeAndComplete(ctx context.Context, input Frozen
 	if err != nil {
 		return FrozenSnapshotRecord{}, EnvDispatchRunRecord{}, err
 	}
+	if err := ensureUniversalCaptureSettledForFreeze(ctx, tx, locked.WorkspaceID, input.RunID); err != nil {
+		return FrozenSnapshotRecord{}, EnvDispatchRunRecord{}, err
+	}
 	if invariants.MissingOnlineSessionCount != 0 ||
 		invariants.InvalidRunAgentIdentityCount != 0 ||
 		invariants.InvalidProviderCallIdentityCount != 0 ||
@@ -1023,4 +1026,32 @@ func findForbiddenProviderRequestKey(value any) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func ensureUniversalCaptureSettledForFreeze(ctx context.Context, tx pgx.Tx, workspaceID, runID pgtype.UUID) error {
+	var tablePresent bool
+	if err := tx.QueryRow(ctx, `SELECT to_regclass('interaction_dag_segment') IS NOT NULL`).Scan(&tablePresent); err != nil {
+		return err
+	}
+	// Minimal Mixed-RL repository fixtures predate migration 454. Production
+	// schemas always contain the universal table; when present, no pending or
+	// conflicted expected capture may enter a frozen projection.
+	if !tablePresent {
+		return nil
+	}
+	var segmentID, status string
+	err := tx.QueryRow(ctx, `
+SELECT segment_id, provider_capture_status
+FROM interaction_dag_segment
+WHERE workspace_id = $1 AND run_id = $2
+  AND provider_capture_status IN ('pending', 'conflict')
+ORDER BY generation, segment_id
+LIMIT 1`, workspaceID, runID).Scan(&segmentID, &status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("universal provider capture is not settled for segment %s: %s", segmentID, status)
 }

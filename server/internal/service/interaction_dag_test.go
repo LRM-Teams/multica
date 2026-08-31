@@ -16,7 +16,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+)
+
+var (
+	interactionDAGRunID1 = util.UUIDToString(testUUID(91))
+	interactionDAGRunID2 = util.UUIDToString(testUUID(92))
 )
 
 // fakeMessageStore is an in-memory MessageStore for unit tests.
@@ -61,13 +67,15 @@ var _ MessageStore = (*fakeMessageStore)(nil)
 
 // fakeInteractionDAGStore is an in-memory InteractionDAGStore for unit tests.
 type fakeInteractionDAGStore struct {
-	mu                  sync.Mutex
-	sessionRuns         map[string]db.InteractionDagSessionRun
-	segmentSnapshots    []db.InsertInteractionDAGSegmentWithSnapshotParams
-	edges               []db.InsertInteractionDAGEdgeParams
-	taskMessages        map[string][]int32 // taskID -> list of seq numbers
-	stepRewards         []db.InteractionDagStepReward
-	diagnosisTargetSeqs map[string][]int32
+	mu                   sync.Mutex
+	sessionRuns          map[string]db.InteractionDagSessionRun
+	segmentSnapshots     []db.InsertInteractionDAGSegmentWithSnapshotParams
+	edges                []db.InsertUniversalDAGEdgeParams
+	edgeTriggerMessageID pgtype.UUID
+	nextEdgeSeq          int64
+	taskMessages         map[string][]int32 // taskID -> list of seq numbers
+	stepRewards          []db.InteractionDagStepReward
+	diagnosisTargetSeqs  map[string][]int32
 	// order, when non-nil, records cross-helper call ordering by appending
 	// "RecordStepRewards" on each InsertInteractionDAGStepReward. nil-safe
 	// (the default) so existing tests are unaffected. Used by the Task 4
@@ -82,10 +90,12 @@ type fakeInteractionDAGStore struct {
 
 func newFakeInteractionDAGStore() *fakeInteractionDAGStore {
 	return &fakeInteractionDAGStore{
-		sessionRuns:         map[string]db.InteractionDagSessionRun{},
-		taskMessages:        map[string][]int32{},
-		stepRewards:         []db.InteractionDagStepReward{},
-		diagnosisTargetSeqs: map[string][]int32{},
+		sessionRuns:          map[string]db.InteractionDagSessionRun{},
+		taskMessages:         map[string][]int32{},
+		stepRewards:          []db.InteractionDagStepReward{},
+		diagnosisTargetSeqs:  map[string][]int32{},
+		nextEdgeSeq:          1,
+		edgeTriggerMessageID: testUUID(99),
 	}
 }
 
@@ -117,18 +127,18 @@ func (f *fakeInteractionDAGStore) GetInteractionDAGSessionRun(_ context.Context,
 	return row, nil
 }
 
-func (f *fakeInteractionDAGStore) InsertInteractionDAGSegmentWithSnapshot(_ context.Context, arg db.InsertInteractionDAGSegmentWithSnapshotParams) error {
+func (f *fakeInteractionDAGStore) InsertInteractionDAGSegmentWithSnapshot(_ context.Context, arg db.InsertInteractionDAGSegmentWithSnapshotParams) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.insertSegmentSnapshotErr != nil {
-		return f.insertSegmentSnapshotErr
+		return "", f.insertSegmentSnapshotErr
 	}
 	f.segmentSnapshots = append(f.segmentSnapshots, arg)
-	return nil
+	return arg.SegmentID, nil
 }
 
 // GetLastEndSeqForAgentRun implements InteractionDAGStore.
-func (f *fakeInteractionDAGStore) GetLastEndSeqForAgentRun(_ context.Context, agentRunID string) (int32, error) {
+func (f *fakeInteractionDAGStore) GetLastEndSeqForAgentRun(_ context.Context, agentRunID pgtype.UUID) (int32, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var lastEndSeq int32 = 0
@@ -162,21 +172,67 @@ func (f *fakeInteractionDAGStore) addTestTaskMessage(taskIDText string, seq int3
 	f.taskMessages[taskIDText] = append(f.taskMessages[taskIDText], seq)
 }
 
-func (f *fakeInteractionDAGStore) InsertInteractionDAGEdge(_ context.Context, arg db.InsertInteractionDAGEdgeParams) error {
+func (f *fakeInteractionDAGStore) AllocateUniversalDAGEdgeSeq(_ context.Context, _ pgtype.UUID) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	seq := f.nextEdgeSeq
+	f.nextEdgeSeq++
+	return seq, nil
+}
+
+func (f *fakeInteractionDAGStore) GetUniversalDAGEdgeTriggerMessageID(_ context.Context, _ db.GetUniversalDAGEdgeTriggerMessageIDParams) (pgtype.UUID, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.edgeTriggerMessageID.Valid {
+		return pgtype.UUID{}, pgx.ErrNoRows
+	}
+	return f.edgeTriggerMessageID, nil
+}
+
+func (f *fakeInteractionDAGStore) InsertUniversalDAGEdge(_ context.Context, arg db.InsertUniversalDAGEdgeParams) (db.InteractionDagEdge, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.insertEdgeErr != nil {
-		return f.insertEdgeErr
+		return db.InteractionDagEdge{}, f.insertEdgeErr
 	}
 	f.edges = append(f.edges, arg)
-	return nil
+	return db.InteractionDagEdge{
+		WorkspaceID: arg.WorkspaceID, EdgeSeq: arg.EdgeSeq, SrcSegmentID: arg.SrcSegmentID,
+		DstSegmentID: arg.DstSegmentID, Type: arg.EdgeType, TriggerMessageID: arg.TriggerMessageID,
+	}, nil
+}
+
+func (f *fakeInteractionDAGStore) InsertUniversalDAGEdgeAtomic(_ context.Context, arg db.InsertUniversalDAGEdgeAtomicParams) (db.InteractionDagEdge, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.insertEdgeErr != nil {
+		return db.InteractionDagEdge{}, f.insertEdgeErr
+	}
+	seq := f.nextEdgeSeq
+	f.nextEdgeSeq++
+	trigger := pgtype.UUID{}
+	if arg.EdgeType != EdgeTypeContinues {
+		if !f.edgeTriggerMessageID.Valid {
+			return db.InteractionDagEdge{}, pgx.ErrNoRows
+		}
+		trigger = f.edgeTriggerMessageID
+	}
+	stored := db.InsertUniversalDAGEdgeParams{
+		WorkspaceID: arg.WorkspaceID, EdgeSeq: seq, SrcSegmentID: arg.SrcSegmentID,
+		DstSegmentID: arg.DstSegmentID, EdgeType: arg.EdgeType, TriggerMessageID: trigger,
+	}
+	f.edges = append(f.edges, stored)
+	return db.InteractionDagEdge{
+		WorkspaceID: arg.WorkspaceID, EdgeSeq: seq, SrcSegmentID: arg.SrcSegmentID,
+		DstSegmentID: arg.DstSegmentID, Type: arg.EdgeType, TriggerMessageID: trigger,
+	}, nil
 }
 
 // GetInteractionDAGSegmentByAgentRun satisfies InteractionDAGStore. Returns the
 // latest segment recorded for the run (one-segment-per-task in change 1; the
 // reverse scan keeps this stable under a future multi-segment model, mirroring
 // the real query's ORDER BY created_at DESC LIMIT 1).
-func (f *fakeInteractionDAGStore) GetInteractionDAGSegmentByAgentRun(_ context.Context, agentRunID string) (db.GetInteractionDAGSegmentByAgentRunRow, error) {
+func (f *fakeInteractionDAGStore) GetInteractionDAGSegmentByAgentRun(_ context.Context, agentRunID pgtype.UUID) (db.GetInteractionDAGSegmentByAgentRunRow, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for i := len(f.segmentSnapshots) - 1; i >= 0; i-- {
@@ -184,16 +240,20 @@ func (f *fakeInteractionDAGStore) GetInteractionDAGSegmentByAgentRun(_ context.C
 		if s.AgentRunID == agentRunID {
 			return db.GetInteractionDAGSegmentByAgentRunRow{
 				SegmentID:                 s.SegmentID,
-				ProjectID:                 s.ProjectID,
+				ProjectID:                 pgText(s.ProjectID),
 				AgentRunID:                s.AgentRunID,
 				IssueID:                   s.IssueID,
 				TaskID:                    s.TaskID,
-				TrajectoryID:              s.TrajectoryID,
+				TrajectoryID:              s.TrajectoryID.Int64,
 				TensorRef:                 s.TensorRef,
 				ClosingEvent:              s.ClosingEvent,
 				ClosingEventTargetSegment: s.ClosingEventTargetSegment,
 				StartSeq:                  s.StartSeq,
 				EndSeq:                    s.EndSeq,
+				WorkspaceID:               testUUID(70),
+				ProjectIDAtEvent:          testUUID(80),
+				ContentStatus:             "published",
+				TrainableEligible:         true,
 			}, nil
 		}
 	}
@@ -209,46 +269,58 @@ func (f *fakeInteractionDAGStore) GetInteractionDAGSegmentByID(_ context.Context
 		if s.SegmentID == segmentID {
 			return db.GetInteractionDAGSegmentByIDRow{
 				SegmentID:                 s.SegmentID,
-				ProjectID:                 s.ProjectID,
+				ProjectID:                 pgText(s.ProjectID),
 				AgentRunID:                s.AgentRunID,
 				IssueID:                   s.IssueID,
 				TaskID:                    s.TaskID,
-				TrajectoryID:              s.TrajectoryID,
+				TrajectoryID:              s.TrajectoryID.Int64,
 				TensorRef:                 s.TensorRef,
 				ClosingEvent:              s.ClosingEvent,
 				ClosingEventTargetSegment: s.ClosingEventTargetSegment,
 				StartSeq:                  s.StartSeq,
 				EndSeq:                    s.EndSeq,
+				WorkspaceID:               testUUID(70),
+				ProjectIDAtEvent:          testUUID(80),
+				ContentStatus:             "published",
+				TrainableEligible:         true,
 			}, nil
 		}
 	}
 	return db.GetInteractionDAGSegmentByIDRow{}, pgx.ErrNoRows
 }
 
+func (f *fakeInteractionDAGStore) GetUniversalDAGProjectWorkspace(_ context.Context, _ string) (pgtype.UUID, error) {
+	return testUUID(70), nil
+}
+
 // ListInteractionDAGSegmentsForProject satisfies InteractionDAGStore (U8
 // assembly). Returns segments recorded for projectID, ordered by insertion
 // order (the fake appends; the real query orders by created_at). Converts the
 // stored insert params to InteractionDagSegment row structs.
-func (f *fakeInteractionDAGStore) ListInteractionDAGSegmentsForProject(_ context.Context, projectID string) ([]db.ListInteractionDAGSegmentsForProjectRow, error) {
+func (f *fakeInteractionDAGStore) ListInteractionDAGSegmentsForProject(_ context.Context, arg db.ListInteractionDAGSegmentsForProjectParams) ([]db.ListInteractionDAGSegmentsForProjectRow, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	out := []db.ListInteractionDAGSegmentsForProjectRow{}
 	for _, s := range f.segmentSnapshots {
-		if s.ProjectID != projectID {
+		if s.ProjectID != arg.ProjectID {
 			continue
 		}
 		out = append(out, db.ListInteractionDAGSegmentsForProjectRow{
 			SegmentID:                 s.SegmentID,
-			ProjectID:                 s.ProjectID,
+			ProjectID:                 pgText(s.ProjectID),
 			AgentRunID:                s.AgentRunID,
 			IssueID:                   s.IssueID,
 			TaskID:                    s.TaskID,
-			TrajectoryID:              s.TrajectoryID,
+			TrajectoryID:              s.TrajectoryID.Int64,
 			TensorRef:                 s.TensorRef,
 			ClosingEvent:              s.ClosingEvent,
 			ClosingEventTargetSegment: s.ClosingEventTargetSegment,
 			StartSeq:                  s.StartSeq,
 			EndSeq:                    s.EndSeq,
+			WorkspaceID:               arg.WorkspaceID,
+			ProjectIDAtEvent:          testUUID(80),
+			ContentStatus:             "published",
+			TrainableEligible:         true,
 		})
 	}
 	return out, nil
@@ -257,20 +329,14 @@ func (f *fakeInteractionDAGStore) ListInteractionDAGSegmentsForProject(_ context
 // ListInteractionDAGEdgesForProject satisfies InteractionDAGStore (U8 assembly).
 // Returns edges recorded for projectID in insertion order (real query orders by
 // id). Converts insert params to InteractionDagEdge row structs.
-func (f *fakeInteractionDAGStore) ListInteractionDAGEdgesForProject(_ context.Context, projectID string) ([]db.InteractionDagEdge, error) {
+func (f *fakeInteractionDAGStore) ListInteractionDAGEdgesForProject(_ context.Context, _ db.ListInteractionDAGEdgesForProjectParams) ([]db.ListInteractionDAGEdgesForProjectRow, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := []db.InteractionDagEdge{}
+	out := []db.ListInteractionDAGEdgesForProjectRow{}
 	for i, e := range f.edges {
-		if e.ProjectID != projectID {
-			continue
-		}
-		out = append(out, db.InteractionDagEdge{
-			ID:           int64(i + 1), // stable synthetic id mirroring bigserial ordering
-			ProjectID:    e.ProjectID,
-			SrcSegmentID: e.SrcSegmentID,
-			DstSegmentID: e.DstSegmentID,
-			Type:         e.Type,
+		out = append(out, db.ListInteractionDAGEdgesForProjectRow{
+			ID: int64(i + 1), SrcSegmentID: e.SrcSegmentID,
+			DstSegmentID: e.DstSegmentID, Type: e.EdgeType,
 		})
 	}
 	return out, nil
@@ -296,12 +362,12 @@ func (f *fakeInteractionDAGStore) ListInteractionDAGSessionRunsForProject(_ cont
 // insert params (the fake stores them together via
 // InsertInteractionDAGSegmentWithSnapshot), filtered by projectID. Mirrors the
 // real query's join through interaction_dag_segment on segment_id.
-func (f *fakeInteractionDAGStore) ListInteractionDAGEnvSnapshotsForProject(_ context.Context, projectID string) ([]db.InteractionDagEnvSnapshot, error) {
+func (f *fakeInteractionDAGStore) ListInteractionDAGEnvSnapshotsForProject(_ context.Context, arg db.ListInteractionDAGEnvSnapshotsForProjectParams) ([]db.InteractionDagEnvSnapshot, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	out := []db.InteractionDagEnvSnapshot{}
 	for _, s := range f.segmentSnapshots {
-		if s.ProjectID != projectID {
+		if s.ProjectID != arg.ProjectID {
 			continue
 		}
 		out = append(out, db.InteractionDagEnvSnapshot{
@@ -330,12 +396,12 @@ func (f *fakeInteractionDAGStore) InsertInteractionDAGStepReward(_ context.Conte
 	return nil
 }
 
-func (f *fakeInteractionDAGStore) ListInteractionDAGStepRewardsForProject(_ context.Context, projectID string) ([]db.InteractionDagStepReward, error) {
+func (f *fakeInteractionDAGStore) ListInteractionDAGStepRewardsForProject(_ context.Context, arg db.ListInteractionDAGStepRewardsForProjectParams) ([]db.InteractionDagStepReward, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	projSegs := map[string]bool{}
 	for _, s := range f.segmentSnapshots {
-		if s.ProjectID == projectID {
+		if s.ProjectID == arg.ProjectID {
 			projSegs[s.SegmentID] = true
 		}
 	}
@@ -408,7 +474,7 @@ func TestAssembleAssembledDag_StepRewards(t *testing.T) {
 	store.segmentSnapshots = append(store.segmentSnapshots, db.InsertInteractionDAGSegmentWithSnapshotParams{
 		SegmentID:  "seg-1",
 		ProjectID:  "proj-1",
-		AgentRunID: "run-1",
+		AgentRunID: testUUID(41),
 		StartSeq:   1,
 		EndSeq:     2,
 	})
@@ -429,7 +495,7 @@ func TestAssembleAssembledDag_StepRewards(t *testing.T) {
 	// Absent rewards -> empty slice (JSON []), not nil and not fabricated zeros.
 	store2 := newFakeInteractionDAGStore()
 	store2.segmentSnapshots = append(store2.segmentSnapshots, db.InsertInteractionDAGSegmentWithSnapshotParams{
-		SegmentID: "seg-2", ProjectID: "proj-2", AgentRunID: "run-2", StartSeq: 1, EndSeq: 1,
+		SegmentID: "seg-2", ProjectID: "proj-2", AgentRunID: testUUID(42), StartSeq: 1, EndSeq: 1,
 	})
 	svc2 := NewInteractionDAGService(store2, &fakeArealSegmentClient{}, true)
 	dag2, err := svc2.AssembleAssembledDag(context.Background(), "proj-2")
@@ -440,7 +506,7 @@ func TestAssembleAssembledDag_StepRewards(t *testing.T) {
 func TestAssembleAssembledDag_IncludesFrozenAssistantTurnSequences(t *testing.T) {
 	store := newFakeInteractionDAGStore()
 	store.segmentSnapshots = append(store.segmentSnapshots, db.InsertInteractionDAGSegmentWithSnapshotParams{
-		SegmentID: "seg-1", ProjectID: "proj-1", AgentRunID: "run-1", StartSeq: 1, EndSeq: 7,
+		SegmentID: "seg-1", ProjectID: "proj-1", AgentRunID: testUUID(41), StartSeq: 1, EndSeq: 7,
 	})
 	store.diagnosisTargetSeqs = map[string][]int32{"seg-1": {2, 7}}
 
@@ -453,14 +519,14 @@ func TestAssembleAssembledDag_IncludesFrozenAssistantTurnSequences(t *testing.T)
 func TestAssembleAssembledDag_UsesEmptyAssistantTurnSequencesWithoutDiagnosis(t *testing.T) {
 	store := newFakeInteractionDAGStore()
 	store.segmentSnapshots = append(store.segmentSnapshots, db.InsertInteractionDAGSegmentWithSnapshotParams{
-		SegmentID: "seg-1", ProjectID: "proj-1", AgentRunID: "run-1", StartSeq: 1, EndSeq: 1,
+		SegmentID: "seg-1", ProjectID: "proj-1", AgentRunID: testUUID(41), StartSeq: 1, EndSeq: 1,
 	})
 
 	dag, err := NewInteractionDAGService(store, nil, true).AssembleAssembledDag(context.Background(), "proj-1")
 	require.NoError(t, err)
 	encoded, err := json.Marshal(dag)
 	require.NoError(t, err)
-	assert.JSONEq(t, `{"segments":[{"segment_id":"seg-1","agent_run_id":"run-1","issue_id":"","trajectory_id":null,"tensor_ref":null,"closing_event":null,"trajectory_source":"","trainable":false,"trajectory":null,"env_snapshot":{"sandbox_ids":null,"issue_snapshot_id":null,"env_state":null},"assistant_turn_seqs":[]}],"edges":[],"session_to_agent_run":{},"step_rewards":[],"score_max":0}`, string(encoded))
+	assert.JSONEq(t, `{"segments":[{"segment_id":"seg-1","agent_run_id":"29000000-0000-0000-0000-000000000000","issue_id":"","trajectory_id":null,"tensor_ref":null,"closing_event":null,"trajectory_source":"","trainable":false,"trajectory":null,"env_snapshot":{"sandbox_ids":null,"issue_snapshot_id":null,"env_state":null},"assistant_turn_seqs":[]}],"edges":[],"session_to_agent_run":{},"step_rewards":[],"score_max":0}`, string(encoded))
 }
 
 // fakeArealSegmentClient is an in-memory ArealSegmentClient for unit tests.
@@ -516,23 +582,23 @@ func TestInteractionDAG_RecordSessionAgentRun_UpsertsMapping(t *testing.T) {
 	store := newFakeInteractionDAGStore()
 	svc := NewInteractionDAGService(store, &fakeArealSegmentClient{}, true)
 
-	if err := svc.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", "run-1", "issue-1"); err != nil {
+	if err := svc.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", interactionDAGRunID1, "issue-1"); err != nil {
 		t.Fatalf("first record: %v", err)
 	}
 	row, ok := store.sessionRuns["sess-1"]
 	if !ok {
 		t.Fatal("session_run row not stored")
 	}
-	assert.Equal(t, "run-1", row.AgentRunID)
+	assert.Equal(t, interactionDAGRunID1, row.AgentRunID)
 	assert.Equal(t, ptrText("issue-1"), row.IssueID)
 	assert.Equal(t, "proj-1", row.ProjectID)
 
 	// Upsert: re-bind the same session to a new run (retry attempt, D8).
-	if err := svc.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", "run-2", "issue-1"); err != nil {
+	if err := svc.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", interactionDAGRunID2, "issue-1"); err != nil {
 		t.Fatalf("upsert record: %v", err)
 	}
 	row = store.sessionRuns["sess-1"]
-	assert.Equal(t, "run-2", row.AgentRunID, "upsert must re-bind agent_run_id")
+	assert.Equal(t, interactionDAGRunID2, row.AgentRunID, "upsert must re-bind agent_run_id")
 }
 
 // TestRecordSessionAgentRun_RejectsMissingIDs verifies required-id validation.
@@ -578,7 +644,7 @@ func TestInteractionDAG_CloseSegmentForEvent_RecordsSegment(t *testing.T) {
 	}
 	svc := NewInteractionDAGService(store, client, true)
 
-	require.NoError(t, svc.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", "run-1", "issue-1"))
+	require.NoError(t, svc.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", interactionDAGRunID1, "issue-1"))
 
 	segID, _, err := svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-1", "proxy-key", "delegation",
 		map[string]any{"sandbox_ids": []string{"sbx-1"}, "issue_snapshot_id": "snap-1", "env_state": map[string]any{"k": "v"}})
@@ -600,7 +666,7 @@ func TestInteractionDAG_CloseSegmentForEvent_RecordsSegment(t *testing.T) {
 	row := store.segmentSnapshots[0]
 	assert.Equal(t, "sess-1-7", row.SegmentID)
 	assert.Equal(t, "proj-1", row.ProjectID)
-	assert.Equal(t, "run-1", row.AgentRunID, "agent_run_id must come from the session lookup, not the caller")
+	assert.Equal(t, interactionDAGRunID1, util.UUIDToString(row.AgentRunID), "agent_run_id must come from the session lookup, not the caller")
 	assert.Equal(t, ptrText("issue-1"), row.IssueID, "issue_id must come from the session lookup")
 	assert.EqualValues(t, int64(7), row.TrajectoryID.Int64)
 	assert.True(t, row.TrajectoryID.Valid)
@@ -621,12 +687,12 @@ func TestInteractionDAG_CloseSegmentForEvent_LeafSegmentClosingEventEmpty(t *tes
 		exportPayload:  json.RawMessage(`{"input_ids":{"shard_id":"shard-leaf","node_addr":"10.0.0.2:8000"}}`),
 	}
 	svc := NewInteractionDAGService(store, client, true)
-	require.NoError(t, svc.RecordSessionAgentRun(context.Background(), "proj-1", "sess-2", "run-2", ""))
+	require.NoError(t, svc.RecordSessionAgentRun(context.Background(), "proj-1", "sess-2", interactionDAGRunID2, ""))
 
 	// Add test task messages.
-	store.addTestTaskMessage("run-2", 1)
-	store.addTestTaskMessage("run-2", 2)
-	store.addTestTaskMessage("run-2", 3)
+	store.addTestTaskMessage(interactionDAGRunID2, 1)
+	store.addTestTaskMessage(interactionDAGRunID2, 2)
+	store.addTestTaskMessage(interactionDAGRunID2, 3)
 
 	_, _, err := svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-2", "pk", "",
 		map[string]any{"sandbox_ids": []string{"sbx-1"}})
@@ -650,11 +716,11 @@ func TestInteractionDAG_CloseSegmentForEvent_TurnRanges(t *testing.T) {
 		exportPayload:  json.RawMessage(`{"input_ids":{"shard_id":"shard-1","node_addr":"10.0.0.1:8000"}}`),
 	}
 	svc := NewInteractionDAGService(store, client, true)
-	require.NoError(t, svc.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", "run-1", ""))
+	require.NoError(t, svc.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", interactionDAGRunID1, ""))
 
 	// First segment: task messages 1-2.
-	store.addTestTaskMessage("run-1", 1)
-	store.addTestTaskMessage("run-1", 2)
+	store.addTestTaskMessage(interactionDAGRunID1, 1)
+	store.addTestTaskMessage(interactionDAGRunID1, 2)
 	_, _, err := svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-1", "pk", "delegation", nil)
 	require.NoError(t, err)
 	require.Len(t, store.segmentSnapshots, 1)
@@ -663,9 +729,9 @@ func TestInteractionDAG_CloseSegmentForEvent_TurnRanges(t *testing.T) {
 
 	// Second segment: task messages 3-5.
 	client.closeSegmentID = 2
-	store.addTestTaskMessage("run-1", 3)
-	store.addTestTaskMessage("run-1", 4)
-	store.addTestTaskMessage("run-1", 5)
+	store.addTestTaskMessage(interactionDAGRunID1, 3)
+	store.addTestTaskMessage(interactionDAGRunID1, 4)
+	store.addTestTaskMessage(interactionDAGRunID1, 5)
 	_, _, err = svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-1", "pk", "completion", nil)
 	require.NoError(t, err)
 	require.Len(t, store.segmentSnapshots, 2)
@@ -766,7 +832,7 @@ func TestInteractionDAG_CloseSegmentForEvent_CloseSegmentErrorPropagates(t *test
 		closeSegmentErr: errors.New("bridge down"),
 	}
 	svc := NewInteractionDAGService(store, client, true)
-	require.NoError(t, svc.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", "run-1", "issue-1"))
+	require.NoError(t, svc.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", interactionDAGRunID1, "issue-1"))
 
 	_, _, err := svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-1", "pk", "delegation", nil)
 	require.Error(t, err)
@@ -783,7 +849,7 @@ func TestInteractionDAG_CloseSegmentForEvent_ExportErrorPropagates(t *testing.T)
 		exportErr:      errors.New("export 500"),
 	}
 	svc := NewInteractionDAGService(store, client, true)
-	require.NoError(t, svc.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", "run-1", "issue-1"))
+	require.NoError(t, svc.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", interactionDAGRunID1, "issue-1"))
 
 	_, _, err := svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-1", "pk", "delegation", nil)
 	require.Error(t, err)
@@ -800,7 +866,7 @@ func TestInteractionDAG_CloseSegmentForEvent_BadTensorRefErrors(t *testing.T) {
 		exportPayload:  json.RawMessage(`"not-an-object"`),
 	}
 	svc := NewInteractionDAGService(store, client, true)
-	require.NoError(t, svc.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", "run-1", "issue-1"))
+	require.NoError(t, svc.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", interactionDAGRunID1, "issue-1"))
 
 	_, _, err := svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-1", "pk", "delegation", nil)
 	require.Error(t, err)
@@ -819,56 +885,68 @@ func TestInteractionDAG_CloseSegmentForEvent_StoreInsertErrorPropagates(t *testi
 		exportPayload:  json.RawMessage(`{"input_ids":{"shard_id":"s","node_addr":"10.0.0.1:8000"}}`),
 	}
 	svc := NewInteractionDAGService(store, client, true)
-	require.NoError(t, svc.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", "run-1", "issue-1"))
+	require.NoError(t, svc.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", interactionDAGRunID1, "issue-1"))
 
 	_, _, err := svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-1", "pk", "delegation", nil)
 	require.Error(t, err)
 	assert.Empty(t, store.segmentSnapshots, "must not persist on insert error")
 }
 
-// TestAddEdge_StoresTypedEdge verifies each allowed edge type is stored.
+// TestAddEdge_StoresTypedEdge verifies each canonical edge type is stored.
 func TestInteractionDAG_AddEdge_StoresTypedEdge(t *testing.T) {
+	workspaceID := testUUID(80)
 	for _, tc := range []struct {
-		name     string
-		edgeType string
+		name         string
+		edgeType     string
+		needsTrigger bool
 	}{
-		{"delegation", EdgeTypeDelegation},
-		{"mention", EdgeTypeMention},
-		{"completion", EdgeTypeCompletion},
+		{"continues", EdgeTypeContinues, false},
+		{"responds_to", EdgeTypeRespondsTo, true},
+		{"delegates_to", EdgeTypeDelegation, true},
+		{"mentions", EdgeTypeMention, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := newFakeInteractionDAGStore()
+			if tc.needsTrigger {
+				store.edgeTriggerMessageID = testUUID(81)
+			}
 			svc := NewInteractionDAGService(store, &fakeArealSegmentClient{}, true)
-			err := svc.AddEdge(context.Background(), "proj-1", "seg-a", "seg-b", tc.edgeType)
+			err := svc.AddEdge(context.Background(), workspaceID, "seg-a", "seg-b", tc.edgeType)
 			require.NoError(t, err)
 			require.Len(t, store.edges, 1)
 			e := store.edges[0]
-			assert.Equal(t, "proj-1", e.ProjectID)
+			assert.Equal(t, workspaceID, e.WorkspaceID)
+			assert.Equal(t, int64(1), e.EdgeSeq)
 			assert.Equal(t, "seg-a", e.SrcSegmentID)
 			assert.Equal(t, "seg-b", e.DstSegmentID)
-			assert.Equal(t, tc.edgeType, e.Type)
+			assert.Equal(t, tc.edgeType, e.EdgeType)
+			assert.Equal(t, tc.needsTrigger, e.TriggerMessageID.Valid)
 		})
 	}
 }
 
-// TestAddEdge_RejectsBadType verifies an invalid edge type returns
-// ErrInvalidEdgeType and stores nothing.
+// TestAddEdge_RejectsBadType verifies invalid and legacy edge types are rejected.
 func TestInteractionDAG_AddEdge_RejectsBadType(t *testing.T) {
-	store := newFakeInteractionDAGStore()
-	svc := NewInteractionDAGService(store, &fakeArealSegmentClient{}, true)
-	err := svc.AddEdge(context.Background(), "proj-1", "seg-a", "seg-b", "handoff")
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrInvalidEdgeType)
-	assert.Empty(t, store.edges)
+	for _, edgeType := range []string{"handoff", "completion", "delegation", "mention"} {
+		store := newFakeInteractionDAGStore()
+		svc := NewInteractionDAGService(store, &fakeArealSegmentClient{}, true)
+		err := svc.AddEdge(context.Background(), testUUID(80), "seg-a", "seg-b", edgeType)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidEdgeType)
+		assert.Empty(t, store.edges)
+	}
 }
 
 // TestAddEdge_RejectsMissingIDs verifies required-id validation.
 func TestInteractionDAG_AddEdge_RejectsMissingIDs(t *testing.T) {
 	svc := NewInteractionDAGService(newFakeInteractionDAGStore(), &fakeArealSegmentClient{}, true)
-	for _, tc := range []struct{ project, src, dst string }{
-		{"", "s", "d"}, {"p", "", "d"}, {"p", "s", ""},
+	for _, tc := range []struct {
+		workspace pgtype.UUID
+		src, dst  string
+	}{
+		{pgtype.UUID{}, "s", "d"}, {testUUID(80), "", "d"}, {testUUID(80), "s", ""},
 	} {
-		if err := svc.AddEdge(context.Background(), tc.project, tc.src, tc.dst, EdgeTypeDelegation); err == nil {
+		if err := svc.AddEdge(context.Background(), tc.workspace, tc.src, tc.dst, EdgeTypeDelegation); err == nil {
 			t.Fatalf("expected error for %+v", tc)
 		}
 	}
@@ -884,7 +962,7 @@ func TestInteractionDAGService_DisabledIsNoOp(t *testing.T) {
 	assert.NoError(t, svc.RecordSessionAgentRun(context.Background(), "p", "s", "r", "i"))
 	_, _, err := svc.CloseSegmentForEvent(context.Background(), "p", "s", "pk", "delegation", nil)
 	assert.NoError(t, err)
-	assert.NoError(t, svc.AddEdge(context.Background(), "p", "a", "b", EdgeTypeDelegation))
+	assert.NoError(t, svc.AddEdge(context.Background(), pgtype.UUID{}, "a", "b", EdgeTypeDelegation))
 
 	assert.Empty(t, store.sessionRuns)
 	assert.Empty(t, store.segmentSnapshots)
@@ -906,7 +984,7 @@ func TestInteractionDAG_CloseSegmentForEvent_FanOutDeterministic(t *testing.T) {
 		},
 	}
 	svc := NewInteractionDAGService(store, client, true)
-	require.NoError(t, svc.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", "run-1", "issue-1"))
+	require.NoError(t, svc.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", interactionDAGRunID1, "issue-1"))
 
 	// First close: the source segment.
 	rootID, _, err := svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-1", "pk", "completion", nil)
@@ -930,8 +1008,9 @@ func TestInteractionDAG_CloseSegmentForEvent_FanOutDeterministic(t *testing.T) {
 	require.Len(t, store.segmentSnapshots, 3)
 
 	// Fan-out edges root -> child1, root -> child2 (acyclic, deterministic).
-	require.NoError(t, svc.AddEdge(context.Background(), "proj-1", rootID, child1, EdgeTypeDelegation))
-	require.NoError(t, svc.AddEdge(context.Background(), "proj-1", rootID, child2, EdgeTypeDelegation))
+	store.edgeTriggerMessageID = testUUID(81)
+	require.NoError(t, svc.AddEdge(context.Background(), testUUID(80), rootID, child1, EdgeTypeDelegation))
+	require.NoError(t, svc.AddEdge(context.Background(), testUUID(80), rootID, child2, EdgeTypeDelegation))
 	require.Len(t, store.edges, 2)
 	assert.Equal(t, rootID, store.edges[0].SrcSegmentID)
 	assert.Equal(t, child1, store.edges[0].DstSegmentID)
@@ -957,165 +1036,103 @@ func TestInteractionDAG_EncodeEnvSnapshot_NilOrEmpty(t *testing.T) {
 	}
 }
 
-// --- Integration test against a real Postgres (skipped without DATABASE_URL) ---
-// Validates the hand-written sqlc queries + migration 158 actually work,
-// since sqlc generate is broken in this repo.
-
 func interactionDAGTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
-		t.Skip("integration test requires Postgres at DATABASE_URL")
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("integration test requires DATABASE_URL")
 	}
-	pool, err := pgxpool.New(context.Background(), dbURL)
+	pool, err := pgxpool.New(context.Background(), databaseURL)
 	if err != nil {
-		t.Fatalf("connect: %v", err)
+		t.Fatalf("connect to PostgreSQL: %v", err)
 	}
 	return pool
 }
 
-// TestInteractionDAGQueries_Integration exercises the hand-written *db.Queries
-// methods (Upsert/Get session_run, Insert segment+env_snapshot via the atomic
-// CTE, Insert edge) inside a transaction that rolls back, so it is hermetic.
-// Catches SQL/typing errors the fake-based unit tests cannot.
-func TestInteractionDAGQueries_Integration(t *testing.T) {
-	pool := interactionDAGTestPool(t)
-	defer pool.Close()
+// --- Canonical private-schema PostgreSQL integration tests ---
 
+func newCanonicalInteractionDAGQueries(t *testing.T) (context.Context, *db.Queries) {
+	t.Helper()
 	ctx := context.Background()
-	tx, err := pool.Begin(ctx)
-	require.NoError(t, err)
-	defer tx.Rollback(ctx)
-	q := db.New(tx)
+	_, conn := openUniversalDAGServiceSchema(t, ctx)
+	t.Cleanup(conn.Release)
+	if _, err := conn.Exec(ctx, universalDAGLegacySchema); err != nil {
+		t.Fatalf("create pre-454 schema: %v", err)
+	}
+	applyUniversalDAGMigrationIfPresent(t, ctx, conn)
+	seedUniversalDAGCanonicalOwners(t, ctx, conn)
+	return ctx, db.New(conn)
+}
 
-	// Upsert + Get session_run round-trip (issue_id nullable -> NULL when empty).
+// TestInteractionDAGQueries_Integration exercises the retained session and
+// segment writers on migration 454. The writer must commit only the approved
+// legacy_unverified compatibility shape.
+func TestInteractionDAGQueries_Integration(t *testing.T) {
+	ctx, q := newCanonicalInteractionDAGQueries(t)
 	require.NoError(t, q.UpsertInteractionDAGSessionRun(ctx, db.UpsertInteractionDAGSessionRunParams{
-		SessionID: "int-sess-1", ProjectID: "int-proj", AgentRunID: "int-run", IssueID: ptrText("int-issue"),
+		SessionID: "int-sess-1", ProjectID: universalProjectA, AgentRunID: universalTaskA, IssueID: ptrText("int-issue"),
 	}))
 	got, err := q.GetInteractionDAGSessionRun(ctx, "int-sess-1")
 	require.NoError(t, err)
-	assert.Equal(t, "int-run", got.AgentRunID)
-	assert.True(t, got.IssueID.Valid)
+	assert.Equal(t, universalTaskA, got.AgentRunID)
 	assert.Equal(t, "int-issue", got.IssueID.String)
 
-	// Empty issue_id -> NULL round-trips.
-	require.NoError(t, q.UpsertInteractionDAGSessionRun(ctx, db.UpsertInteractionDAGSessionRunParams{
-		SessionID: "int-sess-2", ProjectID: "int-proj", AgentRunID: "int-run-2", IssueID: pgtype.Text{},
-	}))
-	got2, err := q.GetInteractionDAGSessionRun(ctx, "int-sess-2")
-	require.NoError(t, err)
-	assert.False(t, got2.IssueID.Valid)
-
-	// Insert segment + env_snapshot atomically via the CTE (FK satisfied within
-	// the single statement; both rows commit or roll back together).
 	segID := "int-sess-1-42"
-	require.NoError(t, q.InsertInteractionDAGSegmentWithSnapshot(ctx, db.InsertInteractionDAGSegmentWithSnapshotParams{
-		SegmentID: segID, ProjectID: "int-proj", AgentRunID: "int-run",
+	insertedID, err := q.InsertInteractionDAGSegmentWithSnapshot(ctx, db.InsertInteractionDAGSegmentWithSnapshotParams{
+		SegmentID: segID, ProjectID: universalProjectA, AgentRunID: util.MustParseUUID(universalTaskA),
 		IssueID: ptrText("int-issue"), TrajectoryID: pgtype.Int8{Int64: 42, Valid: true},
-		TensorRef:        []byte(`{"shard_id":"int-shard"}`),
-		ClosingEvent:     ptrText("delegation"),
-		TrajectorySource: "areal_tensor",
-		Trainable:        true,
-		Trajectory:       []byte(`[]`),
-		SandboxIds:       []byte(`["sbx"]`),
-		EnvState:         []byte(`{}`),
-	}))
-
-	// Insert typed edges (CHECK constraint accepts the 3 types).
-	for _, et := range []string{EdgeTypeDelegation, EdgeTypeMention, EdgeTypeCompletion} {
-		require.NoError(t, q.InsertInteractionDAGEdge(ctx, db.InsertInteractionDAGEdgeParams{
-			ProjectID: "int-proj", SrcSegmentID: segID, DstSegmentID: "int-other", Type: et,
-		}), "edge type %s must be accepted", et)
-	}
-
-	// CHECK constraint rejects a bad type.
-	err = q.InsertInteractionDAGEdge(ctx, db.InsertInteractionDAGEdgeParams{
-		ProjectID: "int-proj", SrcSegmentID: segID, DstSegmentID: "int-other", Type: "handoff",
+		TensorRef: []byte(`{"opaque":true}`), ClosingEvent: ptrText("delegation"),
+		StartSeq: 1, EndSeq: 1, TrajectorySource: "areal_tensor", Trainable: true,
+		Trajectory: []byte(`[]`), SandboxIds: []byte(`[]`), EnvState: []byte(`{}`),
 	})
-	require.Error(t, err, "bad edge type must violate the CHECK constraint")
-}
-
-// --- AssembleAssembledDag (U8) integration tests against real Postgres ---
-
-// assembleDAGTestService wires an InteractionDAGService backed by a real
-// *db.Queries on the given tx (assembly is read-only and never touches the
-// arealrl bridge, so a nil client is safe). Mirrors the
-// TestInteractionDAGQueries_Integration pattern.
-func assembleDAGTestService(t *testing.T) (*InteractionDAGService, *db.Queries, context.Context, pgx.Tx) {
-	t.Helper()
-	pool := interactionDAGTestPool(t)
-	ctx := context.Background()
-	tx, err := pool.Begin(ctx)
 	require.NoError(t, err)
-	// t.Cleanup is LIFO: register pool.Close() first so tx.Rollback runs first
-	// (releasing the tx's connection) and pool.Close() does not block on a
-	// connection still held by an open tx. Mirrors the defer order in
-	// TestInteractionDAGQueries_Integration.
-	t.Cleanup(func() { pool.Close() })
-	t.Cleanup(func() { _ = tx.Rollback(ctx) })
-	q := db.New(tx)
-	return NewInteractionDAGService(q, nil, true), q, ctx, tx
+	require.Equal(t, segID, insertedID)
+	row, err := q.GetInteractionDAGSegmentByID(ctx, segID)
+	require.NoError(t, err)
+	assert.Equal(t, "legacy_unverified", row.ContentStatus)
+	assert.Zero(t, row.TrajectoryID)
+	assert.Empty(t, row.TensorRef)
+	assert.False(t, row.Trainable)
+	assert.JSONEq(t, `[]`, string(row.Trajectory))
 }
 
-// TestAssembleAssembledDag_ProjectsRecordedRows verifies the read-only assembly
-// reads back recorded segment/edge/env_snapshot/session_run rows for a project
-// and projects them into AssembledDag with EXACTLY the SegmentSpec fields
-// (segment_id, agent_run_id, issue_id, trajectory_id, tensor_ref,
-// closing_event, trajectory_source, trainable, trajectory, env_snapshot,
-// assistant_turn_seqs) - no judge scores, no raw turn indices, no message text
-// cross this boundary. Real
-// Postgres, tx-rollback (hermetic).
+// TestAssembleAssembledDag_ProjectsRecordedRows verifies that a retained writer
+// remains runnable while the assembler preserves metadata and snapshot shape
+// but strips all legacy body/tensor/training fields.
 func TestAssembleAssembledDag_ProjectsRecordedRows(t *testing.T) {
-	svc, q, ctx, _ := assembleDAGTestService(t)
-
-	const proj = "asm-proj-1"
-	// Seed a session_run + a segment with its 1:1 env_snapshot.
+	ctx, q := newCanonicalInteractionDAGQueries(t)
+	svc := NewInteractionDAGService(q, nil, true)
 	require.NoError(t, q.UpsertInteractionDAGSessionRun(ctx, db.UpsertInteractionDAGSessionRunParams{
-		SessionID: "asm-sess-1", ProjectID: proj, AgentRunID: "asm-run-1", IssueID: ptrText("asm-issue-1"),
+		SessionID: "asm-sess-1", ProjectID: universalProjectA, AgentRunID: universalTaskA, IssueID: ptrText("asm-issue-1"),
 	}))
-	require.NoError(t, q.InsertInteractionDAGSegmentWithSnapshot(ctx, db.InsertInteractionDAGSegmentWithSnapshotParams{
-		SegmentID: "asm-sess-1-10", ProjectID: proj, AgentRunID: "asm-run-1",
+	insertedID, err := q.InsertInteractionDAGSegmentWithSnapshot(ctx, db.InsertInteractionDAGSegmentWithSnapshotParams{
+		SegmentID: "asm-sess-1-10", ProjectID: universalProjectA, AgentRunID: util.MustParseUUID(universalTaskA),
 		IssueID: ptrText("asm-issue-1"), TrajectoryID: pgtype.Int8{Int64: 10, Valid: true},
-		TensorRef:        []byte(`{"input_ids":{"shard_id":"sh-1","node_addr":"10.0.0.1:8000"}}`),
-		ClosingEvent:     ptrText("delegation"),
-		TrajectorySource: "areal_tensor",
-		Trainable:        true,
-		Trajectory:       []byte(`[]`),
-		SandboxIds:       []byte(`["sbx-1"]`), IssueSnapshotID: ptrText("snap-1"),
-		EnvState: []byte(`{"k":"v"}`),
-	}))
-
-	dag, err := svc.AssembleAssembledDag(ctx, proj)
+		TensorRef: []byte(`{"opaque":true}`), ClosingEvent: ptrText("delegation"),
+		StartSeq: 1, EndSeq: 1, TrajectorySource: "areal_tensor", Trainable: true,
+		Trajectory: []byte(`[]`), SandboxIds: []byte(`["sbx-1"]`),
+		IssueSnapshotID: ptrText("snap-1"), EnvState: []byte(`{"k":"v"}`),
+	})
 	require.NoError(t, err)
+	require.Equal(t, "asm-sess-1-10", insertedID)
 
-	// session_to_agent_run mapping is assembled from session_run rows.
-	assert.Equal(t, map[string]string{"asm-sess-1": "asm-run-1"}, dag.SessionToAgentRun)
-
-	// Exactly one segment, carrying the SegmentSpec fields.
+	dag, err := svc.AssembleAssembledDag(ctx, universalProjectA)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"asm-sess-1": universalTaskA}, dag.SessionToAgentRun)
 	require.Len(t, dag.Segments, 1)
 	seg := dag.Segments[0]
 	assert.Equal(t, "asm-sess-1-10", seg.SegmentID)
-	assert.Equal(t, "asm-run-1", seg.AgentRunID)
+	assert.Equal(t, universalTaskA, seg.AgentRunID)
 	assert.Equal(t, "asm-issue-1", seg.IssueID)
-	require.NotNil(t, seg.TrajectoryID)
-	assert.EqualValues(t, int64(10), *seg.TrajectoryID)
-	assert.JSONEq(t, `{"input_ids":{"shard_id":"sh-1","node_addr":"10.0.0.1:8000"}}`, string(seg.TensorRef))
-	require.NotNil(t, seg.ClosingEvent, "closing_event must be present (non-NULL)")
-	assert.Equal(t, "delegation", *seg.ClosingEvent)
-	assert.Equal(t, "areal_tensor", seg.TrajectorySource)
-	assert.True(t, seg.Trainable)
+	assert.Nil(t, seg.TrajectoryID)
+	assert.Empty(t, seg.TensorRef)
+	assert.False(t, seg.Trainable)
 	assert.JSONEq(t, `[]`, string(seg.Trajectory))
-
-	// env_snapshot reconstructed from the three env_snapshot columns.
 	assert.JSONEq(t, `["sbx-1"]`, string(seg.EnvSnapshot.SandboxIDs))
 	require.NotNil(t, seg.EnvSnapshot.IssueSnapshotID)
 	assert.Equal(t, "snap-1", *seg.EnvSnapshot.IssueSnapshotID)
 	assert.JSONEq(t, `{"k":"v"}`, string(seg.EnvSnapshot.EnvState))
 
-	// NO judge scores, NO raw turn indices, NO message text: marshal the segment and
-	// confirm none of the banned SegmentSpec keys leak through (the struct must
-	// carry EXACTLY the keys AReaL's SegmentSpec(**s) accepts - extras would
-	// TypeError at parse time on the areal side).
 	raw, err := json.Marshal(seg)
 	require.NoError(t, err)
 	var segKeys map[string]json.RawMessage
@@ -1131,95 +1148,41 @@ func TestAssembleAssembledDag_ProjectsRecordedRows(t *testing.T) {
 		_, ok := segKeys[banned]
 		assert.False(t, ok, "segment must not carry banned key %q", banned)
 	}
-
-	// Edge JSON keys must match EdgeSpec exactly (src_segment_id, dst_segment_id,
-	// type, branch_from_segment_id, branch_from_checkpoint_id).
-	if len(dag.Edges) == 0 {
-		// No edges seeded in this test; verify the struct shape directly via a
-		// zero-value edge marshal so the contract is still asserted here.
-		raw, err := json.Marshal(AssembledEdge{})
-		require.NoError(t, err)
-		var edgeKeys map[string]json.RawMessage
-		require.NoError(t, json.Unmarshal(raw, &edgeKeys))
-		expectedEdgeKeys := map[string]bool{
-			"src_segment_id": true, "dst_segment_id": true, "type": true,
-			"branch_from_segment_id": true, "branch_from_checkpoint_id": true,
-		}
-		assert.Equal(t, expectedEdgeKeys, keysOf(edgeKeys), "edge JSON keys must match EdgeSpec exactly")
-	}
 }
 
-// TestAssembleAssembledDag_EdgesTypedAndAcyclic verifies assembled edges carry
-// types in {delegation, mention, completion} and the recorded segment graph is
-// acyclic (a DAG). Real Postgres, tx-rollback (hermetic).
+// TestAssembleAssembledDag_EdgesTypedAndAcyclic is a fake-store unit cycle test.
+// It verifies continues, responds_to, delegates_to, and mentions remain acyclic.
 func TestAssembleAssembledDag_EdgesTypedAndAcyclic(t *testing.T) {
-	svc, q, ctx, _ := assembleDAGTestService(t)
-
+	store := newFakeInteractionDAGStore()
 	const proj = "asm-proj-2"
-	// Seed three segments for the project: seg-a -> seg-b -> seg-c (acyclic).
-	for _, s := range []struct {
-		segID, runID string
-		trajID       int64
-		closing      string
-	}{
-		{"asm-seg-a", "asm-run-a", 1, "delegation"},
-		{"asm-seg-b", "asm-run-b", 2, "mention"},
-		{"asm-seg-c", "asm-run-c", 3, ""}, // leaf: closing_event NULL
-	} {
-		require.NoError(t, q.InsertInteractionDAGSegmentWithSnapshot(ctx, db.InsertInteractionDAGSegmentWithSnapshotParams{
-			SegmentID: s.segID, ProjectID: proj, AgentRunID: s.runID,
-			IssueID: ptrText("iss"), TrajectoryID: pgtype.Int8{Int64: s.trajID, Valid: true},
-			TensorRef:        []byte(`{"input_ids":{"shard_id":"sh","node_addr":"h:1"}}`),
-			TrajectorySource: "areal_tensor",
-			Trainable:        true,
-			Trajectory:       []byte(`[]`),
-			ClosingEvent: func() pgtype.Text {
-				if s.closing == "" {
-					return pgtype.Text{}
-				}
-				return ptrText(s.closing)
-			}(),
-			SandboxIds: []byte(`[]`), EnvState: []byte(`{}`),
-		}))
+	for i, segmentID := range []string{"asm-seg-a", "asm-seg-b", "asm-seg-c"} {
+		store.segmentSnapshots = append(store.segmentSnapshots, db.InsertInteractionDAGSegmentWithSnapshotParams{
+			SegmentID: segmentID, ProjectID: proj, AgentRunID: testUUID(byte(60 + i)),
+		})
 	}
-	// Typed edges forming an acyclic graph: a->b (delegation), b->c (mention),
-	// a->c (completion).
-	seedEdges := []db.InsertInteractionDAGEdgeParams{
-		{ProjectID: proj, SrcSegmentID: "asm-seg-a", DstSegmentID: "asm-seg-b", Type: EdgeTypeDelegation},
-		{ProjectID: proj, SrcSegmentID: "asm-seg-b", DstSegmentID: "asm-seg-c", Type: EdgeTypeMention},
-		{ProjectID: proj, SrcSegmentID: "asm-seg-a", DstSegmentID: "asm-seg-c", Type: EdgeTypeCompletion},
+	workspaceID := testUUID(70)
+	triggerID := testUUID(71)
+	store.edges = []db.InsertUniversalDAGEdgeParams{
+		{WorkspaceID: workspaceID, EdgeSeq: 1, SrcSegmentID: "asm-seg-a", DstSegmentID: "asm-seg-b", EdgeType: EdgeTypeDelegation, TriggerMessageID: triggerID},
+		{WorkspaceID: workspaceID, EdgeSeq: 2, SrcSegmentID: "asm-seg-b", DstSegmentID: "asm-seg-c", EdgeType: EdgeTypeMention, TriggerMessageID: triggerID},
+		{WorkspaceID: workspaceID, EdgeSeq: 3, SrcSegmentID: "asm-seg-a", DstSegmentID: "asm-seg-c", EdgeType: EdgeTypeRespondsTo, TriggerMessageID: triggerID},
 	}
-	for _, e := range seedEdges {
-		require.NoError(t, q.InsertInteractionDAGEdge(ctx, e))
-	}
-
-	dag, err := svc.AssembleAssembledDag(ctx, proj)
+	svc := NewInteractionDAGService(store, nil, true)
+	dag, err := svc.AssembleAssembledDag(context.Background(), proj)
 	require.NoError(t, err)
-
-	// All three edge types present and each is one of the allowed values.
 	require.Len(t, dag.Edges, 3)
-	seenTypes := map[string]bool{}
-	for _, e := range dag.Edges {
-		assert.Contains(t, []string{EdgeTypeDelegation, EdgeTypeMention, EdgeTypeCompletion}, e.Type,
-			"edge type must be one of delegation/mention/completion")
-		seenTypes[e.Type] = true
-		// Branch provenance is change 2 (MCTS); nil for now but fields present.
-		assert.Nil(t, e.BranchFromSegmentID, "branch_from_segment_id must be nil pre-MCTS")
-		assert.Nil(t, e.BranchFromCheckpointID, "branch_from_checkpoint_id must be nil pre-MCTS")
+	for _, edge := range dag.Edges {
+		assert.Contains(t, []string{EdgeTypeDelegation, EdgeTypeMention, EdgeTypeRespondsTo}, edge.Type)
 	}
-	assert.Len(t, seenTypes, 3, "all three edge types must appear")
-
-	// The assembled segment graph must be acyclic (Kahn's topological sort).
 	assert.True(t, dagIsAcyclic(dag), "assembled graph must be acyclic")
 
-	// Sanity: a self-loop or back-edge would make the graph cyclic. Seed a
-	// back-edge c->a and re-assemble; the graph must now be cyclic.
-	require.NoError(t, q.InsertInteractionDAGEdge(ctx, db.InsertInteractionDAGEdgeParams{
-		ProjectID: proj, SrcSegmentID: "asm-seg-c", DstSegmentID: "asm-seg-a", Type: EdgeTypeCompletion,
-	}))
-	dag2, err := svc.AssembleAssembledDag(ctx, proj)
+	store.edges = append(store.edges, db.InsertUniversalDAGEdgeParams{
+		WorkspaceID: workspaceID, EdgeSeq: 4, SrcSegmentID: "asm-seg-c", DstSegmentID: "asm-seg-a",
+		EdgeType: EdgeTypeRespondsTo, TriggerMessageID: triggerID,
+	})
+	dag, err = svc.AssembleAssembledDag(context.Background(), proj)
 	require.NoError(t, err)
-	assert.False(t, dagIsAcyclic(dag2), "graph with a back-edge must be cyclic")
+	assert.False(t, dagIsAcyclic(dag), "graph with a back-edge must be cyclic")
 }
 
 // dagIsAcyclic reports whether the assembled DAG's segment graph is acyclic,
@@ -1232,7 +1195,7 @@ func dagIsAcyclic(dag AssembledDag) bool {
 	}
 	for _, e := range dag.Edges {
 		// Only count edges between known segment nodes; edges to unrecorded
-		// endpoints are best-effort (validated elsewhere) and ignored here.
+		// endpoints are ignored defensively if an invalid fixture bypasses canonical storage.
 		if _, ok := nodes[e.SrcSegmentID]; !ok {
 			continue
 		}

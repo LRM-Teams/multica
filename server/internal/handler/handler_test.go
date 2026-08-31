@@ -366,6 +366,30 @@ func setupHandlerTestFixture(ctx context.Context, pool *pgxpool.Pool) (string, s
 	return userID, workspaceID, nil
 }
 
+func handlerTestCurrentSchema(ctx context.Context, pool *pgxpool.Pool) (string, error) {
+	var schema string
+	if err := pool.QueryRow(ctx, `SELECT current_schema()`).Scan(&schema); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(schema) == "" {
+		return "", errors.New("handler tests require an explicit current schema")
+	}
+	return schema, nil
+}
+
+func requireDisposableDAGTestSchema(t *testing.T) {
+	t.Helper()
+	if testPool == nil {
+		t.Fatal("DAG test database is unavailable")
+	}
+	schema, err := handlerTestCurrentSchema(context.Background(), testPool)
+	if err != nil {
+		t.Fatalf("resolve DAG test schema: %v", err)
+	}
+	if schema == "public" {
+		t.Fatal("universal DAG tests require a non-public disposable schema")
+	}
+}
 func cleanupHandlerTestFixture(ctx context.Context, pool *pgxpool.Pool) error {
 	// Workspace deletion is the canonical tenant-aggregate cleanup boundary.
 	// The artifact guards explicitly allow this cascade; disabling every trigger
@@ -375,6 +399,28 @@ func cleanupHandlerTestFixture(ctx context.Context, pool *pgxpool.Pool) error {
 		return err
 	}
 	defer tx.Rollback(ctx)
+	// Canonical universal DAG rows are append-only. Global cleanup is allowed
+	// only in a disposable non-public schema. Public-schema handler tests may
+	// proceed only when this fixture owns no universal rows.
+	schema, err := handlerTestCurrentSchema(ctx, pool)
+	if err != nil {
+		return err
+	}
+	if schema == "public" {
+		var fixtureDAGRows int
+		if err := tx.QueryRow(ctx, `
+			SELECT count(*)
+			FROM interaction_dag_segment segment
+			JOIN workspace owner ON owner.id = segment.workspace_id
+			WHERE owner.slug = $1`, handlerTestWorkspaceSlug).Scan(&fixtureDAGRows); err != nil {
+			return err
+		}
+		if fixtureDAGRows != 0 {
+			return errors.New("refusing universal DAG cleanup in public schema; rerun handler DAG tests in a disposable private schema")
+		}
+	} else if _, err := tx.Exec(ctx, `TRUNCATE interaction_dag_edge, interaction_dag_edge_sequence, interaction_dag_publish_outbox, interaction_dag_segment, interaction_dag_task_cursor CASCADE`); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `DELETE FROM workspace WHERE slug = $1`, handlerTestWorkspaceSlug); err != nil {
 		return err
 	}

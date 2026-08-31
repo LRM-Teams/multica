@@ -30,12 +30,13 @@ var graphMemoryAgentOperations = map[string]struct{}{
 // server-authoritative Graph operations. Scope and graph version come only
 // from managed identity, channel route, and the durable active claim.
 type GraphMemoryAgentGateway struct {
-	pool *pgxpool.Pool
-	runs *GraphMemoryAgentRunStore
+	pool   *pgxpool.Pool
+	runs   *GraphMemoryAgentRunStore
+	policy *MemoryProviderPolicyResolver
 }
 
-func NewGraphMemoryAgentGateway(pool *pgxpool.Pool) *GraphMemoryAgentGateway {
-	return &GraphMemoryAgentGateway{pool: pool, runs: NewGraphMemoryAgentRunStore(pool)}
+func NewGraphMemoryAgentGateway(pool *pgxpool.Pool, policy *MemoryProviderPolicyResolver) *GraphMemoryAgentGateway {
+	return &GraphMemoryAgentGateway{pool: pool, runs: NewGraphMemoryAgentRunStore(pool), policy: policy}
 }
 
 func (g *GraphMemoryAgentGateway) AddUsage(ctx context.Context, workspaceID, agentID, channelID string, inputTokens, outputTokens int64) error {
@@ -150,18 +151,36 @@ func (g *GraphMemoryAgentGateway) ServeHTTP(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
+	workspaceUUID, err := util.ParseUUID(workspaceID)
+	if err != nil {
+		return err
+	}
+	var embedder *memorygraph.CachedEmbedder
+	resolvedEmbed, policyErr := g.policy.Resolve(r.Context(), workspaceUUID, ProviderEmbed)
+	switch {
+	case policyErr == nil:
+		scope := resolvedMemoryProviderScope(workspaceID, ProviderEmbed, resolvedEmbed)
+		provider, err := memorygraph.NewOpenAIEmbedderFromEnv(scope)
+		if err == nil {
+			embedder, err = memorygraph.NewCachedEmbedder(provider, store, scope)
+		}
+		if err != nil && !errors.Is(err, memorygraph.ErrEmbedNotConfigured) {
+			return err
+		}
+	case MemoryProviderPolicyAllowsDegradation(policyErr, ProviderEmbed, DegradeBM25):
+		// Disabled or unavailable embedding deterministically uses BM25.
+	default:
+		return policyErr
+	}
+
 	retrievalConfig := memorygraph.DefaultRetrievalConfig()
 	if route.GraphKind == string(memorygraph.GraphDirKindProject) {
 		retrievalConfig.View = memorygraph.GraphView{AllowProject: true, ChannelID: channelID}
 	} else {
 		retrievalConfig.View = memorygraph.GraphView{ChannelID: channelID}
 	}
-	retriever := memorygraph.NewHybridRetriever(store, nil, retrievalConfig)
+	retriever := memorygraph.NewHybridRetriever(store, embedder, retrievalConfig)
 	if err := retriever.RebuildForVersion(r.Context(), int(runContext.Claim.GraphVersion)); err != nil {
-		return err
-	}
-	workspaceUUID, err := util.ParseUUID(workspaceID)
-	if err != nil {
 		return err
 	}
 	profile, err := db.New(g.pool).GetGraphMemoryProfile(r.Context(), workspaceUUID)

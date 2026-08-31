@@ -71,6 +71,32 @@ func (q *Queries) AdvanceInteractionDAGDiagnosisSegmentFetch(ctx context.Context
 	return result.RowsAffected(), nil
 }
 
+const allocateUniversalDAGEdgeSeq = `-- name: AllocateUniversalDAGEdgeSeq :one
+INSERT INTO interaction_dag_edge_sequence (workspace_id, next_edge_seq)
+VALUES (
+  $1,
+  COALESCE((SELECT MAX(edge_seq) + 2 FROM interaction_dag_edge
+            WHERE workspace_id = $1), 2)
+)
+ON CONFLICT (workspace_id) DO UPDATE SET
+  next_edge_seq = GREATEST(
+    interaction_dag_edge_sequence.next_edge_seq + 1,
+    COALESCE((SELECT MAX(edge_seq) + 2 FROM interaction_dag_edge
+              WHERE workspace_id = $1), 2)
+  ),
+  updated_at = now()
+RETURNING (next_edge_seq - 1)::bigint AS edge_seq
+`
+
+// Atomically reserves a workspace edge sequence. Canonical AddEdge uses the
+// combined insert below so a failed insert cannot consume a sequence.
+func (q *Queries) AllocateUniversalDAGEdgeSeq(ctx context.Context, workspaceID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, allocateUniversalDAGEdgeSeq, workspaceID)
+	var edge_seq int64
+	err := row.Scan(&edge_seq)
+	return edge_seq, err
+}
+
 const associateMixedRLProviderCall = `-- name: AssociateMixedRLProviderCall :execrows
 INSERT INTO interaction_dag_segment_provider_call (
   segment_id, provider_call_id, run_id, run_agent_id,
@@ -296,6 +322,26 @@ func (q *Queries) CreateMixedRLFrozenSnapshot(ctx context.Context, arg CreateMix
 	return i, err
 }
 
+const ensureUniversalDAGTaskCursor = `-- name: EnsureUniversalDAGTaskCursor :exec
+INSERT INTO interaction_dag_task_cursor (
+  workspace_id, agent_run_id, next_generation, last_closed_seq
+) VALUES (
+  $1, $2, 1, 0
+)
+ON CONFLICT (workspace_id, agent_run_id) DO NOTHING
+`
+
+type EnsureUniversalDAGTaskCursorParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	AgentRunID  pgtype.UUID `json:"agent_run_id"`
+}
+
+// Creates the first cursor state without overwriting a concurrent writer.
+func (q *Queries) EnsureUniversalDAGTaskCursor(ctx context.Context, arg EnsureUniversalDAGTaskCursorParams) error {
+	_, err := q.db.Exec(ctx, ensureUniversalDAGTaskCursor, arg.WorkspaceID, arg.AgentRunID)
+	return err
+}
+
 const failInteractionDAGDiagnosisRun = `-- name: FailInteractionDAGDiagnosisRun :execrows
 UPDATE interaction_dag_diagnosis_run
 SET status = 'failed', last_error = $2, updated_at = now()
@@ -314,6 +360,93 @@ func (q *Queries) FailInteractionDAGDiagnosisRun(ctx context.Context, arg FailIn
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const finalizeUniversalDAGProviderCapture = `-- name: FinalizeUniversalDAGProviderCapture :one
+UPDATE interaction_dag_segment
+SET provider_capture_status = 'finalized',
+    provider_capture_id = $1::text,
+    provider_capture_version = $2::bigint,
+    updated_at = CASE
+      WHEN provider_capture_status = 'pending' THEN now()
+      ELSE updated_at
+    END
+WHERE workspace_id = $3
+  AND segment_id = $4
+  AND provider_capture_correlation_key = $5::text
+  AND (
+    provider_capture_status = 'pending'
+    OR (
+      provider_capture_status = 'finalized'
+      AND provider_capture_id = $1::text
+      AND provider_capture_version = $2::bigint
+    )
+  )
+RETURNING segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, created_at, start_seq, end_seq, trajectory_source, trainable, trajectory, workspace_id, generation, project_id_at_event, channel_id_at_event, route_generation_at_event, memory_type_at_event, graph_projection_eligible_at_event, close_action_kind, canonical_action_id, visible_action_key, derivative, trainable_eligible, publish_status, content_status, publish_seq, sanitizer_version, policy_version, provider_capture_status, provider_capture_id, provider_capture_version, provider_capture_correlation_key, run_id, run_agent_id, published_at, retracted_at, updated_at
+`
+
+type FinalizeUniversalDAGProviderCaptureParams struct {
+	CaptureID                     string      `json:"capture_id"`
+	CaptureVersion                int64       `json:"capture_version"`
+	WorkspaceID                   pgtype.UUID `json:"workspace_id"`
+	SegmentID                     string      `json:"segment_id"`
+	ProviderCaptureCorrelationKey string      `json:"provider_capture_correlation_key"`
+}
+
+// Finalizes a pending provider capture while allowing an identical retry to succeed.
+func (q *Queries) FinalizeUniversalDAGProviderCapture(ctx context.Context, arg FinalizeUniversalDAGProviderCaptureParams) (InteractionDagSegment, error) {
+	row := q.db.QueryRow(ctx, finalizeUniversalDAGProviderCapture,
+		arg.CaptureID,
+		arg.CaptureVersion,
+		arg.WorkspaceID,
+		arg.SegmentID,
+		arg.ProviderCaptureCorrelationKey,
+	)
+	var i InteractionDagSegment
+	err := row.Scan(
+		&i.SegmentID,
+		&i.ProjectID,
+		&i.AgentRunID,
+		&i.IssueID,
+		&i.TaskID,
+		&i.TrajectoryID,
+		&i.TensorRef,
+		&i.ClosingEvent,
+		&i.ClosingEventTargetSegment,
+		&i.CreatedAt,
+		&i.StartSeq,
+		&i.EndSeq,
+		&i.TrajectorySource,
+		&i.Trainable,
+		&i.Trajectory,
+		&i.WorkspaceID,
+		&i.Generation,
+		&i.ProjectIDAtEvent,
+		&i.ChannelIDAtEvent,
+		&i.RouteGenerationAtEvent,
+		&i.MemoryTypeAtEvent,
+		&i.GraphProjectionEligibleAtEvent,
+		&i.CloseActionKind,
+		&i.CanonicalActionID,
+		&i.VisibleActionKey,
+		&i.Derivative,
+		&i.TrainableEligible,
+		&i.PublishStatus,
+		&i.ContentStatus,
+		&i.PublishSeq,
+		&i.SanitizerVersion,
+		&i.PolicyVersion,
+		&i.ProviderCaptureStatus,
+		&i.ProviderCaptureID,
+		&i.ProviderCaptureVersion,
+		&i.ProviderCaptureCorrelationKey,
+		&i.RunID,
+		&i.RunAgentID,
+		&i.PublishedAt,
+		&i.RetractedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const freezeMixedRLEdges = `-- name: FreezeMixedRLEdges :execrows
@@ -386,6 +519,70 @@ func (q *Queries) GetChannelMessageReactionMessageID(ctx context.Context, reacti
 	var channel_message_id pgtype.UUID
 	err := row.Scan(&channel_message_id)
 	return channel_message_id, err
+}
+
+const getFirstUniversalDAGSegmentByTask = `-- name: GetFirstUniversalDAGSegmentByTask :one
+SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, created_at, start_seq, end_seq, trajectory_source, trainable, trajectory, workspace_id, generation, project_id_at_event, channel_id_at_event, route_generation_at_event, memory_type_at_event, graph_projection_eligible_at_event, close_action_kind, canonical_action_id, visible_action_key, derivative, trainable_eligible, publish_status, content_status, publish_seq, sanitizer_version, policy_version, provider_capture_status, provider_capture_id, provider_capture_version, provider_capture_correlation_key, run_id, run_agent_id, published_at, retracted_at, updated_at
+FROM interaction_dag_segment
+WHERE workspace_id = $1
+  AND agent_run_id = $2
+  AND content_status <> 'legacy_unverified'
+ORDER BY generation, segment_id
+LIMIT 1
+`
+
+type GetFirstUniversalDAGSegmentByTaskParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	AgentRunID  pgtype.UUID `json:"agent_run_id"`
+}
+
+func (q *Queries) GetFirstUniversalDAGSegmentByTask(ctx context.Context, arg GetFirstUniversalDAGSegmentByTaskParams) (InteractionDagSegment, error) {
+	row := q.db.QueryRow(ctx, getFirstUniversalDAGSegmentByTask, arg.WorkspaceID, arg.AgentRunID)
+	var i InteractionDagSegment
+	err := row.Scan(
+		&i.SegmentID,
+		&i.ProjectID,
+		&i.AgentRunID,
+		&i.IssueID,
+		&i.TaskID,
+		&i.TrajectoryID,
+		&i.TensorRef,
+		&i.ClosingEvent,
+		&i.ClosingEventTargetSegment,
+		&i.CreatedAt,
+		&i.StartSeq,
+		&i.EndSeq,
+		&i.TrajectorySource,
+		&i.Trainable,
+		&i.Trajectory,
+		&i.WorkspaceID,
+		&i.Generation,
+		&i.ProjectIDAtEvent,
+		&i.ChannelIDAtEvent,
+		&i.RouteGenerationAtEvent,
+		&i.MemoryTypeAtEvent,
+		&i.GraphProjectionEligibleAtEvent,
+		&i.CloseActionKind,
+		&i.CanonicalActionID,
+		&i.VisibleActionKey,
+		&i.Derivative,
+		&i.TrainableEligible,
+		&i.PublishStatus,
+		&i.ContentStatus,
+		&i.PublishSeq,
+		&i.SanitizerVersion,
+		&i.PolicyVersion,
+		&i.ProviderCaptureStatus,
+		&i.ProviderCaptureID,
+		&i.ProviderCaptureVersion,
+		&i.ProviderCaptureCorrelationKey,
+		&i.RunID,
+		&i.RunAgentID,
+		&i.PublishedAt,
+		&i.RetractedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const getInteractionDAGDiagnosisRun = `-- name: GetInteractionDAGDiagnosisRun :one
@@ -467,20 +664,27 @@ func (q *Queries) GetInteractionDAGDiagnosisSegment(ctx context.Context, arg Get
 }
 
 const getInteractionDAGSegmentByAgentRun = `-- name: GetInteractionDAGSegmentByAgentRun :one
-SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, start_seq, end_seq, trajectory_source, trainable, trajectory, created_at
+SELECT segment_id, project_id, agent_run_id, issue_id, task_id,
+       COALESCE(CASE WHEN content_status = 'legacy_unverified' THEN NULL ELSE trajectory_id END, 0)::bigint AS trajectory_id,
+       (CASE WHEN content_status = 'legacy_unverified' THEN NULL::jsonb ELSE tensor_ref END)::jsonb AS tensor_ref,
+       closing_event, closing_event_target_segment, start_seq, end_seq,
+       trajectory_source,
+       (CASE WHEN content_status = 'legacy_unverified' THEN false ELSE trainable END)::boolean AS trainable,
+       (CASE WHEN content_status = 'legacy_unverified' THEN '[]'::jsonb ELSE trajectory END)::jsonb AS trajectory,
+       created_at, workspace_id, project_id_at_event, content_status, trainable_eligible
 FROM interaction_dag_segment
 WHERE agent_run_id = $1
-ORDER BY created_at DESC
+ORDER BY generation DESC, created_at DESC
 LIMIT 1
 `
 
 type GetInteractionDAGSegmentByAgentRunRow struct {
 	SegmentID                 string             `json:"segment_id"`
-	ProjectID                 string             `json:"project_id"`
-	AgentRunID                string             `json:"agent_run_id"`
+	ProjectID                 pgtype.Text        `json:"project_id"`
+	AgentRunID                pgtype.UUID        `json:"agent_run_id"`
 	IssueID                   pgtype.Text        `json:"issue_id"`
 	TaskID                    pgtype.Text        `json:"task_id"`
-	TrajectoryID              pgtype.Int8        `json:"trajectory_id"`
+	TrajectoryID              int64              `json:"trajectory_id"`
 	TensorRef                 []byte             `json:"tensor_ref"`
 	ClosingEvent              pgtype.Text        `json:"closing_event"`
 	ClosingEventTargetSegment pgtype.Text        `json:"closing_event_target_segment"`
@@ -490,14 +694,15 @@ type GetInteractionDAGSegmentByAgentRunRow struct {
 	Trainable                 bool               `json:"trainable"`
 	Trajectory                []byte             `json:"trajectory"`
 	CreatedAt                 pgtype.Timestamptz `json:"created_at"`
+	WorkspaceID               pgtype.UUID        `json:"workspace_id"`
+	ProjectIDAtEvent          pgtype.UUID        `json:"project_id_at_event"`
+	ContentStatus             string             `json:"content_status"`
+	TrainableEligible         bool               `json:"trainable_eligible"`
 }
 
-// Resolves a task's segment by agent_run_id (= task.ID, D8). For change 1 each
-// trained task has exactly one segment; ORDER BY created_at DESC LIMIT 1 keeps
-// this stable if a future multi-segment model adds more. Used by the
-// DELEGATION-edge recorder (D11) to find the parent's segment at the child's
-// close. Returns no rows when the parent's segment has not been recorded yet.
-func (q *Queries) GetInteractionDAGSegmentByAgentRun(ctx context.Context, agentRunID string) (GetInteractionDAGSegmentByAgentRunRow, error) {
+// Legacy-unverified payload fields are masked at the SQL boundary; callers also
+// fail closed on content_status before resolving task-message content.
+func (q *Queries) GetInteractionDAGSegmentByAgentRun(ctx context.Context, agentRunID pgtype.UUID) (GetInteractionDAGSegmentByAgentRunRow, error) {
 	row := q.db.QueryRow(ctx, getInteractionDAGSegmentByAgentRun, agentRunID)
 	var i GetInteractionDAGSegmentByAgentRunRow
 	err := row.Scan(
@@ -516,22 +721,34 @@ func (q *Queries) GetInteractionDAGSegmentByAgentRun(ctx context.Context, agentR
 		&i.Trainable,
 		&i.Trajectory,
 		&i.CreatedAt,
+		&i.WorkspaceID,
+		&i.ProjectIDAtEvent,
+		&i.ContentStatus,
+		&i.TrainableEligible,
 	)
 	return i, err
 }
 
 const getInteractionDAGSegmentByID = `-- name: GetInteractionDAGSegmentByID :one
-SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, start_seq, end_seq, trajectory_source, trainable, trajectory, created_at FROM interaction_dag_segment
+SELECT segment_id, project_id, agent_run_id, issue_id, task_id,
+       COALESCE(CASE WHEN content_status = 'legacy_unverified' THEN NULL ELSE trajectory_id END, 0)::bigint AS trajectory_id,
+       (CASE WHEN content_status = 'legacy_unverified' THEN NULL::jsonb ELSE tensor_ref END)::jsonb AS tensor_ref,
+       closing_event, closing_event_target_segment, start_seq, end_seq,
+       trajectory_source,
+       (CASE WHEN content_status = 'legacy_unverified' THEN false ELSE trainable END)::boolean AS trainable,
+       (CASE WHEN content_status = 'legacy_unverified' THEN '[]'::jsonb ELSE trajectory END)::jsonb AS trajectory,
+       created_at, workspace_id, project_id_at_event, content_status, trainable_eligible
+FROM interaction_dag_segment
 WHERE segment_id = $1
 `
 
 type GetInteractionDAGSegmentByIDRow struct {
 	SegmentID                 string             `json:"segment_id"`
-	ProjectID                 string             `json:"project_id"`
-	AgentRunID                string             `json:"agent_run_id"`
+	ProjectID                 pgtype.Text        `json:"project_id"`
+	AgentRunID                pgtype.UUID        `json:"agent_run_id"`
 	IssueID                   pgtype.Text        `json:"issue_id"`
 	TaskID                    pgtype.Text        `json:"task_id"`
-	TrajectoryID              pgtype.Int8        `json:"trajectory_id"`
+	TrajectoryID              int64              `json:"trajectory_id"`
 	TensorRef                 []byte             `json:"tensor_ref"`
 	ClosingEvent              pgtype.Text        `json:"closing_event"`
 	ClosingEventTargetSegment pgtype.Text        `json:"closing_event_target_segment"`
@@ -541,10 +758,13 @@ type GetInteractionDAGSegmentByIDRow struct {
 	Trainable                 bool               `json:"trainable"`
 	Trajectory                []byte             `json:"trajectory"`
 	CreatedAt                 pgtype.Timestamptz `json:"created_at"`
+	WorkspaceID               pgtype.UUID        `json:"workspace_id"`
+	ProjectIDAtEvent          pgtype.UUID        `json:"project_id_at_event"`
+	ContentStatus             string             `json:"content_status"`
+	TrainableEligible         bool               `json:"trainable_eligible"`
 }
 
-// GetInteractionDAGSegmentByID resolves a segment by its segment_id.
-// Returns pgx.ErrNoRows when no segment exists for the given ID.
+// Payload fields are always absent/empty for legacy_unverified rows.
 func (q *Queries) GetInteractionDAGSegmentByID(ctx context.Context, segmentID string) (GetInteractionDAGSegmentByIDRow, error) {
 	row := q.db.QueryRow(ctx, getInteractionDAGSegmentByID, segmentID)
 	var i GetInteractionDAGSegmentByIDRow
@@ -564,6 +784,10 @@ func (q *Queries) GetInteractionDAGSegmentByID(ctx context.Context, segmentID st
 		&i.Trainable,
 		&i.Trajectory,
 		&i.CreatedAt,
+		&i.WorkspaceID,
+		&i.ProjectIDAtEvent,
+		&i.ContentStatus,
+		&i.TrainableEligible,
 	)
 	return i, err
 }
@@ -596,11 +820,7 @@ FROM interaction_dag_segment
 WHERE agent_run_id = $1
 `
 
-// Returns the highest end_seq recorded for an agent_run, or 0 when no segment
-// exists yet. Used by CloseSegmentForEvent to compute the next segment's
-// start_seq (lastEnd + 1). MAX over end_seq (not "last row") so an empty [0,0]
-// segment never regresses the running start point.
-func (q *Queries) GetLastEndSeqForAgentRun(ctx context.Context, agentRunID string) (int32, error) {
+func (q *Queries) GetLastEndSeqForAgentRun(ctx context.Context, agentRunID pgtype.UUID) (int32, error) {
 	row := q.db.QueryRow(ctx, getLastEndSeqForAgentRun, agentRunID)
 	var last_end_seq int32
 	err := row.Scan(&last_end_seq)
@@ -787,44 +1007,353 @@ func (q *Queries) GetResumableInteractionDAGDiagnosisRun(ctx context.Context, ar
 	return i, err
 }
 
-const insertInteractionDAGEdge = `-- name: InsertInteractionDAGEdge :exec
-INSERT INTO interaction_dag_edge (project_id, src_segment_id, dst_segment_id, type)
-VALUES ($1, $2, $3, $4)
+const getUniversalDAGEdgeByIdentity = `-- name: GetUniversalDAGEdgeByIdentity :one
+SELECT id, project_id, src_segment_id, dst_segment_id, type, created_at, workspace_id, edge_seq, trigger_message_id
+FROM interaction_dag_edge
+WHERE workspace_id = $1
+  AND src_segment_id = $2
+  AND dst_segment_id = $3
+  AND type = $4
+  AND trigger_message_id IS NOT DISTINCT FROM $5::uuid
+ORDER BY edge_seq
+LIMIT 1
 `
 
-type InsertInteractionDAGEdgeParams struct {
-	ProjectID    string `json:"project_id"`
-	SrcSegmentID string `json:"src_segment_id"`
-	DstSegmentID string `json:"dst_segment_id"`
-	Type         string `json:"type"`
+type GetUniversalDAGEdgeByIdentityParams struct {
+	WorkspaceID      pgtype.UUID `json:"workspace_id"`
+	SrcSegmentID     string      `json:"src_segment_id"`
+	DstSegmentID     string      `json:"dst_segment_id"`
+	EdgeType         string      `json:"edge_type"`
+	TriggerMessageID pgtype.UUID `json:"trigger_message_id"`
 }
 
-// Typed DAG edge. type is CHECK-constrained to delegation/mention/completion;
-// no FK to interaction_dag_segment so an edge can be recorded before both
-// endpoints are known (best-effort, validated at assembly).
-func (q *Queries) InsertInteractionDAGEdge(ctx context.Context, arg InsertInteractionDAGEdgeParams) error {
-	_, err := q.db.Exec(ctx, insertInteractionDAGEdge,
-		arg.ProjectID,
+func (q *Queries) GetUniversalDAGEdgeByIdentity(ctx context.Context, arg GetUniversalDAGEdgeByIdentityParams) (InteractionDagEdge, error) {
+	row := q.db.QueryRow(ctx, getUniversalDAGEdgeByIdentity,
+		arg.WorkspaceID,
 		arg.SrcSegmentID,
 		arg.DstSegmentID,
-		arg.Type,
+		arg.EdgeType,
+		arg.TriggerMessageID,
 	)
-	return err
+	var i InteractionDagEdge
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.SrcSegmentID,
+		&i.DstSegmentID,
+		&i.Type,
+		&i.CreatedAt,
+		&i.WorkspaceID,
+		&i.EdgeSeq,
+		&i.TriggerMessageID,
+	)
+	return i, err
 }
 
-const insertInteractionDAGSegmentWithSnapshot = `-- name: InsertInteractionDAGSegmentWithSnapshot :exec
-WITH seg AS (
-  INSERT INTO interaction_dag_segment (segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, start_seq, end_seq, trajectory_source, trainable, trajectory)
-  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+const getUniversalDAGEdgeTriggerMessageID = `-- name: GetUniversalDAGEdgeTriggerMessageID :one
+SELECT message.id
+FROM interaction_dag_segment AS segment
+JOIN task_message AS message
+  ON message.task_id = segment.agent_run_id
+ AND message.seq BETWEEN segment.start_seq AND segment.end_seq
+WHERE segment.workspace_id = $1
+  AND segment.segment_id = $2
+ORDER BY message.seq DESC, message.id DESC
+LIMIT 1
+`
+
+type GetUniversalDAGEdgeTriggerMessageIDParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	SegmentID   string      `json:"segment_id"`
+}
+
+// Resolves the source Segment's final persisted task-message identity. Legacy
+// seam writers do not yet carry canonical_action_id, so their closing visible
+// action is the final message inside the source Segment's frozen range.
+func (q *Queries) GetUniversalDAGEdgeTriggerMessageID(ctx context.Context, arg GetUniversalDAGEdgeTriggerMessageIDParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getUniversalDAGEdgeTriggerMessageID, arg.WorkspaceID, arg.SegmentID)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
+const getUniversalDAGProjectWorkspace = `-- name: GetUniversalDAGProjectWorkspace :one
+SELECT workspace_id
+FROM project
+WHERE id::text = $1::text
+`
+
+func (q *Queries) GetUniversalDAGProjectWorkspace(ctx context.Context, projectID string) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getUniversalDAGProjectWorkspace, projectID)
+	var workspace_id pgtype.UUID
+	err := row.Scan(&workspace_id)
+	return workspace_id, err
+}
+
+const getUniversalDAGSegment = `-- name: GetUniversalDAGSegment :one
+SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, created_at, start_seq, end_seq, trajectory_source, trainable, trajectory, workspace_id, generation, project_id_at_event, channel_id_at_event, route_generation_at_event, memory_type_at_event, graph_projection_eligible_at_event, close_action_kind, canonical_action_id, visible_action_key, derivative, trainable_eligible, publish_status, content_status, publish_seq, sanitizer_version, policy_version, provider_capture_status, provider_capture_id, provider_capture_version, provider_capture_correlation_key, run_id, run_agent_id, published_at, retracted_at, updated_at
+FROM interaction_dag_segment
+WHERE workspace_id = $1
+  AND segment_id = $2
+  AND content_status <> 'legacy_unverified'
+`
+
+type GetUniversalDAGSegmentParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	SegmentID   string      `json:"segment_id"`
+}
+
+// Reads one complete canonical Segment by its workspace-scoped identity.
+func (q *Queries) GetUniversalDAGSegment(ctx context.Context, arg GetUniversalDAGSegmentParams) (InteractionDagSegment, error) {
+	row := q.db.QueryRow(ctx, getUniversalDAGSegment, arg.WorkspaceID, arg.SegmentID)
+	var i InteractionDagSegment
+	err := row.Scan(
+		&i.SegmentID,
+		&i.ProjectID,
+		&i.AgentRunID,
+		&i.IssueID,
+		&i.TaskID,
+		&i.TrajectoryID,
+		&i.TensorRef,
+		&i.ClosingEvent,
+		&i.ClosingEventTargetSegment,
+		&i.CreatedAt,
+		&i.StartSeq,
+		&i.EndSeq,
+		&i.TrajectorySource,
+		&i.Trainable,
+		&i.Trajectory,
+		&i.WorkspaceID,
+		&i.Generation,
+		&i.ProjectIDAtEvent,
+		&i.ChannelIDAtEvent,
+		&i.RouteGenerationAtEvent,
+		&i.MemoryTypeAtEvent,
+		&i.GraphProjectionEligibleAtEvent,
+		&i.CloseActionKind,
+		&i.CanonicalActionID,
+		&i.VisibleActionKey,
+		&i.Derivative,
+		&i.TrainableEligible,
+		&i.PublishStatus,
+		&i.ContentStatus,
+		&i.PublishSeq,
+		&i.SanitizerVersion,
+		&i.PolicyVersion,
+		&i.ProviderCaptureStatus,
+		&i.ProviderCaptureID,
+		&i.ProviderCaptureVersion,
+		&i.ProviderCaptureCorrelationKey,
+		&i.RunID,
+		&i.RunAgentID,
+		&i.PublishedAt,
+		&i.RetractedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getUniversalDAGSegmentByTaskGeneration = `-- name: GetUniversalDAGSegmentByTaskGeneration :one
+SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, created_at, start_seq, end_seq, trajectory_source, trainable, trajectory, workspace_id, generation, project_id_at_event, channel_id_at_event, route_generation_at_event, memory_type_at_event, graph_projection_eligible_at_event, close_action_kind, canonical_action_id, visible_action_key, derivative, trainable_eligible, publish_status, content_status, publish_seq, sanitizer_version, policy_version, provider_capture_status, provider_capture_id, provider_capture_version, provider_capture_correlation_key, run_id, run_agent_id, published_at, retracted_at, updated_at
+FROM interaction_dag_segment
+WHERE workspace_id = $1
+  AND agent_run_id = $2
+  AND generation = $3
+  AND content_status <> 'legacy_unverified'
+`
+
+type GetUniversalDAGSegmentByTaskGenerationParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	AgentRunID  pgtype.UUID `json:"agent_run_id"`
+	Generation  int64       `json:"generation"`
+}
+
+func (q *Queries) GetUniversalDAGSegmentByTaskGeneration(ctx context.Context, arg GetUniversalDAGSegmentByTaskGenerationParams) (InteractionDagSegment, error) {
+	row := q.db.QueryRow(ctx, getUniversalDAGSegmentByTaskGeneration, arg.WorkspaceID, arg.AgentRunID, arg.Generation)
+	var i InteractionDagSegment
+	err := row.Scan(
+		&i.SegmentID,
+		&i.ProjectID,
+		&i.AgentRunID,
+		&i.IssueID,
+		&i.TaskID,
+		&i.TrajectoryID,
+		&i.TensorRef,
+		&i.ClosingEvent,
+		&i.ClosingEventTargetSegment,
+		&i.CreatedAt,
+		&i.StartSeq,
+		&i.EndSeq,
+		&i.TrajectorySource,
+		&i.Trainable,
+		&i.Trajectory,
+		&i.WorkspaceID,
+		&i.Generation,
+		&i.ProjectIDAtEvent,
+		&i.ChannelIDAtEvent,
+		&i.RouteGenerationAtEvent,
+		&i.MemoryTypeAtEvent,
+		&i.GraphProjectionEligibleAtEvent,
+		&i.CloseActionKind,
+		&i.CanonicalActionID,
+		&i.VisibleActionKey,
+		&i.Derivative,
+		&i.TrainableEligible,
+		&i.PublishStatus,
+		&i.ContentStatus,
+		&i.PublishSeq,
+		&i.SanitizerVersion,
+		&i.PolicyVersion,
+		&i.ProviderCaptureStatus,
+		&i.ProviderCaptureID,
+		&i.ProviderCaptureVersion,
+		&i.ProviderCaptureCorrelationKey,
+		&i.RunID,
+		&i.RunAgentID,
+		&i.PublishedAt,
+		&i.RetractedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getUniversalDAGSegmentByVisibleAction = `-- name: GetUniversalDAGSegmentByVisibleAction :one
+SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, created_at, start_seq, end_seq, trajectory_source, trainable, trajectory, workspace_id, generation, project_id_at_event, channel_id_at_event, route_generation_at_event, memory_type_at_event, graph_projection_eligible_at_event, close_action_kind, canonical_action_id, visible_action_key, derivative, trainable_eligible, publish_status, content_status, publish_seq, sanitizer_version, policy_version, provider_capture_status, provider_capture_id, provider_capture_version, provider_capture_correlation_key, run_id, run_agent_id, published_at, retracted_at, updated_at
+FROM interaction_dag_segment
+WHERE workspace_id = $1
+  AND visible_action_key = $2
+  AND content_status <> 'legacy_unverified'
+`
+
+type GetUniversalDAGSegmentByVisibleActionParams struct {
+	WorkspaceID      pgtype.UUID `json:"workspace_id"`
+	VisibleActionKey pgtype.Text `json:"visible_action_key"`
+}
+
+// Resolves an idempotent visible/terminal boundary replay.
+func (q *Queries) GetUniversalDAGSegmentByVisibleAction(ctx context.Context, arg GetUniversalDAGSegmentByVisibleActionParams) (InteractionDagSegment, error) {
+	row := q.db.QueryRow(ctx, getUniversalDAGSegmentByVisibleAction, arg.WorkspaceID, arg.VisibleActionKey)
+	var i InteractionDagSegment
+	err := row.Scan(
+		&i.SegmentID,
+		&i.ProjectID,
+		&i.AgentRunID,
+		&i.IssueID,
+		&i.TaskID,
+		&i.TrajectoryID,
+		&i.TensorRef,
+		&i.ClosingEvent,
+		&i.ClosingEventTargetSegment,
+		&i.CreatedAt,
+		&i.StartSeq,
+		&i.EndSeq,
+		&i.TrajectorySource,
+		&i.Trainable,
+		&i.Trajectory,
+		&i.WorkspaceID,
+		&i.Generation,
+		&i.ProjectIDAtEvent,
+		&i.ChannelIDAtEvent,
+		&i.RouteGenerationAtEvent,
+		&i.MemoryTypeAtEvent,
+		&i.GraphProjectionEligibleAtEvent,
+		&i.CloseActionKind,
+		&i.CanonicalActionID,
+		&i.VisibleActionKey,
+		&i.Derivative,
+		&i.TrainableEligible,
+		&i.PublishStatus,
+		&i.ContentStatus,
+		&i.PublishSeq,
+		&i.SanitizerVersion,
+		&i.PolicyVersion,
+		&i.ProviderCaptureStatus,
+		&i.ProviderCaptureID,
+		&i.ProviderCaptureVersion,
+		&i.ProviderCaptureCorrelationKey,
+		&i.RunID,
+		&i.RunAgentID,
+		&i.PublishedAt,
+		&i.RetractedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const insertInteractionDAGSegmentWithSnapshot = `-- name: InsertInteractionDAGSegmentWithSnapshot :one
+WITH task_owner AS MATERIALIZED (
+  SELECT task.id AS agent_run_id, task.workspace_id, task.channel_id,
+         project.id AS project_id
+  FROM agent_inbox_event AS task
+  JOIN project ON project.id::text = $4::text
+              AND project.workspace_id = task.workspace_id
+  WHERE task.id = $5
+), allocated AS (
+  INSERT INTO interaction_dag_segment_generation_sequence (
+    workspace_id, agent_run_id, next_generation
+  )
+  SELECT task_owner.workspace_id, task_owner.agent_run_id,
+         COALESCE((
+           SELECT MAX(segment.generation) + 2
+           FROM interaction_dag_segment AS segment
+           WHERE segment.workspace_id = task_owner.workspace_id
+             AND segment.agent_run_id = task_owner.agent_run_id
+         ), 2)
+  FROM task_owner
+  ON CONFLICT (workspace_id, agent_run_id) DO UPDATE SET
+    next_generation = GREATEST(
+      interaction_dag_segment_generation_sequence.next_generation + 1,
+      COALESCE((
+        SELECT MAX(segment.generation) + 2
+        FROM interaction_dag_segment AS segment
+        WHERE segment.workspace_id = EXCLUDED.workspace_id
+          AND segment.agent_run_id = EXCLUDED.agent_run_id
+      ), 2)
+    ),
+    updated_at = now()
+  RETURNING workspace_id, agent_run_id,
+            (next_generation - 1)::bigint AS generation
+), seg AS (
+  INSERT INTO interaction_dag_segment (
+    segment_id, project_id, agent_run_id, issue_id, task_id,
+    trajectory_id, tensor_ref, closing_event, closing_event_target_segment,
+    start_seq, end_seq, trajectory_source, trainable, trajectory,
+    workspace_id, generation, project_id_at_event, channel_id_at_event,
+    memory_type_at_event, graph_projection_eligible_at_event, derivative,
+    trainable_eligible, content_status, provider_capture_status
+  )
+  SELECT
+    $6, task_owner.project_id::text,
+    task_owner.agent_run_id, $7, $8,
+    $9, $10, $11,
+    $12, $13,
+    $14, $15,
+    ($16::boolean AND false), $17, task_owner.workspace_id,
+    allocated.generation, task_owner.project_id,
+    task_owner.channel_id, 'legacy', false, false, false,
+    'legacy_unverified', 'not_expected'
+  FROM task_owner
+  JOIN allocated
+    ON allocated.workspace_id = task_owner.workspace_id
+   AND allocated.agent_run_id = task_owner.agent_run_id
+  RETURNING segment_id
 )
-INSERT INTO interaction_dag_env_snapshot (segment_id, sandbox_ids, issue_snapshot_id, env_state)
-VALUES ($1, $15, $16, $17)
+INSERT INTO interaction_dag_env_snapshot (
+  segment_id, sandbox_ids, issue_snapshot_id, env_state
+)
+SELECT seg.segment_id, $1,
+       $2, $3
+FROM seg
+RETURNING segment_id
 `
 
 type InsertInteractionDAGSegmentWithSnapshotParams struct {
-	SegmentID                 string      `json:"segment_id"`
+	SandboxIds                []byte      `json:"sandbox_ids"`
+	IssueSnapshotID           pgtype.Text `json:"issue_snapshot_id"`
+	EnvState                  []byte      `json:"env_state"`
 	ProjectID                 string      `json:"project_id"`
-	AgentRunID                string      `json:"agent_run_id"`
+	AgentRunID                pgtype.UUID `json:"agent_run_id"`
+	SegmentID                 string      `json:"segment_id"`
 	IssueID                   pgtype.Text `json:"issue_id"`
 	TaskID                    pgtype.Text `json:"task_id"`
 	TrajectoryID              pgtype.Int8 `json:"trajectory_id"`
@@ -836,27 +1365,19 @@ type InsertInteractionDAGSegmentWithSnapshotParams struct {
 	TrajectorySource          string      `json:"trajectory_source"`
 	Trainable                 bool        `json:"trainable"`
 	Trajectory                []byte      `json:"trajectory"`
-	SandboxIds                []byte      `json:"sandbox_ids"`
-	IssueSnapshotID           pgtype.Text `json:"issue_snapshot_id"`
-	EnvState                  []byte      `json:"env_state"`
 }
 
-// Atomically inserts a segment row AND its 1:1 env_snapshot in a single
-// data-modifying CTE. segment_id ($1) is a text PK computed by the service
-// (<sessionID>-<trajectoryID>) and reused as the snapshot FK, so both inserts
-// commit or roll back together - a snapshot failure can never orphan the
-// segment (paired operations stay together). PostgreSQL executes the seg CTE
-// even though its result is not read by the outer INSERT, and the FK check sees
-// the seg row within the same statement. tensor_ref is the opaque tensor-ref
-// object decoded from the areal export (stored verbatim as jsonb); start_seq/
-// end_seq are the task_message.seq turn range captured at close (Task 2);
-// sandbox_ids and env_state are opaque jsonb (NOT NULL); issue_snapshot_id is
-// nullable.
-func (q *Queries) InsertInteractionDAGSegmentWithSnapshot(ctx context.Context, arg InsertInteractionDAGSegmentWithSnapshotParams) error {
-	_, err := q.db.Exec(ctx, insertInteractionDAGSegmentWithSnapshot,
-		arg.SegmentID,
+// Retained pre-canonical writers insert only the approved legacy_unverified
+// exception. A per-workspace/task counter serializes generation allocation
+// until Task 2 replaces this compatibility path with its boundary cursor.
+func (q *Queries) InsertInteractionDAGSegmentWithSnapshot(ctx context.Context, arg InsertInteractionDAGSegmentWithSnapshotParams) (string, error) {
+	row := q.db.QueryRow(ctx, insertInteractionDAGSegmentWithSnapshot,
+		arg.SandboxIds,
+		arg.IssueSnapshotID,
+		arg.EnvState,
 		arg.ProjectID,
 		arg.AgentRunID,
+		arg.SegmentID,
 		arg.IssueID,
 		arg.TaskID,
 		arg.TrajectoryID,
@@ -868,11 +1389,10 @@ func (q *Queries) InsertInteractionDAGSegmentWithSnapshot(ctx context.Context, a
 		arg.TrajectorySource,
 		arg.Trainable,
 		arg.Trajectory,
-		arg.SandboxIds,
-		arg.IssueSnapshotID,
-		arg.EnvState,
 	)
-	return err
+	var segment_id string
+	err := row.Scan(&segment_id)
+	return segment_id, err
 }
 
 const insertInteractionDAGStepReward = `-- name: InsertInteractionDAGStepReward :exec
@@ -1238,6 +1758,364 @@ func (q *Queries) InsertMixedRLVisibleAction(ctx context.Context, arg InsertMixe
 	return i, err
 }
 
+const insertUniversalDAGEdge = `-- name: InsertUniversalDAGEdge :one
+INSERT INTO interaction_dag_edge (
+  workspace_id, edge_seq, src_segment_id, dst_segment_id, type,
+  trigger_message_id
+)
+SELECT
+  $1, $2, $3,
+  $4, $5,
+  $6
+WHERE (
+    $5::text = 'continues'
+    AND $6::uuid IS NULL
+  ) OR (
+    $5::text IN ('responds_to', 'delegates_to', 'mentions')
+  )
+RETURNING id, project_id, src_segment_id, dst_segment_id, type, created_at, workspace_id, edge_seq, trigger_message_id
+`
+
+type InsertUniversalDAGEdgeParams struct {
+	WorkspaceID      pgtype.UUID `json:"workspace_id"`
+	EdgeSeq          int64       `json:"edge_seq"`
+	SrcSegmentID     string      `json:"src_segment_id"`
+	DstSegmentID     string      `json:"dst_segment_id"`
+	EdgeType         string      `json:"edge_type"`
+	TriggerMessageID pgtype.UUID `json:"trigger_message_id"`
+}
+
+// Inserts a canonical typed Edge with the required durable trigger identity semantics.
+func (q *Queries) InsertUniversalDAGEdge(ctx context.Context, arg InsertUniversalDAGEdgeParams) (InteractionDagEdge, error) {
+	row := q.db.QueryRow(ctx, insertUniversalDAGEdge,
+		arg.WorkspaceID,
+		arg.EdgeSeq,
+		arg.SrcSegmentID,
+		arg.DstSegmentID,
+		arg.EdgeType,
+		arg.TriggerMessageID,
+	)
+	var i InteractionDagEdge
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.SrcSegmentID,
+		&i.DstSegmentID,
+		&i.Type,
+		&i.CreatedAt,
+		&i.WorkspaceID,
+		&i.EdgeSeq,
+		&i.TriggerMessageID,
+	)
+	return i, err
+}
+
+const insertUniversalDAGEdgeAtomic = `-- name: InsertUniversalDAGEdgeAtomic :one
+WITH source AS MATERIALIZED (
+  SELECT segment.workspace_id, segment.segment_id, segment.agent_run_id,
+         segment.start_seq, segment.end_seq, trigger.id AS trigger_message_id
+  FROM interaction_dag_segment AS segment
+  LEFT JOIN LATERAL (
+    SELECT message.id
+    FROM task_message AS message
+    WHERE message.task_id = segment.agent_run_id
+      AND message.seq BETWEEN segment.start_seq AND segment.end_seq
+    ORDER BY message.seq DESC, message.id DESC
+    LIMIT 1
+  ) AS trigger ON $2::text <> 'continues'
+  WHERE segment.workspace_id = $3
+    AND segment.segment_id = $4
+    AND (
+      $2::text = 'continues'
+      OR trigger.id IS NOT NULL
+    )
+), allocated AS (
+  INSERT INTO interaction_dag_edge_sequence (workspace_id, next_edge_seq)
+  SELECT source.workspace_id,
+         COALESCE((SELECT MAX(edge_seq) + 2 FROM interaction_dag_edge
+                   WHERE workspace_id = source.workspace_id), 2)
+  FROM source
+  ON CONFLICT (workspace_id) DO UPDATE SET
+    next_edge_seq = GREATEST(
+      interaction_dag_edge_sequence.next_edge_seq + 1,
+      COALESCE((SELECT MAX(edge_seq) + 2 FROM interaction_dag_edge
+                WHERE workspace_id = EXCLUDED.workspace_id), 2)
+    ),
+    updated_at = now()
+  RETURNING next_edge_seq - 1 AS edge_seq, workspace_id
+)
+INSERT INTO interaction_dag_edge (
+  workspace_id, edge_seq, src_segment_id, dst_segment_id, type,
+  trigger_message_id
+)
+SELECT allocated.workspace_id, allocated.edge_seq, source.segment_id,
+       $1, $2,
+       CASE WHEN $2::text = 'continues'
+            THEN NULL::uuid ELSE source.trigger_message_id END
+FROM allocated
+JOIN source ON source.workspace_id = allocated.workspace_id
+RETURNING interaction_dag_edge.id, interaction_dag_edge.project_id, interaction_dag_edge.src_segment_id, interaction_dag_edge.dst_segment_id, interaction_dag_edge.type, interaction_dag_edge.created_at, interaction_dag_edge.workspace_id, interaction_dag_edge.edge_seq, interaction_dag_edge.trigger_message_id
+`
+
+type InsertUniversalDAGEdgeAtomicParams struct {
+	DstSegmentID string      `json:"dst_segment_id"`
+	EdgeType     string      `json:"edge_type"`
+	WorkspaceID  pgtype.UUID `json:"workspace_id"`
+	SrcSegmentID string      `json:"src_segment_id"`
+}
+
+// Resolves durable trigger provenance, allocates edge_seq, and inserts in one
+// statement. The sequence-row update serializes concurrent workspace writers.
+func (q *Queries) InsertUniversalDAGEdgeAtomic(ctx context.Context, arg InsertUniversalDAGEdgeAtomicParams) (InteractionDagEdge, error) {
+	row := q.db.QueryRow(ctx, insertUniversalDAGEdgeAtomic,
+		arg.DstSegmentID,
+		arg.EdgeType,
+		arg.WorkspaceID,
+		arg.SrcSegmentID,
+	)
+	var i InteractionDagEdge
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.SrcSegmentID,
+		&i.DstSegmentID,
+		&i.Type,
+		&i.CreatedAt,
+		&i.WorkspaceID,
+		&i.EdgeSeq,
+		&i.TriggerMessageID,
+	)
+	return i, err
+}
+
+const insertUniversalDAGProviderCallLink = `-- name: InsertUniversalDAGProviderCallLink :one
+INSERT INTO interaction_dag_universal_provider_call (
+  segment_id, provider_call_id, role, ordinal, run_id, run_agent_id, capture_id
+) VALUES (
+  $1, $2, $3,
+  $4, $5, $6,
+  $7
+)
+ON CONFLICT (segment_id, provider_call_id) DO UPDATE SET
+  segment_id = EXCLUDED.segment_id
+WHERE interaction_dag_universal_provider_call.role = EXCLUDED.role
+  AND interaction_dag_universal_provider_call.ordinal = EXCLUDED.ordinal
+  AND interaction_dag_universal_provider_call.run_id = EXCLUDED.run_id
+  AND interaction_dag_universal_provider_call.run_agent_id = EXCLUDED.run_agent_id
+  AND interaction_dag_universal_provider_call.capture_id = EXCLUDED.capture_id
+RETURNING segment_id, provider_call_id, role, ordinal, run_id, run_agent_id, capture_id, created_at
+`
+
+type InsertUniversalDAGProviderCallLinkParams struct {
+	SegmentID      string      `json:"segment_id"`
+	ProviderCallID string      `json:"provider_call_id"`
+	Role           string      `json:"role"`
+	Ordinal        int64       `json:"ordinal"`
+	RunID          pgtype.UUID `json:"run_id"`
+	RunAgentID     pgtype.UUID `json:"run_agent_id"`
+	CaptureID      string      `json:"capture_id"`
+}
+
+// Idempotently associates a finalized provider call with its canonical Segment.
+func (q *Queries) InsertUniversalDAGProviderCallLink(ctx context.Context, arg InsertUniversalDAGProviderCallLinkParams) (InteractionDagUniversalProviderCall, error) {
+	row := q.db.QueryRow(ctx, insertUniversalDAGProviderCallLink,
+		arg.SegmentID,
+		arg.ProviderCallID,
+		arg.Role,
+		arg.Ordinal,
+		arg.RunID,
+		arg.RunAgentID,
+		arg.CaptureID,
+	)
+	var i InteractionDagUniversalProviderCall
+	err := row.Scan(
+		&i.SegmentID,
+		&i.ProviderCallID,
+		&i.Role,
+		&i.Ordinal,
+		&i.RunID,
+		&i.RunAgentID,
+		&i.CaptureID,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const insertUniversalDAGPublishOutbox = `-- name: InsertUniversalDAGPublishOutbox :one
+INSERT INTO interaction_dag_publish_outbox (
+  workspace_id, segment_id, request_hash, status, attempts, next_attempt_at
+) VALUES (
+  $1, $2, $3,
+  'pending', 0, $4
+)
+RETURNING workspace_id, segment_id, request_hash, status, attempts, next_attempt_at, lease_owner, lease_expires_at, last_error, created_at, updated_at, completed_at
+`
+
+type InsertUniversalDAGPublishOutboxParams struct {
+	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
+	SegmentID     string             `json:"segment_id"`
+	RequestHash   string             `json:"request_hash"`
+	NextAttemptAt pgtype.Timestamptz `json:"next_attempt_at"`
+}
+
+// Persists the initial durable publication request and retry schedule for a Segment.
+func (q *Queries) InsertUniversalDAGPublishOutbox(ctx context.Context, arg InsertUniversalDAGPublishOutboxParams) (InteractionDagPublishOutbox, error) {
+	row := q.db.QueryRow(ctx, insertUniversalDAGPublishOutbox,
+		arg.WorkspaceID,
+		arg.SegmentID,
+		arg.RequestHash,
+		arg.NextAttemptAt,
+	)
+	var i InteractionDagPublishOutbox
+	err := row.Scan(
+		&i.WorkspaceID,
+		&i.SegmentID,
+		&i.RequestHash,
+		&i.Status,
+		&i.Attempts,
+		&i.NextAttemptAt,
+		&i.LeaseOwner,
+		&i.LeaseExpiresAt,
+		&i.LastError,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CompletedAt,
+	)
+	return i, err
+}
+
+const insertUniversalDAGSegment = `-- name: InsertUniversalDAGSegment :one
+INSERT INTO interaction_dag_segment (
+  segment_id, workspace_id, agent_run_id, generation, issue_id,
+  start_seq, end_seq, trajectory_source, trainable, trajectory,
+  project_id_at_event, channel_id_at_event, route_generation_at_event,
+  memory_type_at_event, graph_projection_eligible_at_event,
+  close_action_kind, canonical_action_id, visible_action_key,
+  derivative, trainable_eligible, publish_status, content_status,
+  sanitizer_version, policy_version, provider_capture_status,
+  provider_capture_correlation_key, run_id, run_agent_id
+) VALUES (
+  $1, $2, $3,
+  $4, NULLIF($5::text, ''),
+  $6, $7, 'task_messages',
+  $8, '[]'::jsonb,
+  $9, $10,
+  $11, $12,
+  $13, $14::text,
+  $15, NULLIF($16::text, ''),
+  $17, $8,
+  'pending',
+  CASE WHEN $14::text = 'metadata_only' THEN 'empty' ELSE 'pending' END,
+  NULLIF($18::text, ''), NULLIF($19::text, ''),
+  CASE
+    WHEN NULLIF($20::text, '') IS NULL
+      THEN 'not_expected'
+    ELSE 'pending'
+  END,
+  NULLIF($20::text, ''), $21,
+  $22
+)
+RETURNING segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, created_at, start_seq, end_seq, trajectory_source, trainable, trajectory, workspace_id, generation, project_id_at_event, channel_id_at_event, route_generation_at_event, memory_type_at_event, graph_projection_eligible_at_event, close_action_kind, canonical_action_id, visible_action_key, derivative, trainable_eligible, publish_status, content_status, publish_seq, sanitizer_version, policy_version, provider_capture_status, provider_capture_id, provider_capture_version, provider_capture_correlation_key, run_id, run_agent_id, published_at, retracted_at, updated_at
+`
+
+type InsertUniversalDAGSegmentParams struct {
+	SegmentID                      string      `json:"segment_id"`
+	WorkspaceID                    pgtype.UUID `json:"workspace_id"`
+	AgentRunID                     pgtype.UUID `json:"agent_run_id"`
+	Generation                     int64       `json:"generation"`
+	IssueID                        string      `json:"issue_id"`
+	StartSeq                       int32       `json:"start_seq"`
+	EndSeq                         int32       `json:"end_seq"`
+	TrainableEligible              bool        `json:"trainable_eligible"`
+	ProjectIDAtEvent               pgtype.UUID `json:"project_id_at_event"`
+	ChannelIDAtEvent               pgtype.UUID `json:"channel_id_at_event"`
+	RouteGenerationAtEvent         pgtype.Int8 `json:"route_generation_at_event"`
+	MemoryTypeAtEvent              string      `json:"memory_type_at_event"`
+	GraphProjectionEligibleAtEvent bool        `json:"graph_projection_eligible_at_event"`
+	CloseActionKind                string      `json:"close_action_kind"`
+	CanonicalActionID              pgtype.UUID `json:"canonical_action_id"`
+	VisibleActionKey               string      `json:"visible_action_key"`
+	Derivative                     bool        `json:"derivative"`
+	SanitizerVersion               string      `json:"sanitizer_version"`
+	PolicyVersion                  string      `json:"policy_version"`
+	ProviderCaptureCorrelationKey  string      `json:"provider_capture_correlation_key"`
+	RunID                          pgtype.UUID `json:"run_id"`
+	RunAgentID                     pgtype.UUID `json:"run_agent_id"`
+}
+
+// Inserts canonical workspace-scoped Segment metadata backed by task_messages.
+func (q *Queries) InsertUniversalDAGSegment(ctx context.Context, arg InsertUniversalDAGSegmentParams) (InteractionDagSegment, error) {
+	row := q.db.QueryRow(ctx, insertUniversalDAGSegment,
+		arg.SegmentID,
+		arg.WorkspaceID,
+		arg.AgentRunID,
+		arg.Generation,
+		arg.IssueID,
+		arg.StartSeq,
+		arg.EndSeq,
+		arg.TrainableEligible,
+		arg.ProjectIDAtEvent,
+		arg.ChannelIDAtEvent,
+		arg.RouteGenerationAtEvent,
+		arg.MemoryTypeAtEvent,
+		arg.GraphProjectionEligibleAtEvent,
+		arg.CloseActionKind,
+		arg.CanonicalActionID,
+		arg.VisibleActionKey,
+		arg.Derivative,
+		arg.SanitizerVersion,
+		arg.PolicyVersion,
+		arg.ProviderCaptureCorrelationKey,
+		arg.RunID,
+		arg.RunAgentID,
+	)
+	var i InteractionDagSegment
+	err := row.Scan(
+		&i.SegmentID,
+		&i.ProjectID,
+		&i.AgentRunID,
+		&i.IssueID,
+		&i.TaskID,
+		&i.TrajectoryID,
+		&i.TensorRef,
+		&i.ClosingEvent,
+		&i.ClosingEventTargetSegment,
+		&i.CreatedAt,
+		&i.StartSeq,
+		&i.EndSeq,
+		&i.TrajectorySource,
+		&i.Trainable,
+		&i.Trajectory,
+		&i.WorkspaceID,
+		&i.Generation,
+		&i.ProjectIDAtEvent,
+		&i.ChannelIDAtEvent,
+		&i.RouteGenerationAtEvent,
+		&i.MemoryTypeAtEvent,
+		&i.GraphProjectionEligibleAtEvent,
+		&i.CloseActionKind,
+		&i.CanonicalActionID,
+		&i.VisibleActionKey,
+		&i.Derivative,
+		&i.TrainableEligible,
+		&i.PublishStatus,
+		&i.ContentStatus,
+		&i.PublishSeq,
+		&i.SanitizerVersion,
+		&i.PolicyVersion,
+		&i.ProviderCaptureStatus,
+		&i.ProviderCaptureID,
+		&i.ProviderCaptureVersion,
+		&i.ProviderCaptureCorrelationKey,
+		&i.RunID,
+		&i.RunAgentID,
+		&i.PublishedAt,
+		&i.RetractedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const listInteractionDAGDiagnosisSegments = `-- name: ListInteractionDAGDiagnosisSegments :many
 SELECT run_id, segment_id, ordinal, expected_message_count, fetched_message_count, expected_reward_count, expected_reward_seqs, reward_count, next_cursor, status, created_at, updated_at, completed_at
 FROM interaction_dag_diagnosis_segment
@@ -1297,23 +2175,44 @@ func (q *Queries) ListInteractionDAGDiagnosisSegments(ctx context.Context, runID
 }
 
 const listInteractionDAGEdgesForProject = `-- name: ListInteractionDAGEdgesForProject :many
-SELECT id, project_id, src_segment_id, dst_segment_id, type, created_at
-FROM interaction_dag_edge
-WHERE project_id = $1
-ORDER BY id
+SELECT edge.id, edge.project_id, edge.src_segment_id, edge.dst_segment_id,
+       edge.type, edge.created_at
+FROM interaction_dag_edge AS edge
+JOIN interaction_dag_segment AS source
+  ON source.workspace_id = edge.workspace_id
+ AND source.segment_id = edge.src_segment_id
+JOIN interaction_dag_segment AS target
+  ON target.workspace_id = edge.workspace_id
+ AND target.segment_id = edge.dst_segment_id
+WHERE edge.workspace_id = $1
+  AND source.project_id_at_event::text = $2::text
+  AND target.project_id_at_event::text = $2::text
+ORDER BY edge.edge_seq, edge.id
 `
 
-// Read-only assembly query (U8): all typed edges for a project, ordered by id
-// (insertion order) for deterministic assembly.
-func (q *Queries) ListInteractionDAGEdgesForProject(ctx context.Context, projectID string) ([]InteractionDagEdge, error) {
-	rows, err := q.db.Query(ctx, listInteractionDAGEdgesForProject, projectID)
+type ListInteractionDAGEdgesForProjectParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ProjectID   string      `json:"project_id"`
+}
+
+type ListInteractionDAGEdgesForProjectRow struct {
+	ID           int64              `json:"id"`
+	ProjectID    pgtype.Text        `json:"project_id"`
+	SrcSegmentID string             `json:"src_segment_id"`
+	DstSegmentID string             `json:"dst_segment_id"`
+	Type         string             `json:"type"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) ListInteractionDAGEdgesForProject(ctx context.Context, arg ListInteractionDAGEdgesForProjectParams) ([]ListInteractionDAGEdgesForProjectRow, error) {
+	rows, err := q.db.Query(ctx, listInteractionDAGEdgesForProject, arg.WorkspaceID, arg.ProjectID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []InteractionDagEdge{}
+	items := []ListInteractionDAGEdgesForProjectRow{}
 	for rows.Next() {
-		var i InteractionDagEdge
+		var i ListInteractionDAGEdgesForProjectRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.ProjectID,
@@ -1336,14 +2235,20 @@ const listInteractionDAGEnvSnapshotsForProject = `-- name: ListInteractionDAGEnv
 SELECT e.segment_id, e.sandbox_ids, e.issue_snapshot_id, e.env_state
 FROM interaction_dag_env_snapshot e
 JOIN interaction_dag_segment s ON s.segment_id = e.segment_id
-WHERE s.project_id = $1
+WHERE s.workspace_id = $1
+  AND s.project_id_at_event::text = $2::text
 `
+
+type ListInteractionDAGEnvSnapshotsForProjectParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ProjectID   string      `json:"project_id"`
+}
 
 // Read-only assembly query (U8): all env_snapshots for a project's segments.
 // interaction_dag_env_snapshot has no project_id column, so join through
 // interaction_dag_segment on segment_id. Joined by segment_id in Go (1:1).
-func (q *Queries) ListInteractionDAGEnvSnapshotsForProject(ctx context.Context, projectID string) ([]InteractionDagEnvSnapshot, error) {
-	rows, err := q.db.Query(ctx, listInteractionDAGEnvSnapshotsForProject, projectID)
+func (q *Queries) ListInteractionDAGEnvSnapshotsForProject(ctx context.Context, arg ListInteractionDAGEnvSnapshotsForProjectParams) ([]InteractionDagEnvSnapshot, error) {
+	rows, err := q.db.Query(ctx, listInteractionDAGEnvSnapshotsForProject, arg.WorkspaceID, arg.ProjectID)
 	if err != nil {
 		return nil, err
 	}
@@ -1368,19 +2273,32 @@ func (q *Queries) ListInteractionDAGEnvSnapshotsForProject(ctx context.Context, 
 }
 
 const listInteractionDAGSegmentsForProject = `-- name: ListInteractionDAGSegmentsForProject :many
-SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, start_seq, end_seq, trajectory_source, trainable, trajectory, created_at
+SELECT segment_id, project_id, agent_run_id, issue_id, task_id,
+       COALESCE(CASE WHEN content_status = 'legacy_unverified' THEN NULL ELSE trajectory_id END, 0)::bigint AS trajectory_id,
+       (CASE WHEN content_status = 'legacy_unverified' THEN NULL::jsonb ELSE tensor_ref END)::jsonb AS tensor_ref,
+       closing_event, closing_event_target_segment, start_seq, end_seq,
+       trajectory_source,
+       (CASE WHEN content_status = 'legacy_unverified' THEN false ELSE trainable END)::boolean AS trainable,
+       (CASE WHEN content_status = 'legacy_unverified' THEN '[]'::jsonb ELSE trajectory END)::jsonb AS trajectory,
+       created_at, workspace_id, project_id_at_event, content_status, trainable_eligible
 FROM interaction_dag_segment
-WHERE project_id = $1
-ORDER BY created_at
+WHERE workspace_id = $1
+  AND project_id_at_event::text = $2::text
+ORDER BY generation, created_at, segment_id
 `
+
+type ListInteractionDAGSegmentsForProjectParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ProjectID   string      `json:"project_id"`
+}
 
 type ListInteractionDAGSegmentsForProjectRow struct {
 	SegmentID                 string             `json:"segment_id"`
-	ProjectID                 string             `json:"project_id"`
-	AgentRunID                string             `json:"agent_run_id"`
+	ProjectID                 pgtype.Text        `json:"project_id"`
+	AgentRunID                pgtype.UUID        `json:"agent_run_id"`
 	IssueID                   pgtype.Text        `json:"issue_id"`
 	TaskID                    pgtype.Text        `json:"task_id"`
-	TrajectoryID              pgtype.Int8        `json:"trajectory_id"`
+	TrajectoryID              int64              `json:"trajectory_id"`
 	TensorRef                 []byte             `json:"tensor_ref"`
 	ClosingEvent              pgtype.Text        `json:"closing_event"`
 	ClosingEventTargetSegment pgtype.Text        `json:"closing_event_target_segment"`
@@ -1390,16 +2308,14 @@ type ListInteractionDAGSegmentsForProjectRow struct {
 	Trainable                 bool               `json:"trainable"`
 	Trajectory                []byte             `json:"trajectory"`
 	CreatedAt                 pgtype.Timestamptz `json:"created_at"`
+	WorkspaceID               pgtype.UUID        `json:"workspace_id"`
+	ProjectIDAtEvent          pgtype.UUID        `json:"project_id_at_event"`
+	ContentStatus             string             `json:"content_status"`
+	TrainableEligible         bool               `json:"trainable_eligible"`
 }
 
-// Read-only assembly query (U8 AssembleAssembledDag): all segments for a
-// project, ordered by created_at for deterministic assembly. SELECTs the full
-// row to scan into InteractionDAGSegment cleanly (mirrors
-// GetInteractionDAGSegmentByAgentRun), including the start_seq/end_seq turn
-// range (Task 2). No scores or message-text columns live on this table; step
-// rewards live in interaction_dag_step_reward (Task 5).
-func (q *Queries) ListInteractionDAGSegmentsForProject(ctx context.Context, projectID string) ([]ListInteractionDAGSegmentsForProjectRow, error) {
-	rows, err := q.db.Query(ctx, listInteractionDAGSegmentsForProject, projectID)
+func (q *Queries) ListInteractionDAGSegmentsForProject(ctx context.Context, arg ListInteractionDAGSegmentsForProjectParams) ([]ListInteractionDAGSegmentsForProjectRow, error) {
+	rows, err := q.db.Query(ctx, listInteractionDAGSegmentsForProject, arg.WorkspaceID, arg.ProjectID)
 	if err != nil {
 		return nil, err
 	}
@@ -1423,6 +2339,10 @@ func (q *Queries) ListInteractionDAGSegmentsForProject(ctx context.Context, proj
 			&i.Trainable,
 			&i.Trajectory,
 			&i.CreatedAt,
+			&i.WorkspaceID,
+			&i.ProjectIDAtEvent,
+			&i.ContentStatus,
+			&i.TrainableEligible,
 		); err != nil {
 			return nil, err
 		}
@@ -1472,16 +2392,22 @@ const listInteractionDAGStepRewardsForProject = `-- name: ListInteractionDAGStep
 SELECT sr.segment_id, sr.seq, sr.score, sr.rationale, sr.created_at
 FROM interaction_dag_step_reward sr
 JOIN interaction_dag_segment s ON sr.segment_id = s.segment_id
-WHERE s.project_id = $1
+WHERE s.workspace_id = $1
+  AND s.project_id_at_event::text = $2::text
 ORDER BY sr.segment_id, sr.seq
 `
+
+type ListInteractionDAGStepRewardsForProjectParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ProjectID   string      `json:"project_id"`
+}
 
 // ListInteractionDAGStepRewardsForProject returns all step rewards for segments
 // belonging to the project (the step_reward table has no project_id column, so
 // the filter joins through interaction_dag_segment). Read-only; used by
 // InteractionDAGService.AssembleAssembledDag.
-func (q *Queries) ListInteractionDAGStepRewardsForProject(ctx context.Context, projectID string) ([]InteractionDagStepReward, error) {
-	rows, err := q.db.Query(ctx, listInteractionDAGStepRewardsForProject, projectID)
+func (q *Queries) ListInteractionDAGStepRewardsForProject(ctx context.Context, arg ListInteractionDAGStepRewardsForProjectParams) ([]InteractionDagStepReward, error) {
+	rows, err := q.db.Query(ctx, listInteractionDAGStepRewardsForProject, arg.WorkspaceID, arg.ProjectID)
 	if err != nil {
 		return nil, err
 	}
@@ -1825,6 +2751,382 @@ func (q *Queries) ListMixedRLVisibleActionsCanonical(ctx context.Context, runID 
 	return items, nil
 }
 
+const listUniversalDAGEdgesAtWatermark = `-- name: ListUniversalDAGEdgesAtWatermark :many
+SELECT id, project_id, src_segment_id, dst_segment_id, type, created_at, workspace_id, edge_seq, trigger_message_id
+FROM interaction_dag_edge
+WHERE workspace_id = $1
+  AND edge_seq <= $2
+ORDER BY edge_seq, id
+`
+
+type ListUniversalDAGEdgesAtWatermarkParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	EdgeSeqMax  int64       `json:"edge_seq_max"`
+}
+
+// Lists canonical Edges visible at a fixed workspace Edge watermark.
+func (q *Queries) ListUniversalDAGEdgesAtWatermark(ctx context.Context, arg ListUniversalDAGEdgesAtWatermarkParams) ([]InteractionDagEdge, error) {
+	rows, err := q.db.Query(ctx, listUniversalDAGEdgesAtWatermark, arg.WorkspaceID, arg.EdgeSeqMax)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []InteractionDagEdge{}
+	for rows.Next() {
+		var i InteractionDagEdge
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.SrcSegmentID,
+			&i.DstSegmentID,
+			&i.Type,
+			&i.CreatedAt,
+			&i.WorkspaceID,
+			&i.EdgeSeq,
+			&i.TriggerMessageID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUniversalDAGSegmentsByRun = `-- name: ListUniversalDAGSegmentsByRun :many
+SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, created_at, start_seq, end_seq, trajectory_source, trainable, trajectory, workspace_id, generation, project_id_at_event, channel_id_at_event, route_generation_at_event, memory_type_at_event, graph_projection_eligible_at_event, close_action_kind, canonical_action_id, visible_action_key, derivative, trainable_eligible, publish_status, content_status, publish_seq, sanitizer_version, policy_version, provider_capture_status, provider_capture_id, provider_capture_version, provider_capture_correlation_key, run_id, run_agent_id, published_at, retracted_at, updated_at
+FROM interaction_dag_segment
+WHERE workspace_id = $1
+  AND run_id = $2
+  AND content_status <> 'legacy_unverified'
+ORDER BY run_agent_id, agent_run_id, generation, segment_id
+`
+
+type ListUniversalDAGSegmentsByRunParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	RunID       pgtype.UUID `json:"run_id"`
+}
+
+// Lists complete canonical Segments for one dispatch run in deterministic agent/generation order.
+func (q *Queries) ListUniversalDAGSegmentsByRun(ctx context.Context, arg ListUniversalDAGSegmentsByRunParams) ([]InteractionDagSegment, error) {
+	rows, err := q.db.Query(ctx, listUniversalDAGSegmentsByRun, arg.WorkspaceID, arg.RunID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []InteractionDagSegment{}
+	for rows.Next() {
+		var i InteractionDagSegment
+		if err := rows.Scan(
+			&i.SegmentID,
+			&i.ProjectID,
+			&i.AgentRunID,
+			&i.IssueID,
+			&i.TaskID,
+			&i.TrajectoryID,
+			&i.TensorRef,
+			&i.ClosingEvent,
+			&i.ClosingEventTargetSegment,
+			&i.CreatedAt,
+			&i.StartSeq,
+			&i.EndSeq,
+			&i.TrajectorySource,
+			&i.Trainable,
+			&i.Trajectory,
+			&i.WorkspaceID,
+			&i.Generation,
+			&i.ProjectIDAtEvent,
+			&i.ChannelIDAtEvent,
+			&i.RouteGenerationAtEvent,
+			&i.MemoryTypeAtEvent,
+			&i.GraphProjectionEligibleAtEvent,
+			&i.CloseActionKind,
+			&i.CanonicalActionID,
+			&i.VisibleActionKey,
+			&i.Derivative,
+			&i.TrainableEligible,
+			&i.PublishStatus,
+			&i.ContentStatus,
+			&i.PublishSeq,
+			&i.SanitizerVersion,
+			&i.PolicyVersion,
+			&i.ProviderCaptureStatus,
+			&i.ProviderCaptureID,
+			&i.ProviderCaptureVersion,
+			&i.ProviderCaptureCorrelationKey,
+			&i.RunID,
+			&i.RunAgentID,
+			&i.PublishedAt,
+			&i.RetractedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUniversalDAGSegmentsByTask = `-- name: ListUniversalDAGSegmentsByTask :many
+SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, created_at, start_seq, end_seq, trajectory_source, trainable, trajectory, workspace_id, generation, project_id_at_event, channel_id_at_event, route_generation_at_event, memory_type_at_event, graph_projection_eligible_at_event, close_action_kind, canonical_action_id, visible_action_key, derivative, trainable_eligible, publish_status, content_status, publish_seq, sanitizer_version, policy_version, provider_capture_status, provider_capture_id, provider_capture_version, provider_capture_correlation_key, run_id, run_agent_id, published_at, retracted_at, updated_at
+FROM interaction_dag_segment
+WHERE workspace_id = $1
+  AND agent_run_id = $2
+  AND content_status <> 'legacy_unverified'
+ORDER BY generation, segment_id
+`
+
+type ListUniversalDAGSegmentsByTaskParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	AgentRunID  pgtype.UUID `json:"agent_run_id"`
+}
+
+func (q *Queries) ListUniversalDAGSegmentsByTask(ctx context.Context, arg ListUniversalDAGSegmentsByTaskParams) ([]InteractionDagSegment, error) {
+	rows, err := q.db.Query(ctx, listUniversalDAGSegmentsByTask, arg.WorkspaceID, arg.AgentRunID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []InteractionDagSegment{}
+	for rows.Next() {
+		var i InteractionDagSegment
+		if err := rows.Scan(
+			&i.SegmentID,
+			&i.ProjectID,
+			&i.AgentRunID,
+			&i.IssueID,
+			&i.TaskID,
+			&i.TrajectoryID,
+			&i.TensorRef,
+			&i.ClosingEvent,
+			&i.ClosingEventTargetSegment,
+			&i.CreatedAt,
+			&i.StartSeq,
+			&i.EndSeq,
+			&i.TrajectorySource,
+			&i.Trainable,
+			&i.Trajectory,
+			&i.WorkspaceID,
+			&i.Generation,
+			&i.ProjectIDAtEvent,
+			&i.ChannelIDAtEvent,
+			&i.RouteGenerationAtEvent,
+			&i.MemoryTypeAtEvent,
+			&i.GraphProjectionEligibleAtEvent,
+			&i.CloseActionKind,
+			&i.CanonicalActionID,
+			&i.VisibleActionKey,
+			&i.Derivative,
+			&i.TrainableEligible,
+			&i.PublishStatus,
+			&i.ContentStatus,
+			&i.PublishSeq,
+			&i.SanitizerVersion,
+			&i.PolicyVersion,
+			&i.ProviderCaptureStatus,
+			&i.ProviderCaptureID,
+			&i.ProviderCaptureVersion,
+			&i.ProviderCaptureCorrelationKey,
+			&i.RunID,
+			&i.RunAgentID,
+			&i.PublishedAt,
+			&i.RetractedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockUniversalDAGBoundaryActionKey = `-- name: LockUniversalDAGBoundaryActionKey :exec
+SELECT pg_advisory_xact_lock(hashtextextended(
+  jsonb_build_array(
+    $1::text,
+    $2::text
+  )::text,
+  455
+))
+`
+
+type LockUniversalDAGBoundaryActionKeyParams struct {
+	WorkspaceID      string `json:"workspace_id"`
+	VisibleActionKey string `json:"visible_action_key"`
+}
+
+// Serializes the workspace-unique idempotency decision before Segment insertion.
+func (q *Queries) LockUniversalDAGBoundaryActionKey(ctx context.Context, arg LockUniversalDAGBoundaryActionKeyParams) error {
+	_, err := q.db.Exec(ctx, lockUniversalDAGBoundaryActionKey, arg.WorkspaceID, arg.VisibleActionKey)
+	return err
+}
+
+const lockUniversalDAGEdgeIdentity = `-- name: LockUniversalDAGEdgeIdentity :exec
+SELECT pg_advisory_xact_lock(hashtextextended(
+  jsonb_build_array(
+    $1::text,
+    $2::text,
+    $3::text,
+    $4::text,
+    $5::text
+  )::text,
+  454
+))
+`
+
+type LockUniversalDAGEdgeIdentityParams struct {
+	WorkspaceID      string      `json:"workspace_id"`
+	SrcSegmentID     string      `json:"src_segment_id"`
+	DstSegmentID     string      `json:"dst_segment_id"`
+	EdgeType         string      `json:"edge_type"`
+	TriggerMessageID pgtype.Text `json:"trigger_message_id"`
+}
+
+// Serializes idempotent linkage creation without requiring a schema-level key.
+func (q *Queries) LockUniversalDAGEdgeIdentity(ctx context.Context, arg LockUniversalDAGEdgeIdentityParams) error {
+	_, err := q.db.Exec(ctx, lockUniversalDAGEdgeIdentity,
+		arg.WorkspaceID,
+		arg.SrcSegmentID,
+		arg.DstSegmentID,
+		arg.EdgeType,
+		arg.TriggerMessageID,
+	)
+	return err
+}
+
+const lockUniversalDAGSegmentForProviderCapture = `-- name: LockUniversalDAGSegmentForProviderCapture :one
+SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, created_at, start_seq, end_seq, trajectory_source, trainable, trajectory, workspace_id, generation, project_id_at_event, channel_id_at_event, route_generation_at_event, memory_type_at_event, graph_projection_eligible_at_event, close_action_kind, canonical_action_id, visible_action_key, derivative, trainable_eligible, publish_status, content_status, publish_seq, sanitizer_version, policy_version, provider_capture_status, provider_capture_id, provider_capture_version, provider_capture_correlation_key, run_id, run_agent_id, published_at, retracted_at, updated_at
+FROM interaction_dag_segment
+WHERE segment_id = $1
+  AND content_status <> 'legacy_unverified'
+FOR UPDATE
+`
+
+// Serializes finalize/replay/conflict decisions for one globally unique Segment.
+func (q *Queries) LockUniversalDAGSegmentForProviderCapture(ctx context.Context, segmentID string) (InteractionDagSegment, error) {
+	row := q.db.QueryRow(ctx, lockUniversalDAGSegmentForProviderCapture, segmentID)
+	var i InteractionDagSegment
+	err := row.Scan(
+		&i.SegmentID,
+		&i.ProjectID,
+		&i.AgentRunID,
+		&i.IssueID,
+		&i.TaskID,
+		&i.TrajectoryID,
+		&i.TensorRef,
+		&i.ClosingEvent,
+		&i.ClosingEventTargetSegment,
+		&i.CreatedAt,
+		&i.StartSeq,
+		&i.EndSeq,
+		&i.TrajectorySource,
+		&i.Trainable,
+		&i.Trajectory,
+		&i.WorkspaceID,
+		&i.Generation,
+		&i.ProjectIDAtEvent,
+		&i.ChannelIDAtEvent,
+		&i.RouteGenerationAtEvent,
+		&i.MemoryTypeAtEvent,
+		&i.GraphProjectionEligibleAtEvent,
+		&i.CloseActionKind,
+		&i.CanonicalActionID,
+		&i.VisibleActionKey,
+		&i.Derivative,
+		&i.TrainableEligible,
+		&i.PublishStatus,
+		&i.ContentStatus,
+		&i.PublishSeq,
+		&i.SanitizerVersion,
+		&i.PolicyVersion,
+		&i.ProviderCaptureStatus,
+		&i.ProviderCaptureID,
+		&i.ProviderCaptureVersion,
+		&i.ProviderCaptureCorrelationKey,
+		&i.RunID,
+		&i.RunAgentID,
+		&i.PublishedAt,
+		&i.RetractedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const lockUniversalDAGTaskCursor = `-- name: LockUniversalDAGTaskCursor :one
+SELECT workspace_id, agent_run_id, next_generation, open_start_seq, last_closed_seq, open_generation, open_end_seq, created_at, updated_at
+FROM interaction_dag_task_cursor
+WHERE workspace_id = $1
+  AND agent_run_id = $2
+FOR UPDATE
+`
+
+type LockUniversalDAGTaskCursorParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	AgentRunID  pgtype.UUID `json:"agent_run_id"`
+}
+
+// Locks the canonical per-task generation cursor before allocating or closing a range.
+func (q *Queries) LockUniversalDAGTaskCursor(ctx context.Context, arg LockUniversalDAGTaskCursorParams) (InteractionDagTaskCursor, error) {
+	row := q.db.QueryRow(ctx, lockUniversalDAGTaskCursor, arg.WorkspaceID, arg.AgentRunID)
+	var i InteractionDagTaskCursor
+	err := row.Scan(
+		&i.WorkspaceID,
+		&i.AgentRunID,
+		&i.NextGeneration,
+		&i.OpenStartSeq,
+		&i.LastClosedSeq,
+		&i.OpenGeneration,
+		&i.OpenEndSeq,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const markUniversalDAGProviderCaptureConflict = `-- name: MarkUniversalDAGProviderCaptureConflict :exec
+UPDATE interaction_dag_segment
+SET provider_capture_status = 'conflict',
+    provider_capture_id = COALESCE(
+      provider_capture_id, $1::text
+    ),
+    provider_capture_version = COALESCE(
+      provider_capture_version, $2::bigint
+    ),
+    updated_at = now()
+WHERE workspace_id = $3
+  AND segment_id = $4
+  AND provider_capture_correlation_key = $5::text
+  AND provider_capture_status IN ('pending', 'finalized')
+`
+
+type MarkUniversalDAGProviderCaptureConflictParams struct {
+	CaptureID                     string      `json:"capture_id"`
+	CaptureVersion                int64       `json:"capture_version"`
+	WorkspaceID                   pgtype.UUID `json:"workspace_id"`
+	SegmentID                     string      `json:"segment_id"`
+	ProviderCaptureCorrelationKey string      `json:"provider_capture_correlation_key"`
+}
+
+// Marks a pending or finalized provider capture as conflicted without replacing prior identity.
+func (q *Queries) MarkUniversalDAGProviderCaptureConflict(ctx context.Context, arg MarkUniversalDAGProviderCaptureConflictParams) error {
+	_, err := q.db.Exec(ctx, markUniversalDAGProviderCaptureConflict,
+		arg.CaptureID,
+		arg.CaptureVersion,
+		arg.WorkspaceID,
+		arg.SegmentID,
+		arg.ProviderCaptureCorrelationKey,
+	)
+	return err
+}
+
 const recordMixedRLLateEvent = `-- name: RecordMixedRLLateEvent :exec
 INSERT INTO env_dispatch_run_audit_event (
   event_id, run_id, run_agent_id, turn_id, kind, reason, summary, snapshot_id
@@ -1988,6 +3290,61 @@ func (q *Queries) UpsertInteractionDAGSessionRun(ctx context.Context, arg Upsert
 		arg.IssueID,
 	)
 	return err
+}
+
+const upsertUniversalDAGTaskCursor = `-- name: UpsertUniversalDAGTaskCursor :one
+INSERT INTO interaction_dag_task_cursor (
+  workspace_id, agent_run_id, next_generation, open_start_seq,
+  last_closed_seq, open_generation, open_end_seq
+) VALUES (
+  $1, $2, $3,
+  $4, $5,
+  $6, $7
+)
+ON CONFLICT (workspace_id, agent_run_id) DO UPDATE SET
+  next_generation = EXCLUDED.next_generation,
+  open_start_seq = EXCLUDED.open_start_seq,
+  last_closed_seq = EXCLUDED.last_closed_seq,
+  open_generation = EXCLUDED.open_generation,
+  open_end_seq = EXCLUDED.open_end_seq,
+  updated_at = now()
+RETURNING workspace_id, agent_run_id, next_generation, open_start_seq, last_closed_seq, open_generation, open_end_seq, created_at, updated_at
+`
+
+type UpsertUniversalDAGTaskCursorParams struct {
+	WorkspaceID    pgtype.UUID `json:"workspace_id"`
+	AgentRunID     pgtype.UUID `json:"agent_run_id"`
+	NextGeneration int64       `json:"next_generation"`
+	OpenStartSeq   pgtype.Int4 `json:"open_start_seq"`
+	LastClosedSeq  int32       `json:"last_closed_seq"`
+	OpenGeneration pgtype.Int8 `json:"open_generation"`
+	OpenEndSeq     pgtype.Int4 `json:"open_end_seq"`
+}
+
+// Creates or replaces the canonical generation and open-range state for one task.
+func (q *Queries) UpsertUniversalDAGTaskCursor(ctx context.Context, arg UpsertUniversalDAGTaskCursorParams) (InteractionDagTaskCursor, error) {
+	row := q.db.QueryRow(ctx, upsertUniversalDAGTaskCursor,
+		arg.WorkspaceID,
+		arg.AgentRunID,
+		arg.NextGeneration,
+		arg.OpenStartSeq,
+		arg.LastClosedSeq,
+		arg.OpenGeneration,
+		arg.OpenEndSeq,
+	)
+	var i InteractionDagTaskCursor
+	err := row.Scan(
+		&i.WorkspaceID,
+		&i.AgentRunID,
+		&i.NextGeneration,
+		&i.OpenStartSeq,
+		&i.LastClosedSeq,
+		&i.OpenGeneration,
+		&i.OpenEndSeq,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const validateMixedRLRunForFreeze = `-- name: ValidateMixedRLRunForFreeze :one

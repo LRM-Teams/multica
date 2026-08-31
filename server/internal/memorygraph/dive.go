@@ -120,16 +120,26 @@ type Diver struct {
 	store   *Store
 	backend AgentBackend
 	cfg     DiveConfig
+	scope   ProviderScope
 }
 
-func NewDiver(store *Store, backend AgentBackend, cfg DiveConfig) *Diver {
-	return &Diver{store: store, backend: backend, cfg: cfg.normalized()}
+// NewDiver requires the server-resolved Dive identity alongside the backend.
+func NewDiver(store *Store, backend AgentBackend, cfg DiveConfig, scope ProviderScope) *Diver {
+	cfg = cfg.normalized()
+	cfg.Model = scope.Model
+	return &Diver{store: store, backend: backend, cfg: cfg, scope: scope}
 }
 
 // Dive runs one grading pass. The pinned version must exist and load
 // cleanly — a missing, deleted, or corrupt version fails the dive; there is
 // no fallback to the current version (A6).
 func (d *Diver) Dive(ctx context.Context, query string, version int, runs []DiveRunInput) (*DiveResult, error) {
+	if d == nil || d.backend == nil {
+		return nil, fmt.Errorf("dive: backend not configured")
+	}
+	if err := validateProviderScope(d.scope, ProviderPurposeDive); err != nil {
+		return nil, fmt.Errorf("dive: %w", err)
+	}
 	versions, err := d.store.ListVersions()
 	if err != nil {
 		return nil, fmt.Errorf("dive: list versions: %w", err)

@@ -4,8 +4,11 @@ package service
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/memorygraph"
@@ -36,11 +39,11 @@ func (s *TaskService) closeSegmentForDelegation(ctx context.Context, parent db.A
 
 // closeSegmentForDelegationEvent closes the parent's segment for a handoff and,
 // if the parent was itself delegated to, records the grandparent->parent
-// delegation edge. One-segment-per-task (interaction_dag.sql.go
-// GetInteractionDAGSegmentByAgentRun doc): if the parent already has a segment
-// (it delegated earlier), this is a no-op. Best-effort: errors are logged and
-// the run continues. envSnapshot is the lean {sandbox_ids, env_state} shape
-// resolved by the caller (SandboxRefs are not in hand at the task.go seams).
+// delegation edge. This retained seam builds a legacy snapshot projection;
+// UniversalInteractionDAG owns the live multi-generation lifecycle. Best-effort:
+// errors are logged and the run continues. envSnapshot is the lean
+// {sandbox_ids, env_state} shape resolved by the caller (SandboxRefs are not in
+// hand at the task.go seams).
 //
 // Routing:
 //   - Training task (has areal_proxy context) → AReaL bridge (CloseSegmentForEvent, export)
@@ -63,9 +66,8 @@ func (s *TaskService) closeSegmentForDelegationEvent(ctx context.Context, parent
 // closeTrainedSegmentForDelegation handles the AReaL bridge path for a training task.
 func (s *TaskService) closeTrainedSegmentForDelegation(ctx context.Context, parent db.AgentInboxEvent, projectID, closingEvent string, envSnapshot map[string]any, cfg *arealProxyConfig) {
 	parentRunID := util.UUIDToString(parent.ID)
-	// One-segment-per-task: skip if the parent already recorded a segment (a
-	// prior delegation closed it). SegmentIDForAgentRun returns ("", ErrNoRows)
-	// when none exists -> proceed; any non-empty result -> skip.
+	// Legacy snapshot projection only: suppress a duplicate retained row. This
+	// lookup does not allocate or close a UniversalInteractionDAG generation.
 	if existing, err := s.Training.DAG.SegmentIDForAgentRun(ctx, parentRunID); err == nil && existing != "" {
 		return
 	}
@@ -87,7 +89,7 @@ func (s *TaskService) closeTrainedSegmentForDelegation(ctx context.Context, pare
 	// grandparent's (the parent's parent) segment.
 	if parent.ParentTaskID.Valid {
 		if gpSeg, err := s.Training.DAG.SegmentIDForAgentRun(ctx, util.UUIDToString(parent.ParentTaskID)); err == nil && gpSeg != "" {
-			if err := s.Training.DAG.AddEdge(ctx, projectID, gpSeg, segID, closingEventDelegation); err != nil {
+			if err := s.Training.DAG.AddEdge(ctx, parent.WorkspaceID, gpSeg, segID, EdgeTypeDelegation); err != nil {
 				slog.Warn("interaction_dag: delegation grandparent edge failed", "err", err)
 			}
 		}
@@ -100,10 +102,9 @@ func (s *TaskService) closeTrainedSegmentForDelegation(ctx context.Context, pare
 // the task has a parent, records the parent->task delegation edge at the child's
 // close (the only point where childSeg is known).
 //
-// One-segment-per-task: skipped if the task already closed its segment (it
-// delegated earlier in its run). Best-effort. MUST run before the RL session is
-// ended (CloseSegmentForEvent exports the just-closed trajectory over the live
-// session) - the caller invokes this before RouteTerminalTrainingTask.
+// Best-effort. MUST run before the RL session is ended because
+// CloseSegmentForEvent exports the just-closed trajectory over the live session;
+// the caller invokes this before RouteTerminalTrainingTask.
 //
 // Routing:
 //   - Training task (has areal_proxy context) → AReaL bridge (CloseSegmentForEvent, export)
@@ -131,16 +132,12 @@ func (s *TaskService) closeSegmentForTerminal(ctx context.Context, task db.Agent
 // left open and closed later by the all-agents-idle end-session sweep.
 func (s *TaskService) closeTrainedSegmentForTerminal(ctx context.Context, task db.AgentInboxEvent, projectID string, envSnapshot map[string]any, cfg *arealProxyConfig) {
 	runID := util.UUIDToString(task.ID)
+	// Legacy snapshot projection only: canonical terminal generation state is
+	// owned by UniversalInteractionDAG before this retained bridge runs.
 	if existing, err := s.Training.DAG.SegmentIDForAgentRun(ctx, runID); err == nil && existing != "" {
-		return // already closed via an earlier delegation
+		return
 	}
 
-	// One segment per task: the trajectory is complete once the task is
-	// terminal, whether or not it delegated. A task that @-mentioned someone
-	// was already closed by the delegation seam at child creation, which the
-	// SegmentIDForAgentRun guard above catches — so skipping non-delegating
-	// tasks here left the all-agents-idle sweep as the only producer of
-	// segments for them, and every rollout that never delegated produced none.
 	closingEvent := "" // leaf (root completion) by default
 	if task.ParentTaskID.Valid {
 		closingEvent = closingEventCompletion
@@ -162,7 +159,7 @@ func (s *TaskService) closeTrainedSegmentForTerminal(ctx context.Context, task d
 	// Delegation edge parent->child, recorded at the child's close.
 	if task.ParentTaskID.Valid {
 		if parentSeg, err := s.Training.DAG.SegmentIDForAgentRun(ctx, util.UUIDToString(task.ParentTaskID)); err == nil && parentSeg != "" {
-			if err := s.Training.DAG.AddEdge(ctx, projectID, parentSeg, segID, closingEventDelegation); err != nil {
+			if err := s.Training.DAG.AddEdge(ctx, task.WorkspaceID, parentSeg, segID, EdgeTypeDelegation); err != nil {
 				slog.Warn("interaction_dag: delegation edge failed", "err", err)
 			}
 		}
@@ -191,11 +188,12 @@ func (s *TaskService) maybeRecordLocalSegmentForEvent(ctx context.Context, task 
 		return
 	}
 	runID := util.UUIDToString(task.ID)
-	// One-segment-per-task: skip if this task already recorded a segment.
+	// Legacy snapshot projection only; this lookup is not a canonical lifecycle
+	// decision and remains solely until the Task 4 projection replacement.
 	if existing, err := s.Training.DAG.SegmentIDForAgentRun(ctx, runID); err == nil && existing != "" {
 		return
 	}
-	// Determine closingEvent for the terminal seam.
+	// Determine closingEvent for the retained snapshot projection.
 	if closingEvent == "" {
 		if task.ParentTaskID.Valid {
 			closingEvent = closingEventCompletion
@@ -222,7 +220,7 @@ func (s *TaskService) maybeRecordLocalSegmentForEvent(ctx context.Context, task 
 	// Delegation edge parent->child, recorded at the child's close.
 	if task.ParentTaskID.Valid {
 		if parentSeg, err := s.Training.DAG.SegmentIDForAgentRun(ctx, util.UUIDToString(task.ParentTaskID)); err == nil && parentSeg != "" {
-			if err := s.Training.DAG.AddEdge(ctx, projectID, parentSeg, segID, closingEventDelegation); err != nil {
+			if err := s.Training.DAG.AddEdge(ctx, task.WorkspaceID, parentSeg, segID, EdgeTypeDelegation); err != nil {
 				slog.Warn("interaction_dag: local delegation edge failed", "err", err)
 			}
 		}
@@ -283,4 +281,80 @@ func (s *TaskService) discoverDelegationParent(ctx context.Context, issueID, tri
 		}
 	}
 	return db.AgentInboxEvent{}, false
+}
+
+// RecordTaskOriginLinkageTx links the durable action that woke or spawned a
+// Task to that Task's first closed Segment. The source action must already be
+// canonical; absent legacy source Segments are left for later reconciliation.
+func RecordTaskOriginLinkageTx(
+	ctx context.Context,
+	dag *UniversalInteractionDAG,
+	q *db.Queries,
+	tx pgx.Tx,
+	task db.AgentInboxEvent,
+) error {
+	if dag == nil || q == nil || tx == nil || !task.WorkspaceID.Valid || !task.ID.Valid {
+		return errors.New("task origin linkage requires an active universal DAG transaction")
+	}
+
+	type linkageOrigin struct {
+		actionID pgtype.UUID
+		edgeType string
+	}
+	origin := linkageOrigin{}
+	switch {
+	case task.TriggerCommentID.Valid:
+		origin.actionID = task.TriggerCommentID
+		origin.edgeType = EdgeTypeRespondsTo
+		if strings.Contains(strings.ToLower(task.Reason), "mention") {
+			origin.edgeType = EdgeTypeMention
+		}
+	case task.SourceMessageID.Valid:
+		origin.actionID = task.SourceMessageID
+		origin.edgeType = EdgeTypeRespondsTo
+		if strings.Contains(strings.ToLower(task.Reason), "mention") {
+			origin.edgeType = EdgeTypeMention
+		}
+	case task.SourceChatMessageID.Valid:
+		origin.actionID = task.SourceChatMessageID
+		origin.edgeType = EdgeTypeRespondsTo
+	case task.ParentTaskID.Valid:
+		segments, err := q.ListUniversalDAGSegmentsByTask(ctx, db.ListUniversalDAGSegmentsByTaskParams{
+			WorkspaceID: task.WorkspaceID,
+			AgentRunID:  task.ParentTaskID,
+		})
+		if err != nil {
+			return err
+		}
+		if len(segments) == 0 {
+			return nil
+		}
+		source := segments[len(segments)-1]
+		return dag.RecordLinkageTx(ctx, q, tx, DAGLinkageInput{
+			WorkspaceID:     task.WorkspaceID,
+			SourceSegmentID: source.SegmentID,
+			TargetRunID:     task.ID,
+			Type:            EdgeTypeRespondsTo,
+		})
+	default:
+		return nil
+	}
+
+	source, err := q.GetUniversalDAGSegmentByVisibleAction(ctx, db.GetUniversalDAGSegmentByVisibleActionParams{
+		WorkspaceID:      task.WorkspaceID,
+		VisibleActionKey: pgtype.Text{String: string(DAGCloseMessage) + ":" + origin.actionID.String(), Valid: true},
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return dag.RecordLinkageTx(ctx, q, tx, DAGLinkageInput{
+		WorkspaceID:     task.WorkspaceID,
+		SourceSegmentID: source.SegmentID,
+		TargetRunID:     task.ID,
+		Type:            origin.edgeType,
+		DurableEventID:  origin.actionID,
+	})
 }

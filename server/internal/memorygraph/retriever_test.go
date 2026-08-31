@@ -73,7 +73,7 @@ func TestHybridRetrieverBM25Only(t *testing.T) {
 
 func TestHybridRetrieverMergesBothChannels(t *testing.T) {
 	store := newRetrieverFixture(t)
-	emb := NewCachedEmbedder(NewHashEmbedder(), store)
+	emb := mustCachedEmbedder(t, NewHashEmbedder(), store)
 	r := NewHybridRetriever(store, emb, DefaultRetrievalConfig())
 	if err := r.Rebuild(context.Background()); err != nil {
 		t.Fatalf("Rebuild: %v", err)
@@ -118,7 +118,7 @@ func TestHybridRetrieverTopKLimit(t *testing.T) {
 	store := newRetrieverFixture(t)
 	cfg := DefaultRetrievalConfig()
 	cfg.TopK = 2
-	emb := NewCachedEmbedder(NewHashEmbedder(), store)
+	emb := mustCachedEmbedder(t, NewHashEmbedder(), store)
 	r := NewHybridRetriever(store, emb, cfg)
 	if err := r.Rebuild(context.Background()); err != nil {
 		t.Fatalf("Rebuild: %v", err)

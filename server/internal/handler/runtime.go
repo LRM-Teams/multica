@@ -1521,6 +1521,12 @@ func (h *Handler) ArchiveAgentsAndDeleteRuntime(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusInternalServerError, "failed to cancel tasks")
 		return
 	}
+	for _, task := range cancelledTasks {
+		if err := h.TaskService.RecordTerminalTaskBoundaryTx(r.Context(), qtx, tx, task); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to record cancelled tasks")
+			return
+		}
+	}
 
 	// 3. Pause autopilots whose assignee is one of the archived agents.
 	//    Snapshots the full archived set on this runtime — including any

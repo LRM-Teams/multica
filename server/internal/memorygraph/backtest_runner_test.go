@@ -47,8 +47,15 @@ func TestConsolidateTTTWithRealBacktestRunner(t *testing.T) {
 
 	cfg := DefaultConsolidateConfig()
 	cfg.TTVTrajectories = 2
-	c := NewConsolidator(store, consBackend, cfg, "test", nil, nil)
-	c.SetRunner(NewExploreBacktestRunner(store, nil, explBackend, DefaultRetrievalConfig(), testExploreConfig(), "test"))
+	scope := testConsolidateScope()
+	c := NewConsolidator(store, consBackend, cfg, scope, nil, nil)
+	runner, err := NewExploreBacktestRunner(store, nil, explBackend, DefaultRetrievalConfig(), testExploreConfig(), scope)
+	if err != nil {
+		t.Fatalf("NewExploreBacktestRunner: %v", err)
+	}
+	if err := c.SetRunner(runner); err != nil {
+		t.Fatalf("SetRunner: %v", err)
+	}
 
 	res, err := c.Consolidate(context.Background())
 	if err != nil {
@@ -77,5 +84,24 @@ func TestConsolidateTTTWithRealBacktestRunner(t *testing.T) {
 		if !qs.Found || qs.Rounds != 1 {
 			t.Fatalf("candidate v%d full backtest = found %v rounds %.0f, want true/1", cs.Version, qs.Found, qs.Rounds)
 		}
+	}
+}
+
+func TestNewExploreBacktestRunnerRejectsEmbedderWorkspaceMismatch(t *testing.T) {
+	store := newTestStore(t)
+	scope := testConsolidateScope()
+	embedScope := scope
+	embedScope.Purpose = ProviderPurposeEmbed
+	embedScope.WorkspaceID = "other-workspace"
+	emb, err := NewCachedEmbedder(NewHashEmbedder(), store, embedScope)
+	if err != nil {
+		t.Fatalf("NewCachedEmbedder: %v", err)
+	}
+	backend := &fakeExploreBackend{t: t}
+	if _, err := NewExploreBacktestRunner(store, emb, backend, DefaultRetrievalConfig(), testExploreConfig(), scope); err == nil {
+		t.Fatal("NewExploreBacktestRunner accepted an embedder from another Workspace")
+	}
+	if got := exploreBackendCalls(backend); got != 0 {
+		t.Fatalf("backend calls = %d, want 0", got)
 	}
 }

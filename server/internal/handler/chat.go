@@ -542,6 +542,12 @@ func (h *Handler) DeleteChatSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to cancel chat session tasks")
 		return
 	}
+	for _, task := range cancelled {
+		if err := h.TaskService.RecordTerminalTaskBoundaryTx(r.Context(), qtx, tx, task); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to record chat task cancellation")
+			return
+		}
+	}
 
 	if err := qtx.DeleteChatSession(r.Context(), db.DeleteChatSessionParams{
 		ID:          session.ID,

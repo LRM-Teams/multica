@@ -31,6 +31,13 @@ type fakeDiveBackend struct {
 	status  string
 }
 
+func testDiveScope() ProviderScope {
+	return ProviderScope{
+		WorkspaceID: "test-workspace", Purpose: ProviderPurposeDive,
+		Provider: "test", Model: "test-dive-model", Region: "test-region", PolicyVersion: "test-policy",
+	}
+}
+
 func (f *fakeDiveBackend) Execute(_ context.Context, prompt string, _ agent.ExecOptions) (*agent.Session, error) {
 	f.mu.Lock()
 	f.prompts = append(f.prompts, prompt)
@@ -123,7 +130,7 @@ func TestPartitionDiveRuns(t *testing.T) {
 func TestDivePinsExactGraphVersion(t *testing.T) {
 	store := mustDiveStore(t)
 	backend := &fakeDiveBackend{output: diveScoresJSON}
-	diver := NewDiver(store, backend, DiveConfig{})
+	diver := NewDiver(store, backend, DiveConfig{}, testDiveScope())
 
 	// The store's current version is 1; asking for v2 must fail even though a
 	// current version exists — no fallback (A6).
@@ -160,7 +167,7 @@ func TestDivePinsExactGraphVersion(t *testing.T) {
 func TestDiveInputPayloadCompleteness(t *testing.T) {
 	store := mustDiveStore(t)
 	backend := &fakeDiveBackend{output: diveScoresJSON}
-	diver := NewDiver(store, backend, DiveConfig{})
+	diver := NewDiver(store, backend, DiveConfig{}, testDiveScope())
 
 	res, err := diver.Dive(context.Background(), "router retry policy", 1, diveTestRuns())
 	if err != nil {
@@ -226,7 +233,7 @@ func TestDiveScoreValidation(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			store := mustDiveStore(t)
 			backend := &fakeDiveBackend{output: output}
-			diver := NewDiver(store, backend, DiveConfig{})
+			diver := NewDiver(store, backend, DiveConfig{}, testDiveScope())
 			if _, err := diver.Dive(context.Background(), "q", 1, diveTestRuns()); err == nil {
 				t.Fatalf("Dive with %s response must fail", name)
 			}
@@ -240,7 +247,7 @@ func TestDiveIncompleteFlag(t *testing.T) {
 	  {"trajectory_id": "t1", "relevance": 0.9, "groundedness": 0.4, "completeness": 0.7},
 	  {"trajectory_id": "t2", "relevance": 0.2, "groundedness": 0.2, "completeness": 0.2}
 	], "necessary_information": [], "incomplete": true}`}
-	diver := NewDiver(store, backend, DiveConfig{})
+	diver := NewDiver(store, backend, DiveConfig{}, testDiveScope())
 	res, err := diver.Dive(context.Background(), "q", 1, diveTestRuns())
 	if err != nil {
 		t.Fatalf("Dive: %v", err)
@@ -253,13 +260,13 @@ func TestDiveIncompleteFlag(t *testing.T) {
 func TestDiveBackendFailure(t *testing.T) {
 	store := mustDiveStore(t)
 	backend := &fakeDiveBackend{err: fmt.Errorf("model endpoint 503")}
-	diver := NewDiver(store, backend, DiveConfig{Timeout: time.Minute})
+	diver := NewDiver(store, backend, DiveConfig{Timeout: time.Minute}, testDiveScope())
 	if _, err := diver.Dive(context.Background(), "q", 1, diveTestRuns()); err == nil {
 		t.Fatal("backend failure must fail the dive (the job layer retries)")
 	}
 
 	backend = &fakeDiveBackend{status: "error", output: ""}
-	diver = NewDiver(store, backend, DiveConfig{})
+	diver = NewDiver(store, backend, DiveConfig{}, testDiveScope())
 	if _, err := diver.Dive(context.Background(), "q", 1, diveTestRuns()); err == nil {
 		t.Fatal("non-completed judge session must fail the dive")
 	}

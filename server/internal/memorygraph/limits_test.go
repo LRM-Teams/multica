@@ -15,7 +15,7 @@ func newLimitsConsolidator(t *testing.T, maxRel, maxFan int) *Consolidator {
 	if maxFan != 0 {
 		cfg.MaxFanout = maxFan
 	}
-	return NewConsolidator(newTestStore(t), nil, cfg, "test", nil, nil)
+	return NewConsolidator(newTestStore(t), nil, cfg, testConsolidateScope(), nil, nil)
 }
 
 func mustAddNode(t *testing.T, g *Graph, id string, level int) {
@@ -263,7 +263,7 @@ func TestLimitsConfigDefault(t *testing.T) {
 		t.Fatalf("DefaultConsolidateConfig MaxRelationEdges = %d, want 8", DefaultConsolidateConfig().MaxRelationEdges)
 	}
 
-	c := NewConsolidator(newTestStore(t), nil, ConsolidateConfig{}, "test", nil, nil)
+	c := NewConsolidator(newTestStore(t), nil, ConsolidateConfig{}, testConsolidateScope(), nil, nil)
 	if c.cfg.MaxRelationEdges != 8 {
 		t.Fatalf("constructor MaxRelationEdges = %d, want 8", c.cfg.MaxRelationEdges)
 	}

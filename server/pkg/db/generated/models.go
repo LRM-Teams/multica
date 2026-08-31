@@ -1782,6 +1782,23 @@ type GithubPullRequestCheckSuite struct {
 	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
 }
 
+type GoalControllerEvent struct {
+	ID           pgtype.UUID        `json:"id"`
+	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
+	GoalID       pgtype.UUID        `json:"goal_id"`
+	EventKind    string             `json:"event_kind"`
+	SourceKind   string             `json:"source_kind"`
+	SourceID     pgtype.UUID        `json:"source_id"`
+	Payload      []byte             `json:"payload"`
+	Status       string             `json:"status"`
+	RunID        pgtype.UUID        `json:"run_id"`
+	AttemptCount int32              `json:"attempt_count"`
+	AvailableAt  pgtype.Timestamptz `json:"available_at"`
+	LastError    string             `json:"last_error"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
 type GoalExecutionEpoch struct {
 	ID             pgtype.UUID        `json:"id"`
 	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
@@ -2283,12 +2300,21 @@ type InteractionDagDiagnosisSegment struct {
 }
 
 type InteractionDagEdge struct {
-	ID           int64              `json:"id"`
-	ProjectID    string             `json:"project_id"`
-	SrcSegmentID string             `json:"src_segment_id"`
-	DstSegmentID string             `json:"dst_segment_id"`
-	Type         string             `json:"type"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	ID               int64              `json:"id"`
+	ProjectID        pgtype.Text        `json:"project_id"`
+	SrcSegmentID     string             `json:"src_segment_id"`
+	DstSegmentID     string             `json:"dst_segment_id"`
+	Type             string             `json:"type"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	EdgeSeq          int64              `json:"edge_seq"`
+	TriggerMessageID pgtype.UUID        `json:"trigger_message_id"`
+}
+
+type InteractionDagEdgeSequence struct {
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	NextEdgeSeq int64              `json:"next_edge_seq"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
 type InteractionDagEnvSnapshot struct {
@@ -2312,6 +2338,21 @@ type InteractionDagFrozenSnapshot struct {
 	CreatedAt            pgtype.Timestamptz `json:"created_at"`
 }
 
+type InteractionDagPublishOutbox struct {
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	SegmentID      string             `json:"segment_id"`
+	RequestHash    string             `json:"request_hash"`
+	Status         string             `json:"status"`
+	Attempts       int32              `json:"attempts"`
+	NextAttemptAt  pgtype.Timestamptz `json:"next_attempt_at"`
+	LeaseOwner     pgtype.Text        `json:"lease_owner"`
+	LeaseExpiresAt pgtype.Timestamptz `json:"lease_expires_at"`
+	LastError      pgtype.Text        `json:"last_error"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	CompletedAt    pgtype.Timestamptz `json:"completed_at"`
+}
+
 type InteractionDagRunSegment struct {
 	SegmentID         string             `json:"segment_id"`
 	SnapshotID        pgtype.Text        `json:"snapshot_id"`
@@ -2327,21 +2368,54 @@ type InteractionDagRunSegment struct {
 }
 
 type InteractionDagSegment struct {
-	SegmentID                 string             `json:"segment_id"`
-	ProjectID                 string             `json:"project_id"`
-	AgentRunID                string             `json:"agent_run_id"`
-	IssueID                   pgtype.Text        `json:"issue_id"`
-	TaskID                    pgtype.Text        `json:"task_id"`
-	TrajectoryID              pgtype.Int8        `json:"trajectory_id"`
-	TensorRef                 []byte             `json:"tensor_ref"`
-	ClosingEvent              pgtype.Text        `json:"closing_event"`
-	ClosingEventTargetSegment pgtype.Text        `json:"closing_event_target_segment"`
-	CreatedAt                 pgtype.Timestamptz `json:"created_at"`
-	StartSeq                  int32              `json:"start_seq"`
-	EndSeq                    int32              `json:"end_seq"`
-	TrajectorySource          string             `json:"trajectory_source"`
-	Trainable                 bool               `json:"trainable"`
-	Trajectory                []byte             `json:"trajectory"`
+	SegmentID                      string             `json:"segment_id"`
+	ProjectID                      pgtype.Text        `json:"project_id"`
+	AgentRunID                     pgtype.UUID        `json:"agent_run_id"`
+	IssueID                        pgtype.Text        `json:"issue_id"`
+	TaskID                         pgtype.Text        `json:"task_id"`
+	TrajectoryID                   pgtype.Int8        `json:"trajectory_id"`
+	TensorRef                      []byte             `json:"tensor_ref"`
+	ClosingEvent                   pgtype.Text        `json:"closing_event"`
+	ClosingEventTargetSegment      pgtype.Text        `json:"closing_event_target_segment"`
+	CreatedAt                      pgtype.Timestamptz `json:"created_at"`
+	StartSeq                       int32              `json:"start_seq"`
+	EndSeq                         int32              `json:"end_seq"`
+	TrajectorySource               string             `json:"trajectory_source"`
+	Trainable                      bool               `json:"trainable"`
+	Trajectory                     []byte             `json:"trajectory"`
+	WorkspaceID                    pgtype.UUID        `json:"workspace_id"`
+	Generation                     int64              `json:"generation"`
+	ProjectIDAtEvent               pgtype.UUID        `json:"project_id_at_event"`
+	ChannelIDAtEvent               pgtype.UUID        `json:"channel_id_at_event"`
+	RouteGenerationAtEvent         pgtype.Int8        `json:"route_generation_at_event"`
+	MemoryTypeAtEvent              string             `json:"memory_type_at_event"`
+	GraphProjectionEligibleAtEvent bool               `json:"graph_projection_eligible_at_event"`
+	CloseActionKind                pgtype.Text        `json:"close_action_kind"`
+	CanonicalActionID              pgtype.UUID        `json:"canonical_action_id"`
+	VisibleActionKey               pgtype.Text        `json:"visible_action_key"`
+	Derivative                     bool               `json:"derivative"`
+	TrainableEligible              bool               `json:"trainable_eligible"`
+	PublishStatus                  pgtype.Text        `json:"publish_status"`
+	ContentStatus                  string             `json:"content_status"`
+	PublishSeq                     pgtype.Int8        `json:"publish_seq"`
+	SanitizerVersion               pgtype.Text        `json:"sanitizer_version"`
+	PolicyVersion                  pgtype.Text        `json:"policy_version"`
+	ProviderCaptureStatus          string             `json:"provider_capture_status"`
+	ProviderCaptureID              pgtype.Text        `json:"provider_capture_id"`
+	ProviderCaptureVersion         pgtype.Int8        `json:"provider_capture_version"`
+	ProviderCaptureCorrelationKey  pgtype.Text        `json:"provider_capture_correlation_key"`
+	RunID                          pgtype.UUID        `json:"run_id"`
+	RunAgentID                     pgtype.UUID        `json:"run_agent_id"`
+	PublishedAt                    pgtype.Timestamptz `json:"published_at"`
+	RetractedAt                    pgtype.Timestamptz `json:"retracted_at"`
+	UpdatedAt                      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type InteractionDagSegmentGenerationSequence struct {
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	AgentRunID     pgtype.UUID        `json:"agent_run_id"`
+	NextGeneration int64              `json:"next_generation"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
 type InteractionDagSegmentProviderCall struct {
@@ -2368,6 +2442,29 @@ type InteractionDagStepReward struct {
 	Score     int32              `json:"score"`
 	Rationale string             `json:"rationale"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type InteractionDagTaskCursor struct {
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	AgentRunID     pgtype.UUID        `json:"agent_run_id"`
+	NextGeneration int64              `json:"next_generation"`
+	OpenStartSeq   pgtype.Int4        `json:"open_start_seq"`
+	LastClosedSeq  int32              `json:"last_closed_seq"`
+	OpenGeneration pgtype.Int8        `json:"open_generation"`
+	OpenEndSeq     pgtype.Int4        `json:"open_end_seq"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type InteractionDagUniversalProviderCall struct {
+	SegmentID      string             `json:"segment_id"`
+	ProviderCallID string             `json:"provider_call_id"`
+	Role           string             `json:"role"`
+	Ordinal        int64              `json:"ordinal"`
+	RunID          pgtype.UUID        `json:"run_id"`
+	RunAgentID     pgtype.UUID        `json:"run_agent_id"`
+	CaptureID      string             `json:"capture_id"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 }
 
 type Issue struct {
@@ -2792,6 +2889,7 @@ type NotePage struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 	DeletedAt   pgtype.Timestamptz `json:"deleted_at"`
+	Icon        pgtype.Text        `json:"icon"`
 }
 
 type NotePageAgentRef struct {
@@ -4956,6 +5054,23 @@ type ResearchWorkItem struct {
 	CancelledAt              pgtype.Timestamptz `json:"cancelled_at"`
 	StateVersion             int64              `json:"state_version"`
 	ExpectedResultSchemaID   string             `json:"expected_result_schema_id"`
+}
+
+type ResearchWorkItemActivityEntry struct {
+	ID                pgtype.UUID        `json:"id"`
+	WorkspaceID       pgtype.UUID        `json:"workspace_id"`
+	SessionID         pgtype.UUID        `json:"session_id"`
+	WorkItemID        pgtype.UUID        `json:"work_item_id"`
+	WorkItemAttemptID pgtype.UUID        `json:"work_item_attempt_id"`
+	InboxTaskID       pgtype.UUID        `json:"inbox_task_id"`
+	MessageSequence   int32              `json:"message_sequence"`
+	Title             string             `json:"title"`
+	Subtext           string             `json:"subtext"`
+	Tone              string             `json:"tone"`
+	BodyKind          string             `json:"body_kind"`
+	Body              string             `json:"body"`
+	ObservedAt        pgtype.Timestamptz `json:"observed_at"`
+	ReceivedAt        pgtype.Timestamptz `json:"received_at"`
 }
 
 type ResearchWorkItemAttempt struct {

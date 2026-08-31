@@ -65,13 +65,14 @@ type CanonicalChannelMessage struct {
 }
 
 type TaskService struct {
-	Queries   *db.Queries
-	TxStarter TxStarter
-	Hub       *realtime.Hub
-	Bus       *events.Bus
-	Analytics analytics.Client
-	Metrics   *obsmetrics.BusinessMetrics
-	Wakeup    TaskWakeupNotifier
+	Queries      *db.Queries
+	TxStarter    TxStarter
+	Hub          *realtime.Hub
+	Bus          *events.Bus
+	Analytics    analytics.Client
+	Metrics      *obsmetrics.BusinessMetrics
+	Wakeup       TaskWakeupNotifier
+	UniversalDAG *UniversalInteractionDAG
 	// IssueExecution is wired after construction because the canonical
 	// reconciler publishes through this TaskService.
 	IssueExecution *IssueExecutionService
@@ -203,7 +204,209 @@ func NewTaskService(q *db.Queries, tx TxStarter, hub *realtime.Hub, bus *events.
 	if len(wakeups) > 0 {
 		wakeup = wakeups[0]
 	}
-	return &TaskService{Queries: q, TxStarter: tx, Hub: hub, Bus: bus, Wakeup: wakeup}
+	return &TaskService{
+		Queries: q, TxStarter: tx, Hub: hub, Bus: bus, Wakeup: wakeup,
+		UniversalDAG: NewUniversalInteractionDAG(),
+	}
+}
+
+// TaskMessageBoundaryInput is the single application-service input for
+// canonical task-message persistence and Universal Interaction DAG advancement.
+// Callers must supply an active business transaction; the message, boundary,
+// Segment, and publish outbox either commit together or all roll back.
+type TaskMessageBoundaryInput struct {
+	Task                          db.AgentInboxEvent
+	Message                       db.CreateTaskMessageParams
+	BoundaryKind                  DAGBoundaryKind
+	CloseActionKind               DAGCloseActionKind
+	ActionID                      pgtype.UUID
+	ActionKey                     string
+	ProjectID                     pgtype.UUID
+	ChannelID                     pgtype.UUID
+	RouteGeneration               int64
+	RunID                         pgtype.UUID
+	RunAgentID                    pgtype.UUID
+	ProviderCaptureExpected       bool
+	ProviderCaptureCorrelationKey string
+	Derivative                    bool
+}
+
+// RecordTaskMessageBoundaryTx persists one canonical task message and advances
+// the Universal Interaction DAG inside the caller's business transaction.
+func (s *TaskService) RecordTaskMessageBoundaryTx(
+	ctx context.Context,
+	q *db.Queries,
+	tx pgx.Tx,
+	in TaskMessageBoundaryInput,
+) (db.TaskMessage, DAGBoundaryResult, error) {
+	if s == nil || s.UniversalDAG == nil || q == nil || tx == nil {
+		return db.TaskMessage{}, DAGBoundaryResult{}, errors.New("task message boundary requires an active universal DAG transaction")
+	}
+	if !in.Task.ID.Valid || !in.Task.WorkspaceID.Valid {
+		return db.TaskMessage{}, DAGBoundaryResult{}, errors.New("task message boundary requires canonical task identity")
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`, in.Task.WorkspaceID.String(), in.Task.ID.String()); err != nil {
+		return db.TaskMessage{}, DAGBoundaryResult{}, fmt.Errorf("lock canonical task message sequence: %w", err)
+	}
+	projectID, channelID := s.taskDAGScopeWithQueries(ctx, q, in.Task, in.ProjectID, in.ChannelID)
+	if err := s.advanceExistingTaskMessagesTx(ctx, q, tx, in.Task, projectID, channelID); err != nil {
+		return db.TaskMessage{}, DAGBoundaryResult{}, err
+	}
+	in.Message.TaskID = in.Task.ID
+	if in.Message.Seq <= 0 {
+		lastSeq, err := q.GetMaxTaskMessageSeq(ctx, in.Task.ID.String())
+		if err != nil {
+			return db.TaskMessage{}, DAGBoundaryResult{}, fmt.Errorf("resolve canonical task message sequence: %w", err)
+		}
+		in.Message.Seq = lastSeq + 1
+	}
+	message, err := q.CreateTaskMessage(ctx, in.Message)
+	if err != nil {
+		return db.TaskMessage{}, DAGBoundaryResult{}, fmt.Errorf("persist canonical task message: %w", err)
+	}
+
+	actionID := in.ActionID
+	actionKey := strings.TrimSpace(in.ActionKey)
+	if in.BoundaryKind == DAGBoundaryVisible {
+		if !actionID.Valid {
+			actionID = message.ID
+		}
+		if actionKey == "" {
+			actionKey = string(in.CloseActionKind) + ":" + actionID.String()
+		}
+	}
+	result, err := s.UniversalDAG.RecordBoundaryTx(ctx, q, tx, DAGBoundaryInput{
+		WorkspaceID:                   in.Task.WorkspaceID,
+		Task:                          in.Task,
+		BoundaryKind:                  in.BoundaryKind,
+		CloseActionKind:               in.CloseActionKind,
+		EndSeq:                        message.Seq,
+		ActionID:                      actionID,
+		ActionKey:                     actionKey,
+		ProjectID:                     projectID,
+		ChannelID:                     channelID,
+		RouteGeneration:               in.RouteGeneration,
+		MemoryTypeAtEvent:             resolveGraphMemoryType(ctx, q, in.Task.WorkspaceID, graphMemoryEnvMemoryType()),
+		RunID:                         in.RunID,
+		RunAgentID:                    in.RunAgentID,
+		ProviderCaptureExpected:       in.ProviderCaptureExpected,
+		ProviderCaptureCorrelationKey: in.ProviderCaptureCorrelationKey,
+		Derivative:                    in.Derivative,
+	})
+	if err != nil {
+		return db.TaskMessage{}, DAGBoundaryResult{}, err
+	}
+	if result.Closed {
+		if err := RecordTaskOriginLinkageTx(ctx, s.UniversalDAG, q, tx, in.Task); err != nil {
+			return db.TaskMessage{}, DAGBoundaryResult{}, fmt.Errorf("record task origin linkage: %w", err)
+		}
+	}
+	return message, result, nil
+}
+
+func (s *TaskService) advanceExistingTaskMessagesTx(
+	ctx context.Context,
+	q *db.Queries,
+	tx pgx.Tx,
+	task db.AgentInboxEvent,
+	projectID, channelID pgtype.UUID,
+) error {
+	var openEnd pgtype.Int4
+	var lastClosed int32
+	err := tx.QueryRow(ctx, `
+		SELECT open_end_seq, last_closed_seq
+		FROM interaction_dag_task_cursor
+		WHERE workspace_id=$1 AND agent_run_id=$2`, task.WorkspaceID, task.ID).Scan(&openEnd, &lastClosed)
+	expected := lastClosed + 1
+	if errors.Is(err, pgx.ErrNoRows) {
+		expected = 1
+	} else if err != nil {
+		return fmt.Errorf("resolve universal DAG cursor before canonical append: %w", err)
+	} else if openEnd.Valid {
+		expected = openEnd.Int32 + 1
+	}
+	messages, err := q.ListTaskMessages(ctx, task.ID)
+	if err != nil {
+		return fmt.Errorf("list existing canonical task messages: %w", err)
+	}
+	for _, existing := range messages {
+		if existing.Seq < expected {
+			continue
+		}
+		if existing.Seq != expected {
+			return fmt.Errorf("canonical task message sequence gap: got %d want %d", existing.Seq, expected)
+		}
+		if _, err := s.UniversalDAG.RecordBoundaryTx(ctx, q, tx, DAGBoundaryInput{
+			WorkspaceID: task.WorkspaceID, Task: task,
+			BoundaryKind: DAGBoundaryInbound, EndSeq: existing.Seq,
+			ProjectID: projectID, ChannelID: channelID,
+			MemoryTypeAtEvent: resolveGraphMemoryType(ctx, nil, task.WorkspaceID, graphMemoryEnvMemoryType()),
+		}); err != nil {
+			return fmt.Errorf("advance existing canonical task message %d: %w", existing.Seq, err)
+		}
+		expected++
+	}
+	return nil
+}
+
+func (s *TaskService) taskDAGScopeWithQueries(
+	ctx context.Context,
+	q *db.Queries,
+	task db.AgentInboxEvent,
+	projectID, channelID pgtype.UUID,
+) (pgtype.UUID, pgtype.UUID) {
+	if !channelID.Valid {
+		channelID = task.ChannelID
+	}
+	if projectID.Valid {
+		return projectID, channelID
+	}
+	if task.IssueID.Valid {
+		if issue, err := q.GetIssue(ctx, task.IssueID); err == nil {
+			projectID = issue.ProjectID
+		}
+	} else if task.ChatSessionID.Valid {
+		if session, err := q.GetChatSession(ctx, task.ChatSessionID); err == nil {
+			projectID = session.ProjectID
+		}
+	}
+	return projectID, channelID
+}
+
+// RecordVisibleTaskActionTx creates the canonical task-message anchor and
+// closes its generation for one already-persisted user-visible action.
+func (s *TaskService) RecordVisibleTaskActionTx(
+	ctx context.Context,
+	q *db.Queries,
+	tx pgx.Tx,
+	task db.AgentInboxEvent,
+	kind DAGCloseActionKind,
+	actionID pgtype.UUID,
+	content string,
+	projectID, channelID pgtype.UUID,
+	runID, runAgentID pgtype.UUID,
+	captureCorrelation string,
+) (DAGBoundaryResult, error) {
+	message, result, err := s.RecordTaskMessageBoundaryTx(ctx, q, tx, TaskMessageBoundaryInput{
+		Task: task,
+		Message: db.CreateTaskMessageParams{
+			Type:       "text",
+			Content:    pgtype.Text{String: content, Valid: strings.TrimSpace(content) != ""},
+			Visibility: "user_facing",
+		},
+		BoundaryKind:                  DAGBoundaryVisible,
+		CloseActionKind:               kind,
+		ActionID:                      actionID,
+		ActionKey:                     string(kind) + ":" + actionID.String(),
+		ProjectID:                     projectID,
+		ChannelID:                     channelID,
+		RunID:                         runID,
+		RunAgentID:                    runAgentID,
+		ProviderCaptureExpected:       runID.Valid && runAgentID.Valid && strings.TrimSpace(captureCorrelation) != "",
+		ProviderCaptureCorrelationKey: strings.TrimSpace(captureCorrelation),
+	})
+	_ = message
+	return result, err
 }
 
 // WithTraining sets the TrainingSessionDeps for the TaskService.
@@ -632,10 +835,21 @@ func (s *TaskService) interruptInFlightIssueTasksForFollowup(ctx context.Context
 	if !task.TriggerCommentID.Valid || !task.IssueID.Valid {
 		return
 	}
-	cancelled, err := s.Queries.CancelInFlightTasksByIssueAndAgent(ctx, db.CancelInFlightTasksByIssueAndAgentParams{
-		IssueID: task.IssueID,
-		AgentID: task.AgentID,
-		ID:      task.ID,
+	var cancelled []db.AgentInboxEvent
+	err := s.runInTxWithTx(ctx, func(qtx *db.Queries, tx pgx.Tx) error {
+		rows, err := qtx.CancelInFlightTasksByIssueAndAgent(ctx, db.CancelInFlightTasksByIssueAndAgentParams{
+			IssueID: task.IssueID, AgentID: task.AgentID, ID: task.ID,
+		})
+		if err != nil {
+			return err
+		}
+		cancelled = rows
+		for _, interrupted := range rows {
+			if err := s.RecordTerminalTaskBoundaryTx(ctx, qtx, tx, interrupted); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		slog.Warn("follow-up interrupt failed", "task_id", util.UUIDToString(task.ID), "issue_id", util.UUIDToString(task.IssueID), "agent_id", util.UUIDToString(task.AgentID), "error", err)
@@ -648,10 +862,21 @@ func (s *TaskService) interruptInFlightChatTasksForFollowup(ctx context.Context,
 	if !task.ChatSessionID.Valid {
 		return
 	}
-	cancelled, err := s.Queries.CancelInFlightChatTasksBySessionAndAgent(ctx, db.CancelInFlightChatTasksBySessionAndAgentParams{
-		ChatSessionID: task.ChatSessionID,
-		AgentID:       task.AgentID,
-		ID:            task.ID,
+	var cancelled []db.AgentInboxEvent
+	err := s.runInTxWithTx(ctx, func(qtx *db.Queries, tx pgx.Tx) error {
+		rows, err := qtx.CancelInFlightChatTasksBySessionAndAgent(ctx, db.CancelInFlightChatTasksBySessionAndAgentParams{
+			ChatSessionID: task.ChatSessionID, AgentID: task.AgentID, ID: task.ID,
+		})
+		if err != nil {
+			return err
+		}
+		cancelled = rows
+		for _, interrupted := range rows {
+			if err := s.RecordTerminalTaskBoundaryTx(ctx, qtx, tx, interrupted); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		slog.Warn("chat follow-up interrupt failed", "task_id", util.UUIDToString(task.ID), "chat_session_id", util.UUIDToString(task.ChatSessionID), "agent_id", util.UUIDToString(task.AgentID), "error", err)
@@ -1072,12 +1297,25 @@ func (s *TaskService) finalizeCancelledTask(ctx context.Context, task db.AgentIn
 // manual `multica agent update <id> --status idle` to unwedge. Matches the
 // pattern already used by CancelTask and RerunIssue.
 func (s *TaskService) CancelTasksForIssue(ctx context.Context, issueID pgtype.UUID) error {
-	cancelled, err := s.Queries.CancelAgentTasksByIssue(ctx, issueID)
-	if err != nil {
+	var cancelled []db.AgentInboxEvent
+	if err := s.runInTxWithTx(ctx, func(qtx *db.Queries, tx pgx.Tx) error {
+		rows, err := qtx.CancelAgentTasksByIssue(ctx, issueID)
+		if err != nil {
+			return err
+		}
+		cancelled = rows
+		for _, task := range rows {
+			if err := s.RecordTerminalTaskBoundaryTx(ctx, qtx, tx, task); err != nil {
+				return fmt.Errorf("record issue cancellation terminal boundary: %w", err)
+			}
+		}
+		return nil
+	}); err != nil {
 		return err
 	}
 	for _, t := range cancelled {
-		s.finalizeCancelledTask(ctx, t)
+		s.captureTaskCancelled(ctx, t)
+		s.FinalizeTerminalTaskPostCommitSideEffects(ctx, t)
 		s.ReconcileAgentStatus(ctx, t.AgentID)
 		s.broadcastTaskEvent(ctx, protocol.EventTaskCancelled, t)
 	}
@@ -1091,17 +1329,27 @@ func (s *TaskService) CancelTasksForIssue(ctx context.Context, issueID pgtype.UU
 //
 // Returns the cancelled rows so callers can report counts / log them.
 func (s *TaskService) CancelTasksForAgent(ctx context.Context, agentID pgtype.UUID) ([]db.AgentInboxEvent, error) {
-	cancelled, err := s.Queries.CancelAgentTasksByAgent(ctx, agentID)
-	if err != nil {
+	var cancelled []db.AgentInboxEvent
+	if err := s.runInTxWithTx(ctx, func(qtx *db.Queries, tx pgx.Tx) error {
+		rows, err := qtx.CancelAgentTasksByAgent(ctx, agentID)
+		if err != nil {
+			return err
+		}
+		cancelled = rows
+		for _, task := range rows {
+			if err := s.RecordTerminalTaskBoundaryTx(ctx, qtx, tx, task); err != nil {
+				return fmt.Errorf("record agent cancellation terminal boundary: %w", err)
+			}
+		}
+		return nil
+	}); err != nil {
 		return nil, err
 	}
 	for _, t := range cancelled {
-		s.finalizeCancelledTask(ctx, t)
+		s.captureTaskCancelled(ctx, t)
+		s.FinalizeTerminalTaskPostCommitSideEffects(ctx, t)
 		s.broadcastTaskEvent(ctx, protocol.EventTaskCancelled, t)
 	}
-	// Reconcile once after the loop — agent transitions from
-	// working→available based on remaining task counts, no need to call
-	// per row (the rows we just cancelled all belong to the same agent).
 	s.ReconcileAgentStatus(ctx, agentID)
 	return cancelled, nil
 }
@@ -1113,12 +1361,25 @@ func (s *TaskService) CancelTasksForAgent(ctx context.Context, agentID pgtype.UU
 // otherwise nullify trigger_comment_id and we'd lose the ability to find
 // the affected tasks.
 func (s *TaskService) CancelTasksByTriggerComment(ctx context.Context, commentID pgtype.UUID) error {
-	cancelled, err := s.Queries.CancelAgentTasksByTriggerComment(ctx, commentID)
-	if err != nil {
+	var cancelled []db.AgentInboxEvent
+	if err := s.runInTxWithTx(ctx, func(qtx *db.Queries, tx pgx.Tx) error {
+		rows, err := qtx.CancelAgentTasksByTriggerComment(ctx, commentID)
+		if err != nil {
+			return err
+		}
+		cancelled = rows
+		for _, task := range rows {
+			if err := s.RecordTerminalTaskBoundaryTx(ctx, qtx, tx, task); err != nil {
+				return fmt.Errorf("record trigger-comment cancellation terminal boundary: %w", err)
+			}
+		}
+		return nil
+	}); err != nil {
 		return err
 	}
 	for _, t := range cancelled {
-		s.finalizeCancelledTask(ctx, t)
+		s.captureTaskCancelled(ctx, t)
+		s.FinalizeTerminalTaskPostCommitSideEffects(ctx, t)
 		s.ReconcileAgentStatus(ctx, t.AgentID)
 		s.broadcastTaskEvent(ctx, protocol.EventTaskCancelled, t)
 	}
@@ -1143,17 +1404,66 @@ func (s *TaskService) CaptureCancelledTasks(ctx context.Context, cancelled []db.
 	}
 }
 
-// FinalizeCancelledResearchWakes finishes research-session Stop for rows that
-// CancelInFlightChatTasksByResearchTitle already flipped to cancelled: persist
-// partial assistant transcript, mirror into research_message (LRM-820),
-// reconcile agent status, and broadcast task:cancelled.
-func (s *TaskService) FinalizeCancelledResearchWakes(ctx context.Context, cancelled []db.AgentInboxEvent) {
-	for _, t := range cancelled {
-		s.finalizeCancelledTask(ctx, t)
-		s.finalizeCancelledChatMessage(ctx, t)
-		s.ReconcileAgentStatus(ctx, t.AgentID)
-		s.broadcastTaskEvent(ctx, protocol.EventTaskCancelled, t)
+// CancelResearchWakes atomically transitions all matching research wake tasks,
+// persists any partial visible transcript, and records visible/terminal DAG
+// boundaries before publishing post-commit side effects.
+func (s *TaskService) CancelResearchWakes(ctx context.Context, workspaceID pgtype.UUID, title string) error {
+	var cancelled []db.AgentInboxEvent
+	assistantSnapshots := make(map[pgtype.UUID]db.ChatMessage)
+	if err := s.runInTxWithTx(ctx, func(qtx *db.Queries, tx pgx.Tx) error {
+		rows, err := qtx.CancelInFlightChatTasksByResearchTitle(ctx, db.CancelInFlightChatTasksByResearchTitleParams{
+			WorkspaceID: workspaceID, Title: title,
+		})
+		if err != nil {
+			return err
+		}
+		cancelled = rows
+		for _, task := range rows {
+			if task.ChatSessionID.Valid {
+				messages, err := qtx.ListTaskMessages(ctx, task.ID)
+				if err != nil {
+					return fmt.Errorf("list cancelled research task messages: %w", err)
+				}
+				if len(messages) == 0 {
+					if _, err := qtx.DeleteUserChatMessageByTask(ctx, task.ID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+						return fmt.Errorf("delete empty cancelled research user message: %w", err)
+					}
+				} else {
+					content := coalesceTaskMessageText(messages)
+					if content == "" {
+						content = "Stopped."
+					}
+					row, err := qtx.CreateChatMessage(ctx, db.CreateChatMessageParams{
+						ChatSessionID: task.ChatSessionID, Role: "assistant", Content: content,
+						TaskID: task.ID, ElapsedMs: computeChatElapsedMs(task),
+					})
+					if err != nil {
+						return fmt.Errorf("create cancelled research chat message: %w", err)
+					}
+					if _, err := s.RecordVisibleTaskActionTx(ctx, qtx, tx, task, DAGCloseMessage, row.ID, content, pgtype.UUID{}, pgtype.UUID{}, pgtype.UUID{}, pgtype.UUID{}, ""); err != nil {
+						return fmt.Errorf("record cancelled research boundary: %w", err)
+					}
+					assistantSnapshots[task.ID] = row
+				}
+			}
+			if err := s.RecordTerminalTaskBoundaryTx(ctx, qtx, tx, task); err != nil {
+				return fmt.Errorf("record cancelled research terminal boundary: %w", err)
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
+	for _, task := range cancelled {
+		s.captureTaskCancelled(ctx, task)
+		s.FinalizeTerminalTaskPostCommitSideEffects(ctx, task)
+		if row, ok := assistantSnapshots[task.ID]; ok {
+			s.MirrorResearchChatStoppedReply(ctx, task, row)
+		}
+		s.ReconcileAgentStatus(ctx, task.AgentID)
+		s.broadcastTaskEvent(ctx, protocol.EventTaskCancelled, task)
+	}
+	return nil
 }
 
 type CancelledChatMessageResult struct {
@@ -1181,11 +1491,64 @@ func (s *TaskService) CancelTask(ctx context.Context, taskID pgtype.UUID) (*db.A
 // CancelTaskWithResult cancels a single task and returns any chat-specific
 // cleanup result needed by user-facing callers.
 func (s *TaskService) CancelTaskWithResult(ctx context.Context, taskID pgtype.UUID) (*CancelTaskResult, error) {
-	task, err := s.Queries.CancelAgentTask(ctx, taskID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		existing, err := s.Queries.GetAgentTask(ctx, taskID)
+	var task db.AgentInboxEvent
+	var cancelledChatMessage *CancelledChatMessageResult
+	var cancelledAssistantSnapshot *db.ChatMessage
+	err := s.runInTxWithTx(ctx, func(qtx *db.Queries, tx pgx.Tx) error {
+		cancelled, err := qtx.CancelAgentTask(ctx, taskID)
 		if err != nil {
-			return nil, fmt.Errorf("cancel task: %w", err)
+			return err
+		}
+		task = cancelled
+		if task.ChatSessionID.Valid {
+			messages, err := qtx.ListTaskMessages(ctx, task.ID)
+			if err != nil {
+				return fmt.Errorf("list cancelled chat task messages: %w", err)
+			}
+			if len(messages) == 0 {
+				deleted, err := qtx.DeleteUserChatMessageByTask(ctx, task.ID)
+				if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+					return fmt.Errorf("delete empty cancelled chat user message: %w", err)
+				}
+				if err == nil {
+					cancelledChatMessage = &CancelledChatMessageResult{
+						ChatSessionID: util.UUIDToString(deleted.ChatSessionID), MessageID: util.UUIDToString(deleted.ID),
+						Content: deleted.Content, RestoreToInput: true,
+					}
+				}
+			} else {
+				content := coalesceTaskMessageText(messages)
+				if content == "" {
+					content = "Stopped."
+				}
+				row, err := qtx.CreateChatMessage(ctx, db.CreateChatMessageParams{
+					ChatSessionID: task.ChatSessionID, Role: "assistant", Content: content,
+					TaskID: task.ID, ElapsedMs: computeChatElapsedMs(task),
+				})
+				if err != nil {
+					return fmt.Errorf("create cancelled chat message: %w", err)
+				}
+				if _, err := s.RecordVisibleTaskActionTx(ctx, qtx, tx, task, DAGCloseMessage, row.ID, content, pgtype.UUID{}, pgtype.UUID{}, pgtype.UUID{}, pgtype.UUID{}, ""); err != nil {
+					return fmt.Errorf("record cancelled chat boundary: %w", err)
+				}
+				cancelledAssistantSnapshot = &row
+			}
+		}
+		if shouldCloseBusinessDAGSegment(task) {
+			projectID, projectErr := s.terminalTaskProjectIDWithQueries(ctx, qtx, task)
+			if projectErr != nil {
+				projectID = pgtype.UUID{}
+			}
+			if err := s.recordUniversalTerminalBoundaryTx(ctx, qtx, tx, task, projectID); err != nil {
+				return fmt.Errorf("record cancellation terminal boundary: %w", err)
+			}
+		}
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		existing, lookupErr := s.Queries.GetAgentTask(ctx, taskID)
+		if lookupErr != nil {
+			return nil, fmt.Errorf("cancel task: %w", lookupErr)
 		}
 		return &CancelTaskResult{Task: existing}, nil
 	}
@@ -1194,8 +1557,11 @@ func (s *TaskService) CancelTaskWithResult(ctx context.Context, taskID pgtype.UU
 	}
 
 	slog.Info("task cancelled", "task_id", util.UUIDToString(task.ID), "issue_id", util.UUIDToString(task.IssueID))
-	s.finalizeCancelledTask(ctx, task)
-	cancelledChatMessage := s.finalizeCancelledChatMessage(ctx, task)
+	s.captureTaskCancelled(ctx, task)
+	s.FinalizeTerminalTaskPostCommitSideEffects(ctx, task)
+	if cancelledAssistantSnapshot != nil {
+		s.MirrorResearchChatStoppedReply(ctx, task, *cancelledAssistantSnapshot)
+	}
 
 	// Reconcile agent status
 	s.ReconcileAgentStatus(ctx, task.AgentID)
@@ -1207,66 +1573,6 @@ func (s *TaskService) CancelTaskWithResult(ctx context.Context, taskID pgtype.UU
 		Task:                 task,
 		CancelledChatMessage: cancelledChatMessage,
 	}, nil
-}
-
-func (s *TaskService) finalizeCancelledChatMessage(ctx context.Context, task db.AgentInboxEvent) *CancelledChatMessageResult {
-	if !task.ChatSessionID.Valid {
-		return nil
-	}
-	var cancelled *CancelledChatMessageResult
-	var assistantSnapshot *db.ChatMessage
-	if err := s.runInTx(ctx, func(qtx *db.Queries) error {
-		messages, err := qtx.ListTaskMessages(ctx, task.ID)
-		if err != nil {
-			return fmt.Errorf("list cancelled chat task messages: %w", err)
-		}
-		if len(messages) == 0 {
-			deleted, err := qtx.DeleteUserChatMessageByTask(ctx, task.ID)
-			if errors.Is(err, pgx.ErrNoRows) {
-				return nil
-			}
-			if err != nil {
-				return fmt.Errorf("delete empty cancelled chat user message: %w", err)
-			}
-			cancelled = &CancelledChatMessageResult{
-				ChatSessionID:  util.UUIDToString(deleted.ChatSessionID),
-				MessageID:      util.UUIDToString(deleted.ID),
-				Content:        deleted.Content,
-				RestoreToInput: true,
-			}
-			return nil
-		}
-		// LRM-820: keep already-streamed text; fall back to a short stop marker.
-		content := coalesceTaskMessageText(messages)
-		if content == "" {
-			content = "Stopped."
-		}
-		row, err := qtx.CreateChatMessage(ctx, db.CreateChatMessageParams{
-			ChatSessionID: task.ChatSessionID,
-			Role:          "assistant",
-			Content:       content,
-			TaskID:        task.ID,
-			ElapsedMs:     computeChatElapsedMs(task),
-		})
-		if err != nil {
-			return fmt.Errorf("create cancelled chat message: %w", err)
-		}
-		assistantSnapshot = &row
-		return nil
-	}); err != nil {
-		slog.Error("failed to finalize cancelled chat message",
-			"task_id", util.UUIDToString(task.ID),
-			"chat_session_id", util.UUIDToString(task.ChatSessionID),
-			"error", err,
-		)
-		return nil
-	}
-	if assistantSnapshot != nil {
-		// Research fleet wakes (title research:<sessionUUID>) must keep the
-		// partial reply in the session drawer after Stop.
-		s.MirrorResearchChatStoppedReply(ctx, task, *assistantSnapshot)
-	}
-	return cancelled
 }
 
 // StartTask transitions a dispatched task to running.
@@ -1414,6 +1720,34 @@ func (s *TaskService) completeTask(
 ) (*CompleteTaskOutcome, error) {
 	var task db.AgentInboxEvent
 	var ackedSeq int64
+	var atomicAssistantMsg *db.ChatMessage
+	type preparedStandaloneReply struct {
+		content string
+		parts   []protocol.MessagePart
+	}
+	var standaloneReply *preparedStandaloneReply
+	var completionPayload protocol.TaskCompletedPayload
+	if json.Unmarshal(result, &completionPayload) == nil && strings.TrimSpace(completionPayload.Target) == "" {
+		body := util.UnescapeBackslashEscapes(completionPayload.Output)
+		parts := completionPayload.Parts
+		if unwrappedBody, unwrappedParts, unwrapped, unwrapErr := messageparts.UnwrapStructuredMessageSend(body, parts); unwrapErr == nil && unwrapped {
+			body, parts = unwrappedBody, unwrappedParts
+		}
+		if normalizedBody, normalizedParts, normalizeErr := messageparts.Normalize(body, parts); normalizeErr == nil {
+			if outputKind, kindErr := protocol.NormalizeChatOutputType(completionPayload.Type, strings.TrimSpace(normalizedBody) != "" || len(normalizedParts) > 0, completionPayload.Reaction != nil); kindErr == nil && outputKind == protocol.ChatOutputKindMessage && strings.TrimSpace(normalizedBody) != "" {
+				standaloneReply = &preparedStandaloneReply{content: redact.Text(normalizedBody), parts: normalizedParts}
+			}
+		}
+	}
+	var preparedIssueFallback string
+	if outputKind, kindErr := protocol.NormalizeChatOutputType(
+		completionPayload.Type,
+		strings.TrimSpace(completionPayload.Output) != "" || len(completionPayload.Parts) > 0,
+		completionPayload.Reaction != nil,
+	); kindErr == nil && outputKind == protocol.ChatOutputKindMessage && strings.TrimSpace(completionPayload.Output) != "" {
+		preparedIssueFallback = redact.Text(util.UnescapeBackslashEscapes(completionPayload.Output))
+	}
+	var issueFallbackCommit *agentCommentCommit
 	completeAgentTaskUpdated := false
 	if err := s.runInTxWithTx(ctx, func(qtx *db.Queries, tx pgx.Tx) error {
 		if hooks.Before != nil {
@@ -1477,6 +1811,40 @@ func (s *TaskService) completeTask(
 				return fmt.Errorf("update chat session resume pointer: %w", err)
 			}
 		}
+		if t.ChatSessionID.Valid && standaloneReply != nil {
+			row, err := qtx.CreateChatMessage(ctx, db.CreateChatMessageParams{
+				ChatSessionID: t.ChatSessionID,
+				Role:          "assistant",
+				Content:       standaloneReply.content,
+				Parts:         messageparts.MustJSON(standaloneReply.parts),
+				TaskID:        t.ID,
+				ElapsedMs:     computeChatElapsedMs(t),
+			})
+			if err != nil {
+				return fmt.Errorf("persist standalone assistant reply: %w", err)
+			}
+			if _, err := s.RecordVisibleTaskActionTx(ctx, qtx, tx, t, DAGCloseMessage, row.ID, standaloneReply.content, pgtype.UUID{}, pgtype.UUID{}, pgtype.UUID{}, pgtype.UUID{}, ""); err != nil {
+				return fmt.Errorf("record standalone assistant boundary: %w", err)
+			}
+			if err := qtx.SetUnreadSinceIfNull(ctx, t.ChatSessionID); err != nil {
+				return fmt.Errorf("set standalone assistant unread marker: %w", err)
+			}
+			atomicAssistantMsg = &row
+		}
+		if t.IssueID.Valid && strings.TrimSpace(preparedIssueFallback) != "" {
+			agentCommented, err := qtx.HasAgentCommentedSince(ctx, db.HasAgentCommentedSinceParams{
+				IssueID: t.IssueID, AuthorID: t.AgentID, Since: t.StartedAt,
+			})
+			if err != nil {
+				return fmt.Errorf("check completion issue comments: %w", err)
+			}
+			if !agentCommented && !(t.TriggerCommentID.Valid && isTrivialDoneOutput(preparedIssueFallback)) {
+				issueFallbackCommit, err = s.createAgentCommentTx(ctx, qtx, tx, t, preparedIssueFallback, "comment", t.TriggerCommentID)
+				if err != nil {
+					return fmt.Errorf("persist completion issue fallback: %w", err)
+				}
+			}
+		}
 		if hooks.After != nil {
 			if tx == nil {
 				return errors.New("transaction unavailable for inbox completion finalization")
@@ -1487,6 +1855,15 @@ func (s *TaskService) completeTask(
 				AckedSeq:     ackedSeq,
 			}); err != nil {
 				return err
+			}
+		}
+		if shouldCloseBusinessDAGSegment(task) {
+			projectID, projectErr := s.terminalTaskProjectIDWithQueries(ctx, qtx, task)
+			if projectErr != nil {
+				projectID = pgtype.UUID{}
+			}
+			if err := s.recordUniversalTerminalBoundaryTx(ctx, qtx, tx, task, projectID); err != nil {
+				return fmt.Errorf("record completion terminal boundary: %w", err)
 			}
 		}
 		return nil
@@ -1532,46 +1909,9 @@ func (s *TaskService) completeTask(
 	if s.OnTaskCompleted != nil {
 		s.OnTaskCompleted(ctx, task)
 	}
-	s.FinalizeTerminalTaskSideEffects(ctx, task)
-
-	// Invariant: every completed issue task must have at least one agent
-	// comment on the issue, so the user always sees something when a run
-	// ends. If the agent posted a comment during execution (result, progress
-	// ping, or CLI reply), HasAgentCommentedSince returns true and we skip.
-	// Otherwise, synthesize one from the final output. For comment-triggered
-	// tasks, TriggerCommentID threads the fallback under the original comment;
-	// for assignment-triggered tasks it is NULL and the fallback is top-level.
-	// Chat tasks have no IssueID and are handled separately below.
-	if task.IssueID.Valid {
-		agentCommented, _ := s.Queries.HasAgentCommentedSince(ctx, db.HasAgentCommentedSinceParams{
-			IssueID:  task.IssueID,
-			AuthorID: task.AgentID,
-			Since:    task.StartedAt,
-		})
-		if !agentCommented {
-			var payload protocol.TaskCompletedPayload
-			if err := json.Unmarshal(result, &payload); err == nil {
-				outputType, outputTypeErr := protocol.NormalizeChatOutputType(payload.Type, strings.TrimSpace(payload.Output) != "" || len(payload.Parts) > 0, payload.Reaction != nil)
-				if outputTypeErr != nil {
-					slog.Warn("skipping issue fallback comment with invalid chat output type", "task_id", util.UUIDToString(task.ID), "error", outputTypeErr)
-				} else if outputType == protocol.ChatOutputKindMessage && payload.Output != "" {
-					// Match the CLI's --content / --description behavior: agents that
-					// emit literal `\n` 4-char sequences (Python/JSON-style) get them
-					// decoded into real newlines before the comment hits the DB. See
-					// util.UnescapeBackslashEscapes for the exact contract.
-					body := util.UnescapeBackslashEscapes(payload.Output)
-					if task.TriggerCommentID.Valid && isTrivialDoneOutput(body) {
-						slog.Warn("suppressing trivial comment-trigger fallback output",
-							"task_id", util.UUIDToString(task.ID),
-							"issue_id", util.UUIDToString(task.IssueID),
-							"agent_id", util.UUIDToString(task.AgentID),
-						)
-					} else {
-						s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text(body), "comment", task.TriggerCommentID)
-					}
-				}
-			}
-		}
+	s.FinalizeTerminalTaskPostCommitSideEffects(ctx, task)
+	if issueFallbackCommit != nil {
+		s.publishAgentCommentCommit(ctx, issueFallbackCommit)
 	}
 
 	// Quick-create tasks: locate the issue the agent just created and push
@@ -1587,7 +1927,7 @@ func (s *TaskService) completeTask(
 	// For chat tasks, save assistant reply and broadcast chat:done. The
 	// resume pointer was already persisted inside the transaction above.
 	if task.ChatSessionID.Valid {
-		var assistantMsg *db.ChatMessage
+		var assistantMsg = atomicAssistantMsg
 		outputType := protocol.ChatOutputKindNoReply
 		var reaction *protocol.ChatReactionPayload
 		var payload protocol.TaskCompletedPayload
@@ -1633,29 +1973,10 @@ func (s *TaskService) completeTask(
 				visibleParts = parts
 			} else if strings.TrimSpace(body) == "" {
 				slog.Warn("skipping empty assistant chat message", "task_id", util.UUIDToString(task.ID))
-			} else {
+			} else if atomicAssistantMsg != nil {
 				outputType = protocol.ChatOutputKindMessage
-				row, err := s.Queries.CreateChatMessage(ctx, db.CreateChatMessageParams{
-					ChatSessionID: task.ChatSessionID,
-					Role:          "assistant",
-					Content:       redact.Text(body),
-					Parts:         messageparts.MustJSON(parts),
-					TaskID:        task.ID,
-					ElapsedMs:     computeChatElapsedMs(task),
-				})
-				if err != nil {
-					slog.Error("failed to save assistant chat message", "task_id", util.UUIDToString(task.ID), "error", err)
-				} else {
-					assistantMsg = &row
-					// Event-driven unread: stamp unread_since on the first unread
-					// assistant message. No-op if the session already has unread.
-					// If the user is actively viewing the session, the frontend's
-					// auto-mark-read effect will clear this within a tick.
-					if err := s.Queries.SetUnreadSinceIfNull(ctx, task.ChatSessionID); err != nil {
-						slog.Warn("failed to set unread_since", "chat_session_id", util.UUIDToString(task.ChatSessionID), "error", err)
-					}
-					s.MirrorResearchChatReply(ctx, task, row)
-				}
+			} else {
+				slog.Error("standalone assistant output was not prepared before completion transaction", "task_id", util.UUIDToString(task.ID))
 			}
 		}
 
@@ -1676,15 +1997,19 @@ func (s *TaskService) completeTask(
 }
 
 func (s *TaskService) terminalTaskProjectID(ctx context.Context, task db.AgentInboxEvent) (pgtype.UUID, error) {
+	return s.terminalTaskProjectIDWithQueries(ctx, s.Queries, task)
+}
+
+func (s *TaskService) terminalTaskProjectIDWithQueries(ctx context.Context, q *db.Queries, task db.AgentInboxEvent) (pgtype.UUID, error) {
 	if task.IssueID.Valid {
-		issue, err := s.Queries.GetIssue(ctx, task.IssueID)
+		issue, err := q.GetIssue(ctx, task.IssueID)
 		if err != nil {
 			return pgtype.UUID{}, err
 		}
 		return issue.ProjectID, nil
 	}
 	if task.ChatSessionID.Valid {
-		session, err := s.Queries.GetChatSession(ctx, task.ChatSessionID)
+		session, err := q.GetChatSession(ctx, task.ChatSessionID)
 		if err != nil {
 			return pgtype.UUID{}, err
 		}
@@ -1786,6 +2111,7 @@ func (s *TaskService) failTask(
 	}
 	var task db.AgentInboxEvent
 	var ackedSeq int64
+	var issueFailureCommit *agentCommentCommit
 	if err := s.runInTxWithTx(ctx, func(qtx *db.Queries, tx pgx.Tx) error {
 		if fence != nil {
 			if _, err := qtx.LockCurrentAgentInboxDelivery(ctx, db.LockCurrentAgentInboxDeliveryParams{
@@ -1850,12 +2176,45 @@ func (s *TaskService) failTask(
 				return fmt.Errorf("update chat session resume pointer: %w", err)
 			}
 		}
+		if !suppressPublicOutput && strings.TrimSpace(errMsg) != "" {
+			if t.IssueID.Valid {
+				issueFailureCommit, err = s.createAgentCommentTx(ctx, qtx, tx, t, redact.Text(errMsg), "system", t.TriggerCommentID)
+				if err != nil {
+					return fmt.Errorf("persist failure issue comment: %w", err)
+				}
+			}
+			if t.ChatSessionID.Valid {
+				row, err := qtx.CreateChatMessage(ctx, db.CreateChatMessageParams{
+					ChatSessionID: t.ChatSessionID, Role: "assistant", Content: redact.Text(errMsg),
+					TaskID: t.ID, FailureReason: pgtype.Text{String: failureReason, Valid: failureReason != ""},
+					ElapsedMs: computeChatElapsedMs(t),
+				})
+				if err != nil {
+					return fmt.Errorf("persist failure chat message: %w", err)
+				}
+				if _, err := s.RecordVisibleTaskActionTx(ctx, qtx, tx, t, DAGCloseMessage, row.ID, row.Content, pgtype.UUID{}, pgtype.UUID{}, pgtype.UUID{}, pgtype.UUID{}, ""); err != nil {
+					return fmt.Errorf("record failure chat boundary: %w", err)
+				}
+				if err := qtx.SetUnreadSinceIfNull(ctx, t.ChatSessionID); err != nil {
+					return fmt.Errorf("set failure chat unread marker: %w", err)
+				}
+			}
+		}
 		if finalize != nil {
 			if tx == nil {
 				return errors.New("transaction unavailable for inbox failure finalization")
 			}
 			if err := finalize(qtx, tx, &FailTaskOutcome{Task: task, AckedSeq: ackedSeq}); err != nil {
 				return err
+			}
+		}
+		if shouldCloseBusinessDAGSegment(task) {
+			projectID, projectErr := s.terminalTaskProjectIDWithQueries(ctx, qtx, task)
+			if projectErr != nil {
+				projectID = pgtype.UUID{}
+			}
+			if err := s.recordUniversalTerminalBoundaryTx(ctx, qtx, tx, task, projectID); err != nil {
+				return fmt.Errorf("record failure terminal boundary: %w", err)
 			}
 		}
 		return nil
@@ -1889,46 +2248,15 @@ func (s *TaskService) failTask(
 	slog.Warn("task failed", "task_id", util.UUIDToString(task.ID), "issue_id", util.UUIDToString(task.IssueID), "error", errMsg, "failure_reason", failureReason)
 	s.recordEvolutionSkillOutcome(ctx, task.ID, "failure", "failure")
 	s.captureTaskFailed(ctx, task)
-	s.RouteTerminalTrainingTask(ctx, task)
+	s.FinalizeTerminalTaskPostCommitSideEffects(ctx, task)
+	if issueFailureCommit != nil {
+		s.publishAgentCommentCommit(ctx, issueFailureCommit)
+	}
 
 	// Auto-retry eligible failures (orphan, timeout, runtime_offline,
 	// runtime_recovery). The helper itself enforces attempt < max_attempts
 	// and only triggers for issue/chat tasks.
 	retried, _ := s.MaybeRetryFailedTask(ctx, task)
-	s.maybeCleanupEphemeralSandbox(ctx, task)
-
-	// Skip the per-failure system comment when we'll immediately retry —
-	// the new task will surface its own status to the user, and we don't
-	// want to spam the issue with "task timed out" messages on every
-	// daemon hiccup.
-	if !suppressPublicOutput && errMsg != "" && task.IssueID.Valid && retried == nil {
-		s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text(errMsg), "system", task.TriggerCommentID)
-	}
-
-	// Mirror the issue fallback for chat tasks: write an assistant
-	// chat_message tagged with the daemon-reported failure_reason so the
-	// conversation history shows what happened. Skip when auto-retry is
-	// pending (the new attempt will write its own outcome) — same guard as
-	// the issue path above.
-	if !suppressPublicOutput && task.ChatSessionID.Valid && retried == nil {
-		if _, err := s.Queries.CreateChatMessage(ctx, db.CreateChatMessageParams{
-			ChatSessionID: task.ChatSessionID,
-			Role:          "assistant",
-			Content:       redact.Text(errMsg),
-			TaskID:        pgtype.UUID{Bytes: task.ID.Bytes, Valid: true},
-			FailureReason: pgtype.Text{String: failureReason, Valid: failureReason != ""},
-			ElapsedMs:     computeChatElapsedMs(task),
-		}); err != nil {
-			slog.Error("failed to save failure chat message",
-				"task_id", util.UUIDToString(task.ID),
-				"chat_session_id", util.UUIDToString(task.ChatSessionID),
-				"error", err)
-		} else if err := s.Queries.SetUnreadSinceIfNull(ctx, task.ChatSessionID); err != nil {
-			slog.Warn("failed to set unread_since on failure",
-				"chat_session_id", util.UUIDToString(task.ChatSessionID),
-				"error", err)
-		}
-	}
 
 	// Quick-create tasks: push a failure inbox notification to the
 	// requester so they can either retry or fall back to the advanced form
@@ -2281,12 +2609,22 @@ func (s *TaskService) RerunIssue(ctx context.Context, issueID pgtype.UUID, sourc
 		return task, nil
 	}
 
-	// Cancel only the target agent's active/queued tasks on this issue.
-	cancelled, err := s.Queries.CancelAgentTasksByIssueAndAgent(ctx, db.CancelAgentTasksByIssueAndAgentParams{
-		IssueID: issueID,
-		AgentID: agentID,
-	})
-	if err != nil {
+	var cancelled []db.AgentInboxEvent
+	if err := s.runInTxWithTx(ctx, func(qtx *db.Queries, tx pgx.Tx) error {
+		rows, err := qtx.CancelAgentTasksByIssueAndAgent(ctx, db.CancelAgentTasksByIssueAndAgentParams{
+			IssueID: issueID, AgentID: agentID,
+		})
+		if err != nil {
+			return err
+		}
+		cancelled = rows
+		for _, prior := range rows {
+			if err := s.RecordTerminalTaskBoundaryTx(ctx, qtx, tx, prior); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
 		slog.Warn("rerun: cancel prior tasks failed",
 			"issue_id", util.UUIDToString(issueID),
 			"agent_id", util.UUIDToString(agentID),
@@ -2294,7 +2632,8 @@ func (s *TaskService) RerunIssue(ctx context.Context, issueID pgtype.UUID, sourc
 		)
 	}
 	for _, t := range cancelled {
-		s.finalizeCancelledTask(ctx, t)
+		s.captureTaskCancelled(ctx, t)
+		s.FinalizeTerminalTaskPostCommitSideEffects(ctx, t)
 		s.ReconcileAgentStatus(ctx, t.AgentID)
 		s.broadcastTaskEvent(ctx, protocol.EventTaskCancelled, t)
 	}
@@ -2394,15 +2733,33 @@ func shouldCloseBusinessDAGSegment(task db.AgentInboxEvent) bool {
 }
 
 func (s *TaskService) FinalizeTerminalTaskSideEffects(ctx context.Context, task db.AgentInboxEvent) {
-	// Message dispatch roots carry their project through chat_session rather
-	// than issue_id, so resolve both task shapes before recording. The
-	// internal non-roster diagnosis task is transport-only and must never
-	// become a business DAG segment.
+	// Legacy callers that do not own the business transaction still route here.
+	// New terminal paths must call RecordTerminalTaskBoundaryTx before commit and
+	// then invoke FinalizeTerminalTaskPostCommitSideEffects.
 	if shouldCloseBusinessDAGSegment(task) {
-		if projectID, err := s.terminalTaskProjectID(ctx, task); err != nil {
+		projectID, err := s.terminalTaskProjectID(ctx, task)
+		if err != nil {
 			slog.Warn("interaction_dag: terminal task project lookup failed",
 				"task_id", util.UUIDToString(task.ID), "error", err)
-		} else if projectID.Valid {
+		}
+		if err := s.recordUniversalTerminalBoundary(ctx, task, projectID); err != nil {
+			slog.Warn("interaction_dag: universal terminal boundary failed",
+				"task_id", util.UUIDToString(task.ID), "error", err)
+		}
+	}
+	s.FinalizeTerminalTaskPostCommitSideEffects(ctx, task)
+}
+
+func (s *TaskService) FinalizeTerminalTaskPostCommitSideEffects(ctx context.Context, task db.AgentInboxEvent) {
+	if shouldCloseBusinessDAGSegment(task) {
+		projectID, err := s.terminalTaskProjectID(ctx, task)
+		if err != nil {
+			slog.Warn("interaction_dag: terminal task project lookup failed",
+				"task_id", util.UUIDToString(task.ID), "error", err)
+		}
+		// The retained bridge is a legacy snapshot projection until Task 4;
+		// it is no longer the live lifecycle authority.
+		if projectID.Valid {
 			s.closeSegmentForTerminal(ctx, task, util.UUIDToString(projectID), s.leanEnvSnapshot(ctx, projectID))
 		}
 	}
@@ -2411,6 +2768,53 @@ func (s *TaskService) FinalizeTerminalTaskSideEffects(ctx context.Context, task 
 		s.OnTaskTerminal(ctx, task)
 	}
 	s.maybeCleanupEphemeralSandbox(ctx, task)
+}
+
+func (s *TaskService) RecordTerminalTaskBoundaryTx(ctx context.Context, q *db.Queries, tx pgx.Tx, task db.AgentInboxEvent) error {
+	if !shouldCloseBusinessDAGSegment(task) {
+		return nil
+	}
+	projectID, err := s.terminalTaskProjectIDWithQueries(ctx, q, task)
+	if err != nil {
+		projectID = pgtype.UUID{}
+	}
+	return s.recordUniversalTerminalBoundaryTx(ctx, q, tx, task, projectID)
+}
+
+func (s *TaskService) recordUniversalTerminalBoundary(ctx context.Context, task db.AgentInboxEvent, projectID pgtype.UUID) error {
+	if s.UniversalDAG == nil {
+		return nil
+	}
+	if s.TxStarter == nil {
+		return errors.New("universal terminal boundary requires a transaction starter")
+	}
+	return s.runInTxWithTx(ctx, func(q *db.Queries, tx pgx.Tx) error {
+		return s.recordUniversalTerminalBoundaryTx(ctx, q, tx, task, projectID)
+	})
+}
+
+func (s *TaskService) recordUniversalTerminalBoundaryTx(
+	ctx context.Context,
+	q *db.Queries,
+	tx pgx.Tx,
+	task db.AgentInboxEvent,
+	projectID pgtype.UUID,
+) error {
+	if s.UniversalDAG == nil {
+		return nil
+	}
+	memoryType := resolveGraphMemoryType(ctx, nil, task.WorkspaceID, graphMemoryEnvMemoryType())
+	_, err := s.UniversalDAG.RecordBoundaryTx(ctx, q, tx, DAGBoundaryInput{
+		WorkspaceID:       task.WorkspaceID,
+		Task:              task,
+		BoundaryKind:      DAGBoundaryTerminal,
+		CloseActionKind:   DAGCloseTerminal,
+		ActionKey:         "terminal:" + task.ID.String(),
+		ProjectID:         projectID,
+		ChannelID:         task.ChannelID,
+		MemoryTypeAtEvent: memoryType,
+	})
+	return err
 }
 
 func (s *TaskService) maybeCleanupEphemeralSandbox(ctx context.Context, task db.AgentInboxEvent) {
@@ -3231,62 +3635,74 @@ func (s *TaskService) getIssuePrefix(workspaceID pgtype.UUID) string {
 	return ws.IssuePrefix
 }
 
-func (s *TaskService) createAgentComment(ctx context.Context, issueID, agentID pgtype.UUID, content, commentType string, parentID pgtype.UUID) {
-	if content == "" {
-		return
+type agentCommentCommit struct {
+	issue       db.Issue
+	comment     db.Comment
+	rootComment *db.Comment
+}
+
+func (s *TaskService) createAgentCommentTx(
+	ctx context.Context,
+	q *db.Queries,
+	tx pgx.Tx,
+	task db.AgentInboxEvent,
+	content, commentType string,
+	parentID pgtype.UUID,
+) (*agentCommentCommit, error) {
+	if strings.TrimSpace(content) == "" {
+		return nil, nil
 	}
-	// Look up issue to get workspace ID for mention expansion and broadcasting.
-	issue, err := s.Queries.GetIssue(ctx, issueID)
+	issue, err := q.GetIssue(ctx, task.IssueID)
 	if err != nil {
-		return
+		return nil, err
 	}
-	// Resolve the thread root for thread-level side effects without overwriting
-	// parentID. The stored parent_id must remain the exact comment being replied
-	// to; recursive thread reads recover the root when needed.
 	var rootComment *db.Comment
 	if parentID.Valid {
-		if root, err := s.Queries.GetThreadRoot(ctx, db.GetThreadRootParams{
-			CommentID:   parentID,
-			WorkspaceID: issue.WorkspaceID,
+		if root, err := q.GetThreadRoot(ctx, db.GetThreadRootParams{
+			CommentID: parentID, WorkspaceID: issue.WorkspaceID,
 		}); err == nil {
 			rootComment = &root
 		}
 	}
-	// Expand bare issue identifiers (e.g. MUL-117) into mention links.
-	content = mention.ExpandIssueIdentifiers(ctx, s.Queries, issue.WorkspaceID, content)
-	comment, err := s.Queries.CreateComment(ctx, db.CreateCommentParams{
-		IssueID:     issueID,
-		WorkspaceID: issue.WorkspaceID,
-		AuthorType:  "agent",
-		AuthorID:    agentID,
-		Content:     content,
-		Type:        commentType,
-		ParentID:    parentID,
+	content = mention.ExpandIssueIdentifiers(ctx, q, issue.WorkspaceID, content)
+	comment, err := q.CreateComment(ctx, db.CreateCommentParams{
+		IssueID: task.IssueID, WorkspaceID: issue.WorkspaceID,
+		AuthorType: "agent", AuthorID: task.AgentID, Content: content,
+		Type: commentType, ParentID: parentID,
 	})
 	if err != nil {
+		return nil, err
+	}
+	if _, err := s.RecordVisibleTaskActionTx(
+		ctx, q, tx, task, DAGCloseMessage, comment.ID, comment.Content,
+		issue.ProjectID, pgtype.UUID{}, pgtype.UUID{}, pgtype.UUID{}, "",
+	); err != nil {
+		return nil, err
+	}
+	return &agentCommentCommit{issue: issue, comment: comment, rootComment: rootComment}, nil
+}
+
+func (s *TaskService) publishAgentCommentCommit(ctx context.Context, committed *agentCommentCommit) {
+	if committed == nil {
 		return
 	}
+	issue := committed.issue
+	comment := committed.comment
 	s.Bus.Publish(events.Event{
-		Type:        protocol.EventCommentCreated,
-		WorkspaceID: util.UUIDToString(issue.WorkspaceID),
-		ActorType:   "agent",
-		ActorID:     util.UUIDToString(agentID),
+		Type: protocol.EventCommentCreated, WorkspaceID: util.UUIDToString(issue.WorkspaceID),
+		ActorType: "agent", ActorID: util.UUIDToString(comment.AuthorID),
 		Payload: map[string]any{
 			"comment": map[string]any{
-				"id":          util.UUIDToString(comment.ID),
-				"issue_id":    util.UUIDToString(comment.IssueID),
-				"author_type": comment.AuthorType,
-				"author_id":   util.UUIDToString(comment.AuthorID),
-				"content":     comment.Content,
-				"type":        comment.Type,
-				"parent_id":   util.UUIDToPtr(comment.ParentID),
-				"created_at":  comment.CreatedAt.Time.Format("2006-01-02T15:04:05Z"),
+				"id": util.UUIDToString(comment.ID), "issue_id": util.UUIDToString(comment.IssueID),
+				"author_type": comment.AuthorType, "author_id": util.UUIDToString(comment.AuthorID),
+				"content": comment.Content, "type": comment.Type,
+				"parent_id":  util.UUIDToPtr(comment.ParentID),
+				"created_at": comment.CreatedAt.Time.Format("2006-01-02T15:04:05Z"),
 			},
-			"issue_title":  issue.Title,
-			"issue_status": issue.Status,
+			"issue_title": issue.Title, "issue_status": issue.Status,
 		},
 	})
-	s.AutoUnresolveThreadOnReply(ctx, rootComment, util.UUIDToString(issue.WorkspaceID), "agent", util.UUIDToString(agentID))
+	s.AutoUnresolveThreadOnReply(ctx, committed.rootComment, util.UUIDToString(issue.WorkspaceID), "agent", util.UUIDToString(comment.AuthorID))
 }
 
 // AutoUnresolveThreadOnReply clears resolved_at on the thread root when a

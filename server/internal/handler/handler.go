@@ -372,7 +372,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		cfg: cfg,
 	}
 	if pool, ok := txStarter.(*pgxpool.Pool); ok {
-		h.GraphMemoryConsolidation = service.NewGraphMemoryConsolidationService(queries, pool, "")
+		h.GraphMemoryConsolidation = service.NewGraphMemoryConsolidationService(queries, pool, "", nil)
 		h.GraphMemoryAudit = service.NewGraphMemoryAuditServiceWithPool(pool, "")
 		h.GraphMemoryBlobs = service.NewGraphMemoryBlobService(pool)
 		h.WorkGraph = workgraph.NewStore(pool)

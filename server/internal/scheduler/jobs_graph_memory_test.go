@@ -16,7 +16,7 @@ import (
 
 func TestGraphMemoryConsolidationSkipsWhenReviewerNotGraph(t *testing.T) {
 	t.Setenv("MULTICA_MEMORY_TYPE", "")
-	res, err := GraphMemoryJobs(nil, nil).Handler(context.Background(), HandlerInput{})
+	res, err := GraphMemoryJobs(nil, nil, nil).Handler(context.Background(), HandlerInput{})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestGraphMemoryConsolidationBelowThreshold(t *testing.T) {
 		t.Fatalf("saveGraphConsolidationState: %v", err)
 	}
 
-	res, err := GraphMemoryJobs(nil, nil).Handler(context.Background(), HandlerInput{})
+	res, err := GraphMemoryJobs(nil, nil, nil).Handler(context.Background(), HandlerInput{})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -411,7 +411,7 @@ func TestResolveGraphMemoryProfile(t *testing.T) {
 }
 
 func TestGraphMemoryJobSpecValid(t *testing.T) {
-	job := GraphMemoryJobs(nil, nil)
+	job := GraphMemoryJobs(nil, nil, nil)
 	if err := job.validate(); err != nil {
 		t.Fatalf("validate: %v", err)
 	}
@@ -454,7 +454,7 @@ func TestGraphMemoryJobInertWithoutScopedWriterReady(t *testing.T) {
 // activation control is the per-workspace scoped-writer readiness gate.
 func TestGraphMemoryJobsSpecRequiresNoEnvGate(t *testing.T) {
 	t.Setenv("MULTICA_GRAPH_CONSOLIDATION_ENABLED", "")
-	spec := GraphMemoryJobs(nil, nil)
+	spec := GraphMemoryJobs(nil, nil, nil)
 	if spec.Name != JobNameGraphMemoryConsolidation || spec.Handler == nil {
 		t.Fatalf("graph memory job must register without any env switch: %+v", spec)
 	}

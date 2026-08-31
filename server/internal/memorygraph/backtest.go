@@ -19,6 +19,41 @@ type FullBacktestRunner interface {
 	RunExplore(ctx context.Context, version int, query string) (rounds int, found bool, err error)
 }
 
+// ScopedFullBacktestRunner binds an external backtest runner to the same
+// resolved consolidation identity as the candidate trajectory.
+type ScopedFullBacktestRunner struct {
+	runner FullBacktestRunner
+	scope  ProviderScope
+}
+
+func newScopedFullBacktestRunner(runner FullBacktestRunner, scope ProviderScope) (*ScopedFullBacktestRunner, error) {
+	if runner == nil {
+		return nil, fmt.Errorf("backtest: runner is required")
+	}
+	if err := validateProviderScope(scope, ProviderPurposeConsolidate); err != nil {
+		return nil, err
+	}
+	return &ScopedFullBacktestRunner{runner: runner, scope: scope}, nil
+}
+
+func providerScopeIdentityEqual(a, b ProviderScope) bool {
+	return a.WorkspaceID == b.WorkspaceID &&
+		a.Provider == b.Provider &&
+		a.Model == b.Model &&
+		a.Region == b.Region &&
+		a.PolicyVersion == b.PolicyVersion
+}
+
+func (r *ScopedFullBacktestRunner) RunExplore(ctx context.Context, version int, query string) (int, bool, error) {
+	if r == nil || r.runner == nil {
+		return 0, false, fmt.Errorf("backtest: scoped runner is not configured")
+	}
+	if err := validateProviderScope(r.scope, ProviderPurposeConsolidate); err != nil {
+		return 0, false, err
+	}
+	return r.runner.RunExplore(ctx, version, query)
+}
+
 // DefaultBacktestBaselineRounds is the n of the n-hop coverage check when a
 // backtest query carries no recorded baseline rounds (legacy regression
 // entries predate the baseline_rounds field, design Q13/A2).
@@ -46,10 +81,13 @@ type BacktestConfig struct {
 	// ColdStart disables statistical recall and rounds-regression gates while
 	// the adjacent query-log window is too small to provide a trustworthy baseline.
 	ColdStart bool
-	Runner    FullBacktestRunner
+	// Scope is the resolved consolidation identity for this evaluation. It is
+	// required when a confirmer is used without a runner.
+	Scope  ProviderScope
+	Runner *ScopedFullBacktestRunner
 	// Confirmer semantically verifies a replacement node when deterministic
 	// historical-node matching cannot satisfy an authoritative item.
-	Confirmer BacktestConfirmer
+	Confirmer *ScopedBacktestConfirmer
 	// MaxConfirmationCandidates caps semantic checks per item (default 200).
 	MaxConfirmationCandidates int
 	// RequireFullBacktest rejects a candidate when no runner is configured.
@@ -59,6 +97,33 @@ type BacktestConfig struct {
 // BacktestConfirmer semantically confirms that node fully expresses statement.
 type BacktestConfirmer interface {
 	ConfirmNode(ctx context.Context, statement string, node *Node) (bool, error)
+}
+
+// ScopedBacktestConfirmer binds semantic confirmation to the resolved
+// consolidation identity.
+type ScopedBacktestConfirmer struct {
+	confirmer BacktestConfirmer
+	scope     ProviderScope
+}
+
+func NewScopedBacktestConfirmer(confirmer BacktestConfirmer, scope ProviderScope) (*ScopedBacktestConfirmer, error) {
+	if confirmer == nil {
+		return nil, fmt.Errorf("backtest: confirmer is required")
+	}
+	if err := validateProviderScope(scope, ProviderPurposeConsolidate); err != nil {
+		return nil, err
+	}
+	return &ScopedBacktestConfirmer{confirmer: confirmer, scope: scope}, nil
+}
+
+func (c *ScopedBacktestConfirmer) ConfirmNode(ctx context.Context, statement string, node *Node) (bool, error) {
+	if c == nil || c.confirmer == nil {
+		return false, fmt.Errorf("backtest: scoped confirmer is not configured")
+	}
+	if err := validateProviderScope(c.scope, ProviderPurposeConsolidate); err != nil {
+		return false, err
+	}
+	return c.confirmer.ConfirmNode(ctx, statement, node)
 }
 
 // normalized fills zero/negative fields with defaults.
@@ -294,6 +359,38 @@ func NewBacktester(store *Store, cfg BacktestConfig) *Backtester {
 	return &Backtester{store: store, cfg: cfg.normalized()}
 }
 
+func (b *Backtester) validateProviderBindings() error {
+	var expected *ProviderScope
+	if b.cfg.Scope != (ProviderScope{}) {
+		if err := validateProviderScope(b.cfg.Scope, ProviderPurposeConsolidate); err != nil {
+			return err
+		}
+		expected = &b.cfg.Scope
+	}
+	if b.cfg.Runner != nil {
+		if err := validateProviderScope(b.cfg.Runner.scope, ProviderPurposeConsolidate); err != nil {
+			return err
+		}
+		if expected != nil && !providerScopeIdentityEqual(*expected, b.cfg.Runner.scope) {
+			return fmt.Errorf("backtest: runner scope identity does not match evaluation scope identity")
+		}
+		expected = &b.cfg.Runner.scope
+	}
+	if b.cfg.Confirmer == nil {
+		return nil
+	}
+	if err := validateProviderScope(b.cfg.Confirmer.scope, ProviderPurposeConsolidate); err != nil {
+		return err
+	}
+	if expected == nil {
+		return fmt.Errorf("backtest: confirmer scope identity requires an evaluation scope identity")
+	}
+	if !providerScopeIdentityEqual(*expected, b.cfg.Confirmer.scope) {
+		return fmt.Errorf("backtest: confirmer scope identity does not match evaluation scope identity")
+	}
+	return nil
+}
+
 // EvaluateCandidate runs the backtest and hard gates for one candidate.
 func (b *Backtester) EvaluateCandidate(ctx context.Context, version, parentVersion int, queries []*BacktestQuery) CandidateStats {
 	stats := CandidateStats{Version: version, Passed: true}
@@ -303,6 +400,10 @@ func (b *Backtester) EvaluateCandidate(ctx context.Context, version, parentVersi
 	}
 	if b.cfg.RequireFullBacktest && b.cfg.Runner == nil {
 		fail("full_backtest_runner_required")
+	}
+	if err := b.validateProviderBindings(); err != nil {
+		fail("%v", err)
+		return stats
 	}
 	g, err := LoadGraph(b.store, version)
 	if err != nil {

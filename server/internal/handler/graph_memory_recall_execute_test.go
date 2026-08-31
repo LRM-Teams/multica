@@ -134,11 +134,11 @@ func TestGraphMemoryRecallExecutionHappyPath(t *testing.T) {
 	backend := &scriptedRecallBackend{found: true, summary: "bounded server-side recall summary"}
 	h := newRecallEndpointHandler(root, &countingRecallSeeder{ids: []string{"recall-node"}})
 	h.GraphMemoryRecallExecutor = service.NewGraphMemoryRecallExecutor(
-		testPool, service.NewGraphMemoryDiveService(testPool),
-		func(context.Context, *service.GraphMemoryRecallPlan) (memorygraph.AgentBackend, error) {
+		testPool, service.NewGraphMemoryDiveService(testPool), graphMemoryTestProviderResolver("pi", "test-model"),
+		func(context.Context, service.ResolvedMemoryProvider) (memorygraph.AgentBackend, error) {
 			return backend, nil
 		},
-		nil, nil, "test-model",
+		nil, nil,
 	)
 	traceID := "trace-exec-" + uuid.NewString()[:8]
 	rec := doGraphMemoryRecall(t, h, util.UUIDToString(fx.workspaceID), fx.daemonID, graphMemoryRecallBody(fx, traceID, "dispatch retries"))
@@ -201,9 +201,9 @@ func TestGraphMemoryRecallExecutionMissFailureAndReplay(t *testing.T) {
 		}
 		backend := &scriptedRecallBackend{found: false, summary: "no match"}
 		h := newRecallEndpointHandler(root, &countingRecallSeeder{ids: []string{"miss-node"}})
-		h.GraphMemoryRecallExecutor = service.NewGraphMemoryRecallExecutor(testPool, service.NewGraphMemoryDiveService(testPool), func(context.Context, *service.GraphMemoryRecallPlan) (memorygraph.AgentBackend, error) {
+		h.GraphMemoryRecallExecutor = service.NewGraphMemoryRecallExecutor(testPool, service.NewGraphMemoryDiveService(testPool), graphMemoryTestProviderResolver("pi", "test-model"), func(context.Context, service.ResolvedMemoryProvider) (memorygraph.AgentBackend, error) {
 			return backend, nil
-		}, nil, nil, "test-model")
+		}, nil, nil)
 		rec := doGraphMemoryRecall(t, h, util.UUIDToString(fx.workspaceID), fx.daemonID, graphMemoryRecallBody(fx, "trace-miss-"+uuid.NewString()[:8], "nothing"))
 		if rec.Code != http.StatusAccepted {
 			t.Fatalf("status = %d body %s", rec.Code, rec.Body.String())
@@ -226,10 +226,10 @@ func TestGraphMemoryRecallExecutionMissFailureAndReplay(t *testing.T) {
 		fx := mustGraphMemoryRecallEndpointFixture(t, root)
 		h := newRecallEndpointHandler(root, &countingRecallSeeder{})
 		factoryCalls := 0
-		h.GraphMemoryRecallExecutor = service.NewGraphMemoryRecallExecutor(testPool, service.NewGraphMemoryDiveService(testPool), func(context.Context, *service.GraphMemoryRecallPlan) (memorygraph.AgentBackend, error) {
+		h.GraphMemoryRecallExecutor = service.NewGraphMemoryRecallExecutor(testPool, service.NewGraphMemoryDiveService(testPool), graphMemoryTestProviderResolver("pi", "test-model"), func(context.Context, service.ResolvedMemoryProvider) (memorygraph.AgentBackend, error) {
 			factoryCalls++
 			return nil, fmt.Errorf("provider unavailable")
-		}, nil, nil, "test-model")
+		}, nil, nil)
 		body := graphMemoryRecallBody(fx, "trace-failure-"+uuid.NewString()[:8], "q")
 		first := doGraphMemoryRecall(t, h, util.UUIDToString(fx.workspaceID), fx.daemonID, body)
 		if first.Code != http.StatusAccepted {
@@ -267,9 +267,9 @@ func TestGraphMemoryRecallExecutionKAndMissingPinnedVersion(t *testing.T) {
 		}
 		backend := &scriptedRecallBackend{found: true, summary: "parallel result"}
 		h := newRecallEndpointHandler(root, &countingRecallSeeder{ids: []string{"k-node"}})
-		h.GraphMemoryRecallExecutor = service.NewGraphMemoryRecallExecutor(testPool, service.NewGraphMemoryDiveService(testPool), func(context.Context, *service.GraphMemoryRecallPlan) (memorygraph.AgentBackend, error) {
+		h.GraphMemoryRecallExecutor = service.NewGraphMemoryRecallExecutor(testPool, service.NewGraphMemoryDiveService(testPool), graphMemoryTestProviderResolver("pi", "test-model"), func(context.Context, service.ResolvedMemoryProvider) (memorygraph.AgentBackend, error) {
 			return backend, nil
-		}, nil, nil, "test-model")
+		}, nil, nil)
 		rec := doGraphMemoryRecall(t, h, util.UUIDToString(fx.workspaceID), fx.daemonID, graphMemoryRecallBody(fx, "trace-k-"+uuid.NewString()[:8], "parallel"))
 		if rec.Code != http.StatusAccepted {
 			t.Fatalf("status = %d body %s", rec.Code, rec.Body.String())
@@ -296,10 +296,10 @@ func TestGraphMemoryRecallExecutionKAndMissingPinnedVersion(t *testing.T) {
 		if err := os.RemoveAll(memorygraph.NewStore(dir).VersionDir(plan.GraphVersion)); err != nil {
 			t.Fatal(err)
 		}
-		executor := service.NewGraphMemoryRecallExecutor(testPool, service.NewGraphMemoryDiveService(testPool), func(context.Context, *service.GraphMemoryRecallPlan) (memorygraph.AgentBackend, error) {
+		executor := service.NewGraphMemoryRecallExecutor(testPool, service.NewGraphMemoryDiveService(testPool), graphMemoryTestProviderResolver("pi", "test-model"), func(context.Context, service.ResolvedMemoryProvider) (memorygraph.AgentBackend, error) {
 			t.Fatal("backend must not run")
 			return nil, nil
-		}, nil, nil, "test-model")
+		}, nil, nil)
 		injection, err := executor.Execute(context.Background(), plan)
 		if err != nil || injection != nil {
 			t.Fatalf("Execute = (%v, %v), want (nil, nil)", injection, err)
@@ -326,9 +326,9 @@ func TestGraphMemoryRecallExecutionBoundsSummary(t *testing.T) {
 	}
 	backend := &scriptedRecallBackend{found: true, summary: strings.Repeat("界", 4001)}
 	h := newRecallEndpointHandler(root, &countingRecallSeeder{ids: []string{"bound-node"}})
-	h.GraphMemoryRecallExecutor = service.NewGraphMemoryRecallExecutor(testPool, service.NewGraphMemoryDiveService(testPool), func(context.Context, *service.GraphMemoryRecallPlan) (memorygraph.AgentBackend, error) {
+	h.GraphMemoryRecallExecutor = service.NewGraphMemoryRecallExecutor(testPool, service.NewGraphMemoryDiveService(testPool), graphMemoryTestProviderResolver("pi", "test-model"), func(context.Context, service.ResolvedMemoryProvider) (memorygraph.AgentBackend, error) {
 		return backend, nil
-	}, nil, nil, "test-model")
+	}, nil, nil)
 	rec := doGraphMemoryRecall(t, h, util.UUIDToString(fx.workspaceID), fx.daemonID, graphMemoryRecallBody(fx, "trace-bounds-"+uuid.NewString()[:8], "bounded"))
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status = %d body %s", rec.Code, rec.Body.String())

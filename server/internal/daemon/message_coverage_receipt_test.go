@@ -34,6 +34,31 @@ func TestMessageCoordinatorRequiresFixedInboxIdentity(t *testing.T) {
 	}
 }
 
+func TestMessageCoordinatorProviderRetryRestoresBatchAndBoundary(t *testing.T) {
+	coordinator := newCoverageTestCoordinator(t, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"})
+	first := acceptCoverageTestMessage(t, coordinator, "message-1", "channel:one", 1)
+	second := acceptCoverageTestMessage(t, coordinator, "message-2", "channel:one", 2)
+	if err := coordinator.MarkRead("channel:one", 2); err != nil {
+		t.Fatalf("MarkRead: %v", err)
+	}
+
+	if coordinator.beginProviderDeliveryRetry(nil) {
+		t.Fatal("empty provider retry batch was accepted")
+	}
+	if !coordinator.beginProviderDeliveryRetry([]protocol.AgentMessageProjection{second, first}) {
+		t.Fatal("provider retry batch was rejected")
+	}
+	if got := coordinator.Boundaries()["channel:one"]; got != 0 {
+		t.Fatalf("restored boundary = %d, want 0", got)
+	}
+	coordinator.mu.Lock()
+	restored := coordinator.pendingBatchLocked()
+	coordinator.mu.Unlock()
+	if !reflect.DeepEqual(restored, []protocol.AgentMessageProjection{first, second}) {
+		t.Fatalf("restored Pending = %+v", restored)
+	}
+}
+
 func acceptCoverageTestMessage(t *testing.T, coordinator *MessageCoordinator, id, target string, seq int64) protocol.AgentMessageProjection {
 	t.Helper()
 	delivery := testDelivery(id, target, seq, "delivery-"+id)

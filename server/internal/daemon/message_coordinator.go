@@ -110,6 +110,7 @@ type MessageCoordinator struct {
 	coverageTTL         time.Duration
 	coverageCapacity    int
 	closed              bool
+	providerRetryState  providerDeliveryRetryState
 }
 
 // MessageSendFreshness is the local preflight result for one target.  The
@@ -126,6 +127,17 @@ type MessageSendFreshness struct {
 }
 
 type pendingNoticeCommitState uint8
+
+type providerDeliveryRetryState string
+
+const (
+	providerDeliveryRetryIdle      providerDeliveryRetryState = "idle"
+	providerDeliveryRetryQueued    providerDeliveryRetryState = "queued"
+	providerDeliveryRetryReplacing providerDeliveryRetryState = "replacing"
+	providerDeliveryRetryFlushing  providerDeliveryRetryState = "flushing"
+	providerDeliveryRetrySucceeded providerDeliveryRetryState = "succeeded"
+	providerDeliveryRetryFailed    providerDeliveryRetryState = "failed"
+)
 
 const (
 	pendingNoticeCommitAwaiting pendingNoticeCommitState = iota
@@ -161,6 +173,7 @@ func NewMessageCoordinator(key InboxKey, agentRoot string, deliver RuntimeMessag
 		coverageNow:         time.Now,
 		coverageTTL:         coverageReceiptDefaultTTL,
 		coverageCapacity:    coverageReceiptDefaultCapacity,
+		providerRetryState:  providerDeliveryRetryIdle,
 	}, nil
 }
 
@@ -299,6 +312,70 @@ func (c *MessageCoordinator) Flush(ctx context.Context) error {
 	return err
 }
 
+// flushWithResultLocked runs a delivery while the coordinator's operation
+// owner is held. Callers that already serialize recovery with other delivery
+// operations use this form to keep restoration and the replacement Flush
+// indivisible.
+func (c *MessageCoordinator) flushWithResultLocked(ctx context.Context, scheduleBusyNotice bool) error {
+	_, err := c.flushWithResultBody(ctx, scheduleBusyNotice)
+	return err
+}
+
+// beginProviderDeliveryRetry records the explicit replacement lifecycle and restores
+// the failed batch. Only one replacement may own the batch at a time.
+func (c *MessageCoordinator) beginProviderDeliveryRetry(messages []protocol.AgentMessageProjection) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed || len(messages) == 0 || c.providerRetryState == providerDeliveryRetryQueued || c.providerRetryState == providerDeliveryRetryReplacing || c.providerRetryState == providerDeliveryRetryFlushing {
+		return false
+	}
+	firstPendingSeq := make(map[string]int64)
+	for _, message := range messages {
+		if message.Target == "" || message.Seq <= 0 {
+			continue
+		}
+		if c.pending[message.Target] == nil {
+			c.pending[message.Target] = make(map[int64]protocol.AgentMessageProjection)
+		}
+		c.pending[message.Target][message.Seq] = message
+		c.accepted[messageIdentityKey(message)] = struct{}{}
+		if first, ok := firstPendingSeq[message.Target]; !ok || message.Seq < first {
+			firstPendingSeq[message.Target] = message.Seq
+		}
+	}
+	if len(firstPendingSeq) == 0 {
+		return false
+	}
+	for target, first := range firstPendingSeq {
+		if c.boundaries[target] >= first {
+			c.boundaries[target] = first - 1
+		}
+	}
+	c.pendingGeneration++
+	c.providerRetryState = providerDeliveryRetryQueued
+	return true
+}
+
+func (c *MessageCoordinator) advanceProviderDeliveryRetry(from, to providerDeliveryRetryState) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.providerRetryState != from {
+		return false
+	}
+	c.providerRetryState = to
+	return true
+}
+
+func (c *MessageCoordinator) finishProviderDeliveryRetry(success bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if success {
+		c.providerRetryState = providerDeliveryRetrySucceeded
+	} else {
+		c.providerRetryState = providerDeliveryRetryFailed
+	}
+}
+
 // NotifyPendingAfterTurn schedules a content-free Notice when Pending remains
 // after a resident turn ends. Raft-aligned: do not auto-deliver the next body
 // batch solely because Pending exists. Body delivery stays on idle Accept→Flush
@@ -362,7 +439,10 @@ func (c *MessageCoordinator) flushWithResult(ctx context.Context, scheduleBusyNo
 		return false, errRuntimeMessageDeliveryInProgress
 	}
 	defer c.deliveryMu.Unlock()
+	return c.flushWithResultBody(ctx, scheduleBusyNotice)
+}
 
+func (c *MessageCoordinator) flushWithResultBody(ctx context.Context, scheduleBusyNotice bool) (bool, error) {
 	delivered := false
 	for {
 		c.mu.Lock()

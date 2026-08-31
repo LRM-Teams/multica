@@ -237,12 +237,57 @@ func (runner *WorkspaceDaemon) acceptMessageDelivery(ctx context.Context, delive
 			runner.recoverStalledRuntimeForQueuedMessage(coordinator, delivery.AgentID, runtimeID)
 			return result, nil
 		}
+		if isRetryableResidentProviderFailure(err) {
+			// Native acceptance can race a provider child exit. Keep the server
+			// delivery pending locally and retry after the resident process is
+			// replaced; reporting provider_rejected here would make the server
+			// persist a failure reply before the retry gets a chance to succeed.
+			pending := coordinator.PendingSnapshot()
+			go runner.retryQueuedMessageAfterProviderFailure(coordinator, delivery.AgentID, runtimeID, pending)
+			return result, nil
+		}
 		return messageDeliveryAcceptance{}, fmt.Errorf("%w: %v", errDeliveryProviderRejected, err)
 	}
 	runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
 		runner.config.WorkspaceID, runtimeID, delivery, "context_boundary_advanced", "accepted", "",
 	))
 	return result, nil
+}
+
+func (runner *WorkspaceDaemon) retryQueuedMessageAfterProviderFailure(coordinator *MessageCoordinator, agentID, runtimeID string, messages []protocol.AgentMessageProjection) {
+	if runner == nil || coordinator == nil {
+		return
+	}
+	coordinator.deliveryMu.Lock()
+	defer coordinator.deliveryMu.Unlock()
+	if !coordinator.beginProviderDeliveryRetry(messages) {
+		return
+	}
+	if !coordinator.advanceProviderDeliveryRetry(providerDeliveryRetryQueued, providerDeliveryRetryReplacing) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), canonicalIdleAcceptTimeout+10*time.Second)
+	defer cancel()
+	if err := runner.ensureResidentRuntime(ctx, agentID, runtimeID, nil); err != nil {
+		coordinator.finishProviderDeliveryRetry(false)
+		if runner.logger != nil {
+			runner.logger.Warn("resident provider replacement failed", "agent_id", agentID, "runtime_id", runtimeID, "error", err)
+		}
+		return
+	}
+	if !coordinator.advanceProviderDeliveryRetry(providerDeliveryRetryReplacing, providerDeliveryRetryFlushing) {
+		coordinator.finishProviderDeliveryRetry(false)
+		return
+	}
+	if err := coordinator.flushWithResultLocked(ctx, true); err != nil {
+		coordinator.finishProviderDeliveryRetry(false)
+		if runner.logger == nil {
+			return
+		}
+		runner.logger.Warn("queued Message retry after provider failure failed", "agent_id", agentID, "runtime_id", runtimeID, "error", err)
+		return
+	}
+	coordinator.finishProviderDeliveryRetry(true)
 }
 
 // recoverStalledRuntimeForQueuedMessage asks the resident pool to terminate a

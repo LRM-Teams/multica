@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -1207,6 +1208,14 @@ func (c *codexClient) writeLine(data []byte) error {
 	defer c.writeMu.Unlock()
 	_, err := c.stdin.Write(data)
 	return err
+}
+
+func (c *codexClient) closeInput() {
+	// Closing stdin must not wait for a blocked Write. Process termination is
+	// responsible for interrupting a provider that stopped reading its input.
+	if closer, ok := c.stdin.(io.Closer); ok {
+		_ = closer.Close()
+	}
 }
 
 func (c *codexClient) setTurnError(msg string) {

@@ -35,8 +35,9 @@ func (d *Daemon) openMessageCoordinator(key InboxKey, runtimeID string) (*Messag
 	if err := ensureMulticaAgentRoot(agentRoot); err != nil {
 		return nil, fmt.Errorf("create Agent root for Message coordinator: %w", err)
 	}
-	coordinator, err := NewMessageCoordinator(key, agentRoot, func(ctx context.Context, messages []protocol.AgentMessageProjection) error {
-		return d.deliverIdleMessageBatch(ctx, key.AgentID, runtimeID, messages)
+	var coordinator *MessageCoordinator
+	coordinator, err = NewMessageCoordinator(key, agentRoot, func(ctx context.Context, messages []protocol.AgentMessageProjection) error {
+		return d.deliverIdleMessageBatchWithCoordinator(ctx, key.AgentID, runtimeID, messages, coordinator)
 	}, nil)
 	if err != nil {
 		return nil, err
@@ -103,6 +104,10 @@ func mixedRunMessageBatchIdentity(messages []protocol.AgentMessageProjection) (s
 }
 
 func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID string, messages []protocol.AgentMessageProjection) error {
+	return d.deliverIdleMessageBatchWithCoordinator(ctx, agentID, runtimeID, messages, nil)
+}
+
+func (d *Daemon) deliverIdleMessageBatchWithCoordinator(ctx context.Context, agentID, runtimeID string, messages []protocol.AgentMessageProjection, coordinator *MessageCoordinator) error {
 	runID, runAgentID, turnID, mixed := mixedRunMessageBatchIdentity(messages)
 	directedRunID, directedTurnID := runID, turnID
 	if directedRunID == "" {
@@ -115,6 +120,7 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 	workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
 	d.mu.Unlock()
 	runner, _ := d.ensureWorkspaceDaemon(workspaceID)
+	coordinatorOK := coordinator != nil
 	preparedMessages, memoryTask, err := d.prepareResidentMessageBatch(ctx, agentID, runtimeID, messages)
 	if err != nil {
 		return err
@@ -217,6 +223,15 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 			}
 		}
 		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, preparedMessages, "provider_finished", outcome, reasonCode)
+		if turnErr != nil && isRetryableResidentProviderFailure(turnErr) && coordinatorOK {
+			// The provider can die after native acceptance (notably while writing
+			// turn/start to a stale stdin). The coordinator has already advanced
+			// its local boundary, so put the exact batch back before replacing the
+			// provider. Do not write a failure assistant row for this transport
+			// failure; the replacement owns the single user-visible reply.
+			go runner.retryQueuedMessageAfterProviderFailure(coordinator, agentID, runtimeID, preparedMessages)
+			return
+		}
 		if d.client != nil && strings.TrimSpace(d.client.baseURL) != "" {
 			reportCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			if turnErr == nil {
@@ -636,6 +651,19 @@ func standaloneAssistantFailureReply(err error) string {
 		}
 	}
 	return "I could not complete that reply (" + detail + "). Please try again."
+}
+
+func isRetryableResidentProviderFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	detail := strings.ToLower(err.Error())
+	for _, marker := range []string{"broken pipe", "closed pipe", "use of closed network connection", "process exited", "app-server process exited", "unexpected eof"} {
+		if strings.Contains(detail, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func (d *Daemon) writebackStandaloneChatTurn(ctx context.Context, sessionID, runtimeID string, turnErr error, capture *agent.ResidentTurnCapture, streamed string) {

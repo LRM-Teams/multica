@@ -434,7 +434,7 @@ export function LoginPage({
                 type="email"
                 placeholder={t(($) => $.common.email_placeholder)}
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                onValueChange={setEmail}
                 autoFocus
                 required
               />

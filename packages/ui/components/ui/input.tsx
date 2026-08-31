@@ -3,7 +3,12 @@ import { Input as InputPrimitive } from "@base-ui/react/input"
 
 import { cn } from "@multica/ui/lib/utils"
 
-function Input({ className, type, ...props }: React.ComponentProps<"input">) {
+type InputProps = Omit<React.ComponentProps<"input">, "onChange"> & {
+  onChange?: (event: React.ChangeEvent<HTMLInputElement>) => void
+  onValueChange?: (value: string) => void
+}
+
+function Input({ className, type, onChange, onValueChange, ...props }: InputProps) {
   return (
     <InputPrimitive
       type={type}
@@ -13,6 +18,10 @@ function Input({ className, type, ...props }: React.ComponentProps<"input">) {
         className
       )}
       {...props}
+      onValueChange={(value) => {
+        onValueChange?.(value)
+        onChange?.({ target: { value } } as React.ChangeEvent<HTMLInputElement>)
+      }}
     />
   )
 }

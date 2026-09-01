@@ -233,7 +233,8 @@ jobs:
           # s89 currently runs Docker Compose 2.32.1, whose `run` command has
           # no `--pull` flag. Pull every application image before stopping the
           # live backend so a slow registry cannot extend the cutover window.
-          compose pull frontend backend
+          compose pull frontend
+          compose pull backend
           # Migration 339 removes the retired agent_start_intent table. Stop
           # the old backend before applying migrations so it can never run
           # against the new schema during the coordinated protocol cutover.

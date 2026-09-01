@@ -78,7 +78,7 @@ func (h *Handler) HandleWorkspaceDaemonFrame(ctx context.Context, identity daemo
 		if err := h.persistComputerReadyMetadata(ctx, identity.DaemonID, ready); err != nil {
 			return err
 		}
-		if err := h.recordWorkspaceDaemonReady(ctx, identity, daemonInstanceID, ready.RunningAgents); err != nil {
+		if err := h.recordWorkspaceDaemonReady(ctx, identity, daemonInstanceID, ready); err != nil {
 			return err
 		}
 		h.publish(protocol.EventComputerStatus, identity.WorkspaceID, "system", "", map[string]any{
@@ -113,6 +113,13 @@ func (h *Handler) HandleWorkspaceDaemonFrame(ctx context.Context, identity daemo
 			return err
 		}
 		if handled {
+			return nil
+		}
+		if status.Status == protocol.AgentStatusActive {
+			h.runnerStartRetries().clear(identity.WorkspaceID, status.AgentID)
+		}
+		if status.Status == protocol.AgentStatusInactive && status.StartFailure != nil {
+			h.scheduleRunnerStartRetry(identity, status.AgentID, *status.StartFailure)
 			return nil
 		}
 		if status.Status == protocol.AgentStatusInactive && h.DaemonHub != nil {
@@ -369,12 +376,34 @@ func (h *Handler) recordMixedRunActivityTransition(ctx context.Context, identity
 
 // recordWorkspaceDaemonReady fences only live observations from an older
 // Computer process. Persisted Activity is best-effort history, not lifecycle.
-func (h *Handler) recordWorkspaceDaemonReady(ctx context.Context, identity daemonws.ClientIdentity, daemonInstanceID string, runningAgentIDs []string) error {
+func (h *Handler) recordWorkspaceDaemonReady(ctx context.Context, identity daemonws.ClientIdentity, daemonInstanceID string, ready protocol.WorkspaceReadyPayload) error {
 	return h.runnerPresenceLocked(func() error {
 		if _, err := util.ParseUUID(identity.WorkspaceID); err != nil {
 			return errors.New("invalid Runner workspace identity")
 		}
-		h.observations().forgetOtherInstances(identity.WorkspaceID, identity.DaemonID, daemonInstanceID)
+		if ready.ProcessSnapshotVersion == 0 {
+			h.observations().forgetOtherInstances(identity.WorkspaceID, identity.DaemonID, daemonInstanceID)
+			return nil
+		}
+		runtimeScope := make(map[string]struct{}, len(identity.RuntimeIDs))
+		for _, runtimeID := range identity.RuntimeIDs {
+			runtimeScope[runtimeID] = struct{}{}
+		}
+		observed := make([]runnerObservedAgent, 0, len(ready.AgentProcesses))
+		for _, process := range ready.AgentProcesses {
+			if _, allowed := runtimeScope[process.RuntimeID]; !allowed {
+				return errors.New("Runner ready process Runtime is outside connection scope")
+			}
+			status := runnerObservedStatusManagedStarting
+			if process.QueueState == protocol.AgentStartQueueRunning {
+				status = protocol.AgentStatusActive
+			}
+			observed = append(observed, runnerObservedAgent{
+				workspaceID: identity.WorkspaceID, daemonID: identity.DaemonID, daemonInstanceID: daemonInstanceID,
+				agentID: process.AgentID, runtimeID: process.RuntimeID, status: status,
+			})
+		}
+		h.observations().replaceInstance(identity.WorkspaceID, identity.DaemonID, daemonInstanceID, observed)
 		return nil
 	})
 }
@@ -747,7 +776,6 @@ func (h *Handler) runnerActivityPresentation(ctx context.Context, workspaceID, a
 
 	return response, nil
 }
-
 
 func (h *Handler) runnerActivityAgentScope(ctx context.Context, workspaceIDText, agentIDText string) (pgtype.UUID, pgtype.UUID, pgtype.UUID, error) {
 	workspaceID, err := util.ParseUUID(workspaceIDText)

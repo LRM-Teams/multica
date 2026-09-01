@@ -94,6 +94,8 @@ type managedAgentProcess struct {
 	transitions       map[string]*openLifecycleTransition
 	startupDone       chan struct{}
 	startupSettled    sync.Once
+	startupCanceled   chan struct{}
+	startupCancelOnce sync.Once
 }
 
 type openLifecycleTransition struct {
@@ -125,12 +127,14 @@ func (m *agentProcessManager) Close() {
 	}
 	m.mu.Lock()
 	for _, managed := range m.agents {
+		managed.cancelStartup()
 		if managed.startupDone != nil {
 			managed.startupSettled.Do(func() { close(managed.startupDone) })
 		}
 	}
 	for _, managed := range m.stopping {
 		if managed != nil && managed.startupDone != nil {
+			managed.cancelStartup()
 			managed.startupSettled.Do(func() { close(managed.startupDone) })
 		}
 	}
@@ -171,7 +175,7 @@ func (m *agentProcessManager) startWithDisposition(request agentProcessStartRequ
 	managed := &managedAgentProcess{
 		agentID: request.AgentID, runtimeID: request.RuntimeID, agentInstanceID: agentInstanceID, managed: true,
 		readinessPolicy: request.ReadinessPolicy, deliveryMode: request.DeliveryMode,
-		transitions: make(map[string]*openLifecycleTransition), startupDone: make(chan struct{}),
+		transitions: make(map[string]*openLifecycleTransition), startupDone: make(chan struct{}), startupCanceled: make(chan struct{}),
 	}
 	m.agents[request.AgentID] = managed
 	m.beginProcessLocked(managed)
@@ -205,7 +209,7 @@ func (m *agentProcessManager) RestoreIdle(agentID, runtimeID, previousAgentInsta
 	managed := &managedAgentProcess{
 		agentID: agentID, runtimeID: runtimeID, agentInstanceID: agentInstanceID, managed: true,
 		readinessPolicy: agentRuntimeReadinessFirstEvent,
-		transitions:     make(map[string]*openLifecycleTransition), startupDone: make(chan struct{}),
+		transitions:     make(map[string]*openLifecycleTransition), startupDone: make(chan struct{}), startupCanceled: make(chan struct{}),
 	}
 	m.agents[agentID] = managed
 	m.beginProcessLocked(managed)
@@ -379,6 +383,22 @@ func (m *agentProcessManager) managedStartupDone(callback agentProcessCallback) 
 	return managed.startupDone, true
 }
 
+func (m *agentProcessManager) managedStartupCanceled(callback agentProcessCallback) (<-chan struct{}, bool) {
+	if m == nil {
+		return nil, false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	managed := m.agents[callback.AgentID]
+	if managed == nil || managed.agentInstanceID != callback.AgentInstanceID {
+		managed = m.stopping[callback.AgentID]
+	}
+	if managed == nil || managed.agentInstanceID != callback.AgentInstanceID || managed.startupCanceled == nil {
+		return nil, false
+	}
+	return managed.startupCanceled, true
+}
+
 func (m *agentProcessManager) ProcessSpawned(callback agentProcessCallback) error {
 	return m.processSpawned(callback, nil)
 }
@@ -550,7 +570,7 @@ func (m *agentProcessManager) ReplaceProcessForImmediateRestart(callback agentPr
 	replacement := &managedAgentProcess{
 		agentID: managed.agentID, runtimeID: managed.runtimeID, agentInstanceID: m.newID(), managed: true,
 		readinessPolicy: managed.readinessPolicy, deliveryMode: managed.deliveryMode,
-		transitions: make(map[string]*openLifecycleTransition), startupDone: make(chan struct{}),
+		transitions: make(map[string]*openLifecycleTransition), startupDone: make(chan struct{}), startupCanceled: make(chan struct{}),
 	}
 	m.agents[managed.agentID] = replacement
 	m.beginProcessLocked(replacement)
@@ -606,6 +626,25 @@ func (m *agentProcessManager) RunningAgentIDs() []string {
 	return ids
 }
 
+func (m *agentProcessManager) ManagedProcessSnapshots() []protocol.AgentProcessSnapshot {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	snapshots := make([]protocol.AgentProcessSnapshot, 0, len(m.agents))
+	for _, managed := range m.agents {
+		if managed == nil || !managed.managed {
+			continue
+		}
+		snapshots = append(snapshots, protocol.AgentProcessSnapshot{
+			AgentID: managed.agentID, RuntimeID: managed.runtimeID, QueueState: managed.queueState,
+		})
+	}
+	sort.Slice(snapshots, func(i, j int) bool { return snapshots[i].AgentID < snapshots[j].AgentID })
+	return snapshots
+}
+
 func (m *agentProcessManager) acceptanceLocked(managed *managedAgentProcess, queueState string) agentProcessStartAcceptance {
 	return agentProcessStartAcceptance{AgentID: managed.agentID, AgentInstanceID: managed.agentInstanceID, QueueState: queueState}
 }
@@ -625,9 +664,17 @@ func (m *agentProcessManager) readyLocked(managed *managedAgentProcess) {
 }
 
 func (m *agentProcessManager) stopLocked(managed *managedAgentProcess) {
+	managed.cancelStartup()
 	m.closeAllLocked(managed, "terminal")
 	managed.managed = false
 	delete(m.agents, managed.agentID)
+}
+
+func (managed *managedAgentProcess) cancelStartup() {
+	if managed == nil || managed.startupCanceled == nil {
+		return
+	}
+	managed.startupCancelOnce.Do(func() { close(managed.startupCanceled) })
 }
 
 func (m *agentProcessManager) currentLocked(callback agentProcessCallback, requireProcess bool) (*managedAgentProcess, error) {

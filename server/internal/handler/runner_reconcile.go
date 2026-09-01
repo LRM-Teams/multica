@@ -29,6 +29,12 @@ type runnerReconcileAction struct {
 	payload   any
 }
 
+// runnerObservedStatusManagedStarting is seeded only by a versioned ready
+// snapshot. It means the current daemon instance owns the provider launch, so
+// reconnect reconciliation must not re-dispatch it, but presence stays offline
+// until the daemon reports AgentStatusActive.
+const runnerObservedStatusManagedStarting = "managed_starting"
+
 // reduceRunnerLaunches is the pure desired-vs-observed launch reducer. Its
 // interface contains only Raft's placement and residency facts; database,
 // websocket, setup, reconnect, and runtime-update details stay in adapters.
@@ -61,8 +67,8 @@ func reduceRunnerLaunches(desired []runnerDesiredLaunch, observed []runnerObserv
 		// server launch fence. A mismatched accepted start must therefore be
 		// stopped before the replacement can be admitted. A matching accepted
 		// start is re-driven below so an upgrade successor can finish startup.
-		occupiesFence := observed && (have.status == "accepted" || have.status == protocol.AgentStatusActive)
-		running := occupiesFence && have.status == protocol.AgentStatusActive
+		occupiesFence := observed && (have.status == "accepted" || have.status == protocol.AgentStatusActive || have.status == runnerObservedStatusManagedStarting)
+		launchOwned := occupiesFence && (have.status == protocol.AgentStatusActive || have.status == runnerObservedStatusManagedStarting)
 		mismatched := occupiesFence && (!wanted || have.runtimeID != want.runtimeID)
 		if mismatched {
 			actions = append(actions, runnerReconcileAction{eventType: protocol.EventDaemonAgentStop, payload: protocol.AgentStopPayload{AgentID: have.agentID}})
@@ -70,7 +76,7 @@ func reduceRunnerLaunches(desired []runnerDesiredLaunch, observed []runnerObserv
 		// Runtime replacement is two phase: stop the observed launch first and
 		// dispatch the desired start only after an inactive report removes it
 		// from the observed set on the next reconcile.
-		if wanted && !mismatched && !running {
+		if wanted && !mismatched && !launchOwned {
 			actions = append(actions, runnerReconcileAction{eventType: protocol.EventDaemonAgentStart, payload: protocol.AgentStartPayload{AgentID: want.agentID, RuntimeID: want.runtimeID, Config: protocol.AgentStartConfig{SessionID: want.sessionID}}})
 		}
 	}
@@ -113,7 +119,7 @@ func (h *Handler) reconcileWorkspaceDaemonLaunches(ctx context.Context, identity
 		if skip[obs.agentID] {
 			continue
 		}
-		if obs.status != "accepted" && obs.status != protocol.AgentStatusActive {
+		if obs.status != "accepted" && obs.status != protocol.AgentStatusActive && obs.status != runnerObservedStatusManagedStarting {
 			continue
 		}
 		observed = append(observed, runnerObservedLaunch{agentID: obs.agentID, runtimeID: obs.runtimeID, status: obs.status})

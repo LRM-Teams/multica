@@ -978,7 +978,7 @@ func TestWorkspaceDaemonDuplicateStartDoesNotSpawnProviderTwice(t *testing.T) {
 func TestWorkspaceDaemonFailedProviderStartPublishesInactiveOnCurrentConnection(t *testing.T) {
 	// An accepted start that never becomes Active must not look like residency.
 	// After upgrade the server keeps the desired launch; inactive is what
-	// lets reconcile send agent:start again.
+	// lets reconcile schedule a classified retry without a hot loop.
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	got := make(chan protocol.AgentStatusPayload, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1044,6 +1044,9 @@ func TestWorkspaceDaemonFailedProviderStartPublishesInactiveOnCurrentConnection(
 	case status := <-got:
 		if status.AgentID != "agent-1" || status.Status != protocol.AgentStatusInactive {
 			t.Fatalf("failed start status = %+v, want inactive launch-1", status)
+		}
+		if status.StartFailure == nil || status.StartFailure.RetryClass != protocol.AgentStartRetryTransient {
+			t.Fatalf("failed start classification = %+v, want transient", status.StartFailure)
 		}
 	case <-ctx.Done():
 		t.Fatal("failed provider start did not publish inactive status")

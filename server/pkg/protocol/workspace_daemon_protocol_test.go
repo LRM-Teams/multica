@@ -73,3 +73,35 @@ func TestAgentActivityWireCarriesOptionalTiming(t *testing.T) {
 		t.Fatalf("wire %s should omit absent timing evidence", bare)
 	}
 }
+
+func TestWorkspaceReadyValidatesManagedProcessSnapshot(t *testing.T) {
+	payload := WorkspaceReadyPayload{
+		WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1",
+		ActiveCapabilities:     []string{DaemonCapabilityWorkspaceDaemonAgentProcess},
+		ProcessSnapshotVersion: AgentProcessSnapshotV1,
+		AgentProcesses: []AgentProcessSnapshot{{
+			AgentID: "agent-1", RuntimeID: "runtime-1", QueueState: AgentStartQueueRunning,
+		}},
+	}
+	if err := payload.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	payload.AgentProcesses = append(payload.AgentProcesses, payload.AgentProcesses[0])
+	if err := payload.Validate(); err == nil {
+		t.Fatal("duplicate managed Agent process snapshot was accepted")
+	}
+}
+
+func TestAgentStatusFailureRequiresInactiveLifecycle(t *testing.T) {
+	payload := AgentStatusPayload{
+		AgentID: "agent-1", Status: AgentStatusInactive,
+		StartFailure: &AgentStartFailure{ReasonCode: "provider_auth_required", RetryClass: AgentStartRetryTerminal},
+	}
+	if err := payload.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	payload.Status = AgentStatusActive
+	if err := payload.Validate(); err == nil {
+		t.Fatal("active lifecycle status carried a start failure")
+	}
+}

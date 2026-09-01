@@ -194,6 +194,25 @@ func (s *runnerObservationStore) forgetOtherInstances(workspaceID, daemonID, kee
 	}
 }
 
+func (s *runnerObservationStore) replaceInstance(workspaceID, daemonID, daemonInstanceID string, observations []runnerObservedAgent) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for scope := range s.notes {
+		if scope.workspaceID == workspaceID && scope.daemonID == daemonID {
+			delete(s.notes, scope)
+		}
+	}
+	for _, observation := range observations {
+		if observation.workspaceID != workspaceID || observation.daemonID != daemonID || observation.daemonInstanceID != daemonInstanceID {
+			continue
+		}
+		s.writeLocked(observation)
+	}
+}
+
 func (s *runnerObservationStore) findLocked(workspaceID, agentID string) (runnerObservedAgent, bool) {
 	for scope, agents := range s.notes {
 		if scope.workspaceID != workspaceID {

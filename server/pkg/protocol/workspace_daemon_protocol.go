@@ -39,6 +39,10 @@ const (
 	AgentStartQueueRunning  = "running"
 	AgentStartQueueRebound  = "rebound"
 
+	AgentStartRetryTransient = "transient"
+	AgentStartRetryTerminal  = "terminal"
+	AgentProcessSnapshotV1   = 1
+
 	ActivityKindOnline   = "online"
 	ActivityKindThinking = "thinking"
 	ActivityKindWorking  = "working"
@@ -107,6 +111,18 @@ type WorkspaceReadyPayload struct {
 	MachineID          string   `json:"machineId,omitempty"`
 	ActiveCapabilities []string `json:"activeCapabilities,omitempty"`
 	RunningAgents      []string `json:"runningAgents,omitempty"`
+	// ProcessSnapshotVersion makes an empty snapshot distinguishable from a
+	// legacy daemon that does not report process state at all.
+	ProcessSnapshotVersion int                    `json:"processSnapshotVersion,omitempty"`
+	AgentProcesses         []AgentProcessSnapshot `json:"agentProcesses,omitempty"`
+}
+
+// AgentProcessSnapshot is the daemon-owned launch state used to seed server
+// observations before reconnect reconciliation runs.
+type AgentProcessSnapshot struct {
+	AgentID    string `json:"agentId"`
+	RuntimeID  string `json:"runtimeId"`
+	QueueState string `json:"queueState"`
 }
 
 // WorkspacePingPayload and WorkspacePongPayload are connection
@@ -308,8 +324,16 @@ type AgentWorkspaceResetResultPayload struct {
 // AgentStatusPayload is lifecycle management state, not a user Activity
 // label. active is reported only after a live provider process exists.
 type AgentStatusPayload struct {
-	AgentID string `json:"agentId"`
-	Status  string `json:"status"`
+	AgentID      string             `json:"agentId"`
+	Status       string             `json:"status"`
+	StartFailure *AgentStartFailure `json:"startFailure,omitempty"`
+}
+
+// AgentStartFailure classifies a failed provider launch without exposing raw
+// provider errors or credentials on the daemon protocol.
+type AgentStartFailure struct {
+	ReasonCode string `json:"reasonCode"`
+	RetryClass string `json:"retryClass"`
 }
 
 // AgentSessionPayload reports a provider session independently from process,
@@ -417,6 +441,25 @@ func (p WorkspaceReadyPayload) Validate() error {
 		}
 		running[agentID] = struct{}{}
 	}
+	if p.ProcessSnapshotVersion != 0 && p.ProcessSnapshotVersion != AgentProcessSnapshotV1 {
+		return fmt.Errorf("unsupported Agent process snapshot version %d", p.ProcessSnapshotVersion)
+	}
+	if p.ProcessSnapshotVersion == 0 && len(p.AgentProcesses) > 0 {
+		return fmt.Errorf("Agent process snapshot version is required")
+	}
+	processes := make(map[string]struct{}, len(p.AgentProcesses))
+	for _, process := range p.AgentProcesses {
+		if err := validateRequiredIDs(process.AgentID, process.RuntimeID); err != nil {
+			return fmt.Errorf("invalid managed Agent process snapshot")
+		}
+		if !isOneOf(process.QueueState, AgentStartQueueStarting, AgentStartQueueRunning, AgentStartQueueRebound) {
+			return fmt.Errorf("invalid managed Agent process queue state %q", process.QueueState)
+		}
+		if _, duplicate := processes[process.AgentID]; duplicate {
+			return fmt.Errorf("duplicate managed Agent process %q", process.AgentID)
+		}
+		processes[process.AgentID] = struct{}{}
+	}
 	return nil
 }
 
@@ -470,6 +513,18 @@ func (p AgentStatusPayload) Validate() error {
 	}
 	if !isOneOf(p.Status, AgentStatusActive, AgentStatusInactive) {
 		return fmt.Errorf("invalid agent status %q", p.Status)
+	}
+	if p.StartFailure == nil {
+		return nil
+	}
+	if p.Status != AgentStatusInactive {
+		return fmt.Errorf("Agent start failure requires inactive status")
+	}
+	if err := validateRequiredIDs(p.StartFailure.ReasonCode); err != nil {
+		return fmt.Errorf("Agent start failure reason is required")
+	}
+	if !isOneOf(p.StartFailure.RetryClass, AgentStartRetryTransient, AgentStartRetryTerminal) {
+		return fmt.Errorf("invalid Agent start retry class %q", p.StartFailure.RetryClass)
 	}
 	return nil
 }

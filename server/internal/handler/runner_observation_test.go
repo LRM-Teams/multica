@@ -50,3 +50,19 @@ func TestRunnerObservationStoreDiesWithInstance(t *testing.T) {
 		t.Fatal("current instance observation survived disconnect")
 	}
 }
+
+func TestRunnerObservationStoreReplacesInstanceFromReadySnapshot(t *testing.T) {
+	store := newRunnerObservationStore()
+	store.putStatus("ws", "daemon", "instance", "stale-agent", "runtime-old", protocol.AgentStatusActive)
+	store.replaceInstance("ws", "daemon", "instance", []runnerObservedAgent{{
+		workspaceID: "ws", daemonID: "daemon", daemonInstanceID: "instance",
+		agentID: "running-agent", runtimeID: "runtime-new", status: protocol.AgentStatusActive,
+	}})
+	if _, ok := store.get("ws", "stale-agent"); ok {
+		t.Fatal("stale same-instance observation survived ready snapshot replacement")
+	}
+	obs, ok := store.get("ws", "running-agent")
+	if !ok || obs.runtimeID != "runtime-new" || obs.status != protocol.AgentStatusActive {
+		t.Fatalf("ready snapshot observation=%+v ok=%v", obs, ok)
+	}
+}

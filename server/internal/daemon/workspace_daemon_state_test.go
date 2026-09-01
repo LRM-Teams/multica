@@ -108,6 +108,18 @@ func TestWorkspaceDaemonConnectionSerializesConcurrentWrites(t *testing.T) {
 	}
 }
 
+func TestWorkspaceDaemonReconnectBackoffResetsOnlyAfterStableConnection(t *testing.T) {
+	if got := nextWorkspaceDaemonReconnectBackoff(8*time.Second, time.Second); got != 16*time.Second {
+		t.Fatalf("short-lived connection backoff = %s, want 16s", got)
+	}
+	if got := nextWorkspaceDaemonReconnectBackoff(30*time.Second, time.Second); got != 30*time.Second {
+		t.Fatalf("capped connection backoff = %s, want 30s", got)
+	}
+	if got := nextWorkspaceDaemonReconnectBackoff(30*time.Second, workspaceDaemonStableConnection); got != time.Second {
+		t.Fatalf("stable connection backoff = %s, want 1s", got)
+	}
+}
+
 func TestCurrentComputerDoesNotStartLegacyHTTPHeartbeatControlCarrier(t *testing.T) {
 	raw, err := os.ReadFile("daemon.go")
 	if err != nil {

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/computer"
 )
 
@@ -95,9 +96,11 @@ func TestCompleteDetachedMachineUpgradeRollsBackWithFromVersion(t *testing.T) {
 
 	originalSpawn := spawnDetachedComputerBinary
 	originalRollback := rollbackDetachedExecutable
+	originalCleanup := cleanupDetachedReleaseResidue
 	t.Cleanup(func() {
 		spawnDetachedComputerBinary = originalSpawn
 		rollbackDetachedExecutable = originalRollback
+		cleanupDetachedReleaseResidue = originalCleanup
 	})
 	var versions []string
 	spawnDetachedComputerBinary = func(_, _, expectedVersion string, handoff computer.PendingMachineUpgradeHandoff) error {
@@ -117,6 +120,10 @@ func TestCompleteDetachedMachineUpgradeRollsBackWithFromVersion(t *testing.T) {
 	rollbackDetachedExecutable = func(current string) error {
 		rolledBack = current
 		return nil
+	}
+	cleanupDetachedReleaseResidue = func(string) (cli.ReleaseCleanupResult, error) {
+		t.Fatal("failed target must not remove rollback files")
+		return cli.ReleaseCleanupResult{}, nil
 	}
 	err := completeDetachedMachineUpgrade("", "/tmp/active-computer")
 	if err == nil || !strings.Contains(err.Error(), "previous Computer restored") {
@@ -140,8 +147,13 @@ func TestCompleteDetachedMachineUpgradeKeepsOwnedSuccessor(t *testing.T) {
 		t.Fatal(err)
 	}
 	originalSpawn := spawnDetachedComputerBinary
-	t.Cleanup(func() { spawnDetachedComputerBinary = originalSpawn })
+	originalCleanup := cleanupDetachedReleaseResidue
+	t.Cleanup(func() {
+		spawnDetachedComputerBinary = originalSpawn
+		cleanupDetachedReleaseResidue = originalCleanup
+	})
 	var waited bool
+	var cleaned string
 	spawnDetachedComputerBinary = func(_, _, expectedVersion string, handoff computer.PendingMachineUpgradeHandoff) error {
 		if expectedVersion != "v2.0.0" {
 			t.Fatalf("expected target spawn, got %q", expectedVersion)
@@ -152,11 +164,18 @@ func TestCompleteDetachedMachineUpgradeKeepsOwnedSuccessor(t *testing.T) {
 		waited = true
 		return nil
 	}
+	cleanupDetachedReleaseResidue = func(installPath string) (cli.ReleaseCleanupResult, error) {
+		cleaned = installPath
+		return cli.ReleaseCleanupResult{PreviousExecutable: true}, nil
+	}
 	if err := completeDetachedMachineUpgrade("", "/tmp/active-computer"); err != nil {
 		t.Fatal(err)
 	}
 	if !waited {
 		t.Fatal("coordinator did not wait on the successor it spawned")
+	}
+	if cleaned != "/tmp/active-computer" {
+		t.Fatalf("accepted successor cleanup path = %q", cleaned)
 	}
 	got, err := computer.ReadPendingMachineUpgradeHandoff(computer.RootDir(""))
 	if err != nil {

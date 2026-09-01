@@ -31,6 +31,7 @@ var probeDetachedSuccessorAttestation = func(profile string) (computer.MachineAt
 }
 var waitForDetachedPredecessors = computer.WaitForMachineUpgradePredecessors
 var rollbackDetachedExecutable = cli.RollbackExecutable
+var cleanupDetachedReleaseResidue = cli.CleanupInstalledReleaseResidue
 var ownedDetachedProcess *exec.Cmd
 
 func startDetachedUpgradeCoordinator(binaryPath, profile string) error {
@@ -244,6 +245,9 @@ func completeDetachedMachineUpgrade(profile, binaryPath string) error {
 	}
 	if err := computer.FinalizePendingMachineUpgrade(root); err != nil {
 		return err
+	}
+	if _, err := cleanupDetachedReleaseResidue(binaryPath); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not clean inactive Computer release files: %v\n", err)
 	}
 	return waitOwnedDetachedProcess()
 }

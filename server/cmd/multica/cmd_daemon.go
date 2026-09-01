@@ -101,7 +101,27 @@ func runDaemonBackground(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	return printComputerStartResult(res)
+	if err := printComputerStartResult(res); err != nil {
+		return err
+	}
+	cleanupStartedComputerReleaseResidue()
+	return nil
+}
+
+func cleanupStartedComputerReleaseResidue() {
+	installPath, installPathErr := cli.InstallPath()
+	executable, executablePathErr := os.Executable()
+	if installPathErr != nil || executablePathErr != nil {
+		return
+	}
+	installInfo, installErr := os.Stat(installPath)
+	executableInfo, executableErr := os.Stat(executable)
+	if installErr != nil || executableErr != nil || !os.SameFile(installInfo, executableInfo) {
+		return
+	}
+	if _, err := cli.CleanupInstalledReleaseResidue(installPath); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Computer started, but old release cleanup failed: %v\n", err)
+	}
 }
 
 func printComputerStartResult(res computer.StartResult) error {

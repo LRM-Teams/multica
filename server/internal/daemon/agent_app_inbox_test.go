@@ -294,7 +294,7 @@ func TestAgentInboxHTTPAggregatesWithoutPreparingMessageCoverage(t *testing.T) {
 	}
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/internal/agent-api/inbox", nil)
+	request := httptest.NewRequest(http.MethodGet, "/inbox", nil)
 	request.Header.Set("X-Agent-ID", testInboxAgentID)
 	request.Header.Set("X-Workspace-ID", "workspace-1")
 	d.agentAppInboxHandler().ServeHTTP(recorder, request)
@@ -363,7 +363,7 @@ func TestAgentInboxHTTPAckIsStrictAndConsumesExactReminderReceipt(t *testing.T) 
 	}
 
 	bad := httptest.NewRecorder()
-	badRequest := httptest.NewRequest(http.MethodPost, "/internal/agent-api/inbox/ack", bytes.NewBufferString(`{"itemId":"`+item.ItemID+`","extra":true}`))
+	badRequest := httptest.NewRequest(http.MethodPost, "/inbox/ack", bytes.NewBufferString(`{"itemId":"`+item.ItemID+`","extra":true}`))
 	badRequest.Header.Set("X-Agent-ID", testInboxAgentID)
 	badRequest.Header.Set("X-Workspace-ID", "workspace-1")
 	d.agentAppInboxAckHandler().ServeHTTP(bad, badRequest)
@@ -372,7 +372,7 @@ func TestAgentInboxHTTPAckIsStrictAndConsumesExactReminderReceipt(t *testing.T) 
 	}
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/internal/agent-api/inbox/ack", bytes.NewBufferString(`{"itemId":"`+item.ItemID+`"}`))
+	request := httptest.NewRequest(http.MethodPost, "/inbox/ack", bytes.NewBufferString(`{"itemId":"`+item.ItemID+`"}`))
 	request.Header.Set("X-Agent-ID", testInboxAgentID)
 	request.Header.Set("X-Workspace-ID", "workspace-1")
 	d.agentAppInboxAckHandler().ServeHTTP(recorder, request)
@@ -388,7 +388,7 @@ func TestAgentInboxHTTPAckIsStrictAndConsumesExactReminderReceipt(t *testing.T) 
 		t.Fatalf("rematerialize acknowledged source: %v", err)
 	}
 	replayedRecorder := httptest.NewRecorder()
-	replayedRequest := httptest.NewRequest(http.MethodPost, "/internal/agent-api/inbox/ack", bytes.NewBufferString(`{"itemId":"`+replayedItem.ItemID+`"}`))
+	replayedRequest := httptest.NewRequest(http.MethodPost, "/inbox/ack", bytes.NewBufferString(`{"itemId":"`+replayedItem.ItemID+`"}`))
 	replayedRequest.Header.Set("X-Agent-ID", testInboxAgentID)
 	replayedRequest.Header.Set("X-Workspace-ID", "workspace-1")
 	d.agentAppInboxAckHandler().ServeHTTP(replayedRecorder, replayedRequest)

@@ -74,7 +74,7 @@ func runReminderAck(cmd *cobra.Command, _ []string) error {
 	ctx, cancel := cli.APIContext(cmd.Context())
 	defer cancel()
 	var snapshot inboxCheckResponse
-	if err := client.GetJSON(ctx, "/internal/agent-api/inbox", &snapshot); err != nil {
+	if err := client.GetJSON(ctx, localAgentInboxPath, &snapshot); err != nil {
 		return fmt.Errorf("check Inbox before Reminder ACK: %w", err)
 	}
 	active := matchingReminderInboxItems(snapshot.Items, id)
@@ -94,7 +94,7 @@ func runReminderAck(cmd *cobra.Command, _ []string) error {
 			continue
 		}
 		var response inboxAckResponse
-		if err := client.PostJSON(ctx, "/internal/agent-api/inbox/ack", map[string]string{"itemId": item.ItemID}, &response); err != nil {
+		if err := client.PostJSON(ctx, localAgentInboxAckPath, map[string]string{"itemId": item.ItemID}, &response); err != nil {
 			return fmt.Errorf("acknowledge Reminder Inbox item: %w", err)
 		}
 		_, err := fmt.Fprintf(cmd.OutOrStdout(), "Reminder %s revision %s fired item acknowledged.\n", item.SourceRef.ID, revision)

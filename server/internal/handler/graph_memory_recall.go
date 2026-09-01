@@ -3,7 +3,7 @@
 package handler
 
 import (
-	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -45,7 +45,11 @@ func (h *Handler) RequestGraphMemoryRecall(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	plan, err := svc.Begin(r.Context(), service.GraphMemoryRecallRequest{
+	// TryBegin resolves non-fatally and logs every skip with its
+	// machine-readable reason (recovery spec A1-4: the daily
+	// identity/disabled/empty/conflict distribution is the rollout signal —
+	// disabled must dominate on agent-mode workspaces once 404s are gone).
+	outcome := svc.TryBegin(r.Context(), service.GraphMemoryRecallRequest{
 		WorkspaceID: workspaceID,
 		DaemonID:    daemonID,
 		TaskID:      req.TaskID,
@@ -59,29 +63,34 @@ func (h *Handler) RequestGraphMemoryRecall(w http.ResponseWriter, r *http.Reques
 		CallerTrainingMode: req.TrainingMode,
 		CallerK:            req.K,
 	})
-	switch {
-	case err == nil:
+	switch outcome.Reason {
+	case "":
 		// Resolved below.
-	case errors.Is(err, service.ErrGraphMemoryRecallDisabled):
+	case "disabled":
 		// Graph memory off for this workspace/agent: a recall miss is data,
 		// never a business-task failure (spec §1).
 		writeJSON(w, http.StatusOK, map[string]string{"status": "disabled"})
 		return
-	case errors.Is(err, service.ErrGraphMemoryRecallNoScope):
+	case "no_scope":
 		writeJSON(w, http.StatusOK, map[string]string{"status": "no_scope"})
 		return
-	case errors.Is(err, service.ErrGraphMemoryRecallIdentity):
+	case "identity":
 		// Not-found semantics on identity denial, like private-channel
 		// lineage reads (spec §16).
 		writeError(w, http.StatusNotFound, "unknown or mismatched recall identity")
 		return
-	case errors.Is(err, service.ErrGraphMemoryRecallConflict):
+	case "conflict":
 		writeError(w, http.StatusConflict, "RECALL_CONFLICT")
 		return
-	case errors.Is(err, service.ErrGraphMemoryRecallFinalized):
+	case "finalized":
 		writeError(w, http.StatusConflict, "RECALL_FINALIZED")
 		return
 	default:
+		writeError(w, http.StatusInternalServerError, "recall resolution failed")
+		return
+	}
+	plan := outcome.Plan
+	if plan == nil {
 		writeError(w, http.StatusInternalServerError, "recall resolution failed")
 		return
 	}
@@ -92,6 +101,7 @@ func (h *Handler) RequestGraphMemoryRecall(w http.ResponseWriter, r *http.Reques
 	}
 	injection := &service.GraphMemoryRecallInjection{Citations: []memorygraph.Citation{}, Version: plan.GraphVersion}
 	if executor := h.GraphMemoryRecallExecutor; executor != nil {
+		var err error
 		if plan.Replayed {
 			injection, err = executor.LoadReplayInjection(r.Context(), plan)
 		} else {
@@ -103,6 +113,12 @@ func (h *Handler) RequestGraphMemoryRecall(w http.ResponseWriter, r *http.Reques
 		}
 		if injection == nil {
 			injection = &service.GraphMemoryRecallInjection{Citations: []memorygraph.Citation{}, Version: plan.GraphVersion}
+		}
+		if !injection.Found {
+			// Graph miss is a legal empty result (recovery spec A1-3: a
+			// graph workspace never falls back to legacy memory); the log
+			// completes the daily reason distribution.
+			slog.Info("graph memory recall empty", "workspace_id", workspaceID, "task_id", req.TaskID, "recall_id", plan.RecallID, "task_shape", plan.TaskShape)
 		}
 	}
 	writeJSON(w, status, map[string]any{

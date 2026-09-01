@@ -47,6 +47,27 @@ type GraphMemorySeedRetriever interface {
 	Seeds(ctx context.Context, dir string, version int, query string, view memorygraph.GraphView) ([]string, error)
 }
 
+// Recall task shapes (recovery spec A1): a recall's TaskID resolves against
+// exactly one canonical shape. The task-shaped agent_inbox_event comes first;
+// the channel_message shape covers the resident Message path, which stamps the
+// triggering message id into Task.ID (message_runtime.go
+// residentMessageMemoryTask) while #2295 stopped projecting channel turns into
+// inbox events.
+const (
+	graphMemoryTaskShapeInboxEvent     = "agent_inbox_event"
+	graphMemoryTaskShapeChannelMessage = "channel_message"
+)
+
+// graphMemoryRecallTask is the server-resolved canonical task of one recall:
+// which shape the TaskID resolved against, plus the identity fields the shape
+// carries (the channel-message shape has no issue and no assigned agent).
+type graphMemoryRecallTask struct {
+	Shape     string
+	AgentID   pgtype.UUID
+	ChannelID pgtype.UUID
+	IssueID   pgtype.UUID
+}
+
 // GraphMemoryRecallRequest is the daemon's recall call. Only the canonical
 // identities and the query are inputs; every Caller* field is
 // diagnostics-only and never consulted for resolution (spec §1, A14).
@@ -85,6 +106,10 @@ type GraphMemoryRecallPlan struct {
 	TTTEnabled   bool
 	Query        string
 	TraceID      string
+	// TaskShape records which canonical task shape the TaskID resolved
+	// against (recovery spec A1): the ledger accounts recalls by their
+	// actually-resolved shape.
+	TaskShape string
 	// Seeds are the authoritative round-0 hybrid hit node ids computed by
 	// Begin's seeder against GraphVersion and persisted to the ledger; the
 	// executor hands them to Explorer.ExploreWithSeeds so the hybrid search
@@ -138,7 +163,7 @@ func (s *GraphMemoryRecallService) TryBegin(ctx context.Context, req GraphMemory
 	case errors.Is(err, ErrGraphMemoryRecallFinalized):
 		reason = "finalized"
 	}
-	slog.Warn("graph memory recall skipped", "task_id", req.TaskID, "reason", reason, "error", err)
+	slog.Warn("graph memory recall skipped", "workspace_id", req.WorkspaceID, "task_id", req.TaskID, "reason", reason, "error", err)
 	return GraphMemoryRecallOutcome{Reason: reason}
 }
 
@@ -151,26 +176,15 @@ func (s *GraphMemoryRecallService) Begin(ctx context.Context, req GraphMemoryRec
 		return nil, err
 	}
 
-	// Canonical task load: the request's workspace must own the task.
-	var (
-		taskWs    pgtype.UUID
-		agentID   pgtype.UUID
-		channelID pgtype.UUID
-		issueID   pgtype.UUID
-	)
-	err = s.pool.QueryRow(ctx, `
-		SELECT workspace_id, agent_id, channel_id, issue_id
-		FROM agent_inbox_event WHERE id = $1
-	`, taskUUID).Scan(&taskWs, &agentID, &channelID, &issueID)
-	switch {
-	case errors.Is(err, pgx.ErrNoRows):
-		return nil, fmt.Errorf("%w: unknown task %s", ErrGraphMemoryRecallIdentity, req.TaskID)
-	case err != nil:
-		return nil, fmt.Errorf("graph memory recall: load task: %w", err)
+	// Canonical task load, dual-shape (recovery spec A1): the inbox-event
+	// shape first, then the channel-message shape the resident path sends.
+	// The gates below run only after the shape resolved, so an agent-mode
+	// workspace's resident requests answer 200/disabled instead of 404.
+	task, err := s.resolveRecallTask(ctx, wsUUID, taskUUID, req.TaskID)
+	if err != nil {
+		return nil, err
 	}
-	if taskWs != wsUUID {
-		return nil, fmt.Errorf("%w: task %s is not in workspace %s", ErrGraphMemoryRecallIdentity, req.TaskID, req.WorkspaceID)
-	}
+	agentID, channelID, issueID := task.AgentID, task.ChannelID, task.IssueID
 
 	// The reporting runtime must exist in this workspace under this daemon.
 	var rtID pgtype.UUID
@@ -300,12 +314,70 @@ func (s *GraphMemoryRecallService) Begin(ctx context.Context, req GraphMemoryRec
 		TTTEnabled:   tttEnabled,
 		Query:        req.Query,
 		TraceID:      req.TraceID,
+		TaskShape:    task.Shape,
 		Seeds:        seeds,
 	}
 	if err := s.persistPlan(ctx, plan, wsUUID, taskUUID, rtUUID, graphOwnerID, seeds); err != nil {
 		return nil, err
 	}
 	return plan, nil
+}
+
+// resolveRecallTask resolves the TaskID against both canonical task shapes
+// (recovery spec A1): the task-shaped agent_inbox_event first; on a miss, the
+// channel_message the resident Message path stamps into Task.ID, reversed via
+// message → channel → workspace ownership. The workspace must own the task in
+// whichever shape resolves; a miss on both shapes is an identity denial.
+func (s *GraphMemoryRecallService) resolveRecallTask(ctx context.Context, wsUUID, taskUUID pgtype.UUID, taskID string) (graphMemoryRecallTask, error) {
+	var (
+		taskWs    pgtype.UUID
+		agentID   pgtype.UUID
+		channelID pgtype.UUID
+		issueID   pgtype.UUID
+	)
+	err := s.pool.QueryRow(ctx, `
+		SELECT workspace_id, agent_id, channel_id, issue_id
+		FROM agent_inbox_event WHERE id = $1
+	`, taskUUID).Scan(&taskWs, &agentID, &channelID, &issueID)
+	switch {
+	case err == nil:
+		if taskWs != wsUUID {
+			return graphMemoryRecallTask{}, fmt.Errorf("%w: task %s is not in workspace %s", ErrGraphMemoryRecallIdentity, taskID, util.UUIDToString(wsUUID))
+		}
+		return graphMemoryRecallTask{
+			Shape: graphMemoryTaskShapeInboxEvent, AgentID: agentID, ChannelID: channelID, IssueID: issueID,
+		}, nil
+	case errors.Is(err, pgx.ErrNoRows):
+		// Fall through to the channel-message shape.
+	default:
+		return graphMemoryRecallTask{}, fmt.Errorf("graph memory recall: load task: %w", err)
+	}
+
+	var authorType string
+	err = s.pool.QueryRow(ctx, `
+		SELECT workspace_id, channel_id, author_type, author_id
+		FROM channel_message WHERE id = $1
+	`, taskUUID).Scan(&taskWs, &channelID, &authorType, &agentID)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return graphMemoryRecallTask{}, fmt.Errorf("%w: unknown task %s (neither agent_inbox_event nor channel_message)", ErrGraphMemoryRecallIdentity, taskID)
+	case err != nil:
+		return graphMemoryRecallTask{}, fmt.Errorf("graph memory recall: load channel message: %w", err)
+	}
+	if taskWs != wsUUID {
+		return graphMemoryRecallTask{}, fmt.Errorf("%w: task %s is not in workspace %s", ErrGraphMemoryRecallIdentity, taskID, util.UUIDToString(wsUUID))
+	}
+	// The channel-message shape carries no assigned agent: only an
+	// agent-authored message yields one (its author), and a human-authored
+	// trigger captures offline — resolveTrainingMode's no-rows default. The
+	// resident agent the turn actually runs on is daemon-side state the
+	// request does not carry.
+	if authorType != "agent" {
+		agentID = pgtype.UUID{}
+	}
+	return graphMemoryRecallTask{
+		Shape: graphMemoryTaskShapeChannelMessage, AgentID: agentID, ChannelID: channelID,
+	}, nil
 }
 
 // graphMemoryRecallIdentities validates and parses the required request
@@ -405,12 +477,12 @@ func (s *GraphMemoryRecallService) persistPlan(ctx context.Context, plan *GraphM
 	var recallID pgtype.UUID
 	err = tx.QueryRow(ctx, `
 		INSERT INTO graph_memory_recall
-		  (workspace_id, task_id, daemon_id, runtime_id, graph_kind, graph_owner_id, graph_version, training_mode, k, query, trace_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		  (workspace_id, task_id, daemon_id, runtime_id, graph_kind, graph_owner_id, graph_version, training_mode, k, query, trace_id, task_shape)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		ON CONFLICT (workspace_id, trace_id) DO NOTHING
 		RETURNING id
 	`, wsUUID, taskUUID, plan.DaemonID, rtUUID, plan.GraphKind, ownerUUID, plan.GraphVersion,
-		plan.TrainingMode, plan.K, plan.Query, plan.TraceID).Scan(&recallID)
+		plan.TrainingMode, plan.K, plan.Query, plan.TraceID, plan.TaskShape).Scan(&recallID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// A concurrent first writer committed this trace id first: adopt
 		// the persisted row with the same fail-closed comparison as the
@@ -539,16 +611,17 @@ func (s *GraphMemoryRecallService) checkReplay(ctx context.Context, wsUUID, task
 // idempotent replay.
 func (s *GraphMemoryRecallService) loadExistingPlan(ctx context.Context, plan *GraphMemoryRecallPlan, wsUUID pgtype.UUID) error {
 	var (
-		recallID pgtype.UUID
-		ownerID  pgtype.UUID
-		kind     string
-		version  int32
-		k        int32
+		recallID  pgtype.UUID
+		ownerID   pgtype.UUID
+		kind      string
+		version   int32
+		k         int32
+		taskShape string
 	)
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, graph_kind, graph_owner_id, graph_version, k FROM graph_memory_recall
+		SELECT id, graph_kind, graph_owner_id, graph_version, k, task_shape FROM graph_memory_recall
 		WHERE workspace_id = $1 AND trace_id = $2
-	`, wsUUID, plan.TraceID).Scan(&recallID, &kind, &ownerID, &version, &k)
+	`, wsUUID, plan.TraceID).Scan(&recallID, &kind, &ownerID, &version, &k, &taskShape)
 	if err != nil {
 		return fmt.Errorf("graph memory recall: load replayed recall: %w", err)
 	}
@@ -571,6 +644,7 @@ func (s *GraphMemoryRecallService) loadExistingPlan(ctx context.Context, plan *G
 	plan.GraphDir = dir
 	plan.GraphVersion = int(version)
 	plan.K = int(k)
+	plan.TaskShape = taskShape
 	return nil
 }
 

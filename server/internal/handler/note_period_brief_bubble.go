@@ -482,6 +482,7 @@ func (h *Handler) postPeriodBriefPackReceived(ctx context.Context, run notePerio
 
 func (h *Handler) postPeriodBriefResultMessage(ctx context.Context, run notePeriodBriefRunRow, userIDString, harvested string, writeAfter time.Time) {
 	title, body := h.periodBriefResultMarkdown(ctx, run, harvested, writeAfter)
+	_ = h.persistPeriodBriefResultMarkdown(ctx, run.ID, body)
 	h.postPeriodBriefBubbleMessage(ctx, run.ChatSessionID, run.WorkspaceID, run.OwnerUserID, userIDString, "assistant",
 		"汇报稿整理完成了。",
 		periodBriefCollapsiblePart(uuidToString(run.DraftPageID), title, body),
@@ -548,6 +549,9 @@ WHERE id = $3 AND workspace_id = $4 AND deleted_at IS NULL`,
 			next, userID, run.SourcePageID, workspaceID); err != nil {
 			return "", err
 		}
+		if err := h.persistPeriodBriefInsertResult(ctx, run.ID, run.SourcePageID, mode); err != nil {
+			return "", err
+		}
 		return title, nil
 	}
 	page, err := scanNotePage(h.DB.QueryRow(ctx, `
@@ -558,7 +562,18 @@ RETURNING id, workspace_id, parent_id, owner_user_id, title, icon, content, sort
 	if err != nil {
 		return "", err
 	}
+	if err := h.persistPeriodBriefInsertResult(ctx, run.ID, page.ID, mode); err != nil {
+		return "", err
+	}
 	return page.Title, nil
+}
+
+func (h *Handler) persistPeriodBriefInsertResult(ctx context.Context, runID, resultPageID pgtype.UUID, mode string) error {
+	_, err := h.DB.Exec(ctx, `
+UPDATE note_period_brief_run
+SET result_page_id = $2, result_mode = $3, updated_at = now()
+WHERE id = $1`, runID, resultPageID, mode)
+	return err
 }
 
 var errPeriodBriefInsertNoPage = errors.New("period brief has no source page")

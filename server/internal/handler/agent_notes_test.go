@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/middleware"
@@ -126,6 +127,59 @@ UPDATE note_page SET content = $1 WHERE id = $2`, "credential brief body", noteI
 	}
 	if page.ID != noteID || page.Content != "credential brief body" {
 		t.Fatalf("page = %#v", page)
+	}
+}
+
+func TestGetAgentNotePageAllowsPeriodBriefDraftOutsideSubtree(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	agentID := createHandlerTestAgent(t, "Residue Draft "+uuid.NewString()[:8], nil)
+	rootID := createNotePageForAITest(t, "Bubble root "+uuid.NewString())
+	draftID := createNotePageForAITest(t, "工作介绍 底稿 "+uuid.NewString())
+	folderID := createNotePageForAITest(t, "工作介绍 "+uuid.NewString())
+	sessionID := createHandlerTestChatSession(t, agentID)
+	if _, err := testPool.Exec(context.Background(), `
+UPDATE chat_session SET context_note_page_id = $1 WHERE id = $2`, rootID, sessionID); err != nil {
+		t.Fatalf("bind session: %v", err)
+	}
+	if _, err := testPool.Exec(context.Background(), `
+UPDATE note_page SET content = 'draft brief body' WHERE id = $1`, draftID); err != nil {
+		t.Fatalf("set draft body: %v", err)
+	}
+	insertPeriodBriefFixtureRun(t, rootID, folderID, agentID, draftID, "done", time.Now().UTC())
+	if _, err := testPool.Exec(context.Background(), `
+UPDATE note_period_brief_run SET chat_session_id = $1 WHERE draft_page_id = $2`, sessionID, draftID); err != nil {
+		t.Fatalf("bind run: %v", err)
+	}
+
+	draftReq := withURLParam(withAgentCredentialPrincipal(
+		newRequest(http.MethodGet, "/api/agent/notes/pages/"+draftID, nil),
+		agentID, testWorkspaceID, testUserID,
+	), "id", draftID)
+	draftRec := httptest.NewRecorder()
+	testHandler.GetAgentNotePage(draftRec, draftReq)
+	if draftRec.Code != http.StatusOK {
+		t.Fatalf("draft get: expected 200, got %d: %s", draftRec.Code, draftRec.Body.String())
+	}
+	var page NotePageResponse
+	if err := json.NewDecoder(draftRec.Body).Decode(&page); err != nil {
+		t.Fatalf("decode draft: %v", err)
+	}
+	if page.ID != draftID || page.Content != "draft brief body" {
+		t.Fatalf("draft page = %#v", page)
+	}
+
+	outsider := createNotePageForAITest(t, "Unrelated "+uuid.NewString())
+	denyReq := withURLParam(withAgentCredentialPrincipal(
+		newRequest(http.MethodGet, "/api/agent/notes/pages/"+outsider, nil),
+		agentID, testWorkspaceID, testUserID,
+	), "id", outsider)
+	denyRec := httptest.NewRecorder()
+	testHandler.GetAgentNotePage(denyRec, denyReq)
+	if denyRec.Code != http.StatusNotFound {
+		t.Fatalf("unrelated page: expected 404, got %d: %s", denyRec.Code, denyRec.Body.String())
 	}
 }
 

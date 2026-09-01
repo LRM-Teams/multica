@@ -65,7 +65,8 @@ import {
   BubbleTodoPanel,
 } from "./bubble-cursor-panels";
 import { shouldPinChatToLatest } from "../lib/pin-chat-to-latest";
-import { useT } from "../../i18n";
+import { Time, useT } from "../../i18n";
+import { useMessageDayDividers } from "../../i18n/use-message-time";
 import type { MessagePart } from "@multica/core/types";
 
 // ─── Virtuoso chrome (stable component types — avoid Footer remount) ─────
@@ -180,6 +181,7 @@ export function ChatMessageList({
   }, []);
   const fadeStyle = useScrollFade(scrollRef);
   const { t } = useT("chat");
+  const dayDividers = useMessageDayDividers(messages);
 
   const noteInsertOffers = useMemo(
     () =>
@@ -326,19 +328,25 @@ export function ChatMessageList({
             }}
             computeItemKey={(_, msg) => msg.id}
             components={chatMessageListVirtuosoComponents}
-            itemContent={(_, msg) => (
-              <div className="mx-auto w-full max-w-4xl px-5 py-2">
-                <MessageBubble
-                  sessionId={sessionId}
-                  message={msg}
-                  isPending={false}
-                  enhanced={isDmBubble}
-                  hoverMessageActions={hoverMessageActions}
-                  noteInsertPageId={noteInsertPageId}
-                  offerNoteInsert={noteInsertOffers.has(msg.id)}
-                />
-              </div>
-            )}
+            itemContent={(_, msg) => {
+              const dividerLabel = dayDividers.get(msg.id);
+              return (
+                <div className="mx-auto w-full max-w-4xl">
+                  {dividerLabel ? <ChatDateDivider label={dividerLabel} /> : null}
+                  <div className="px-5 py-2">
+                    <MessageBubble
+                      sessionId={sessionId}
+                      message={msg}
+                      isPending={false}
+                      enhanced={isDmBubble}
+                      hoverMessageActions={hoverMessageActions}
+                      noteInsertPageId={noteInsertPageId}
+                      offerNoteInsert={noteInsertOffers.has(msg.id)}
+                    />
+                  </div>
+                </div>
+              );
+            }}
           />
         )}
       </div>
@@ -460,11 +468,12 @@ function MessageBubble({
                 className="mt-1.5"
               />
             </div>
-            {!hoverMessageActions && (
-              <div className="flex justify-end">
+            <div className="flex items-center justify-end gap-1.5">
+              <ChatMessageTimestamp createdAt={message.created_at} />
+              {!hoverMessageActions && (
                 <MessageCopyButton message={message} timeline={[]} />
-              </div>
-            )}
+              )}
+            </div>
           </div>
         </ChatMessageHoverShell>
       </div>
@@ -530,6 +539,7 @@ function AssistantMessage({
           rawError={message.content}
           timeline={timeline}
           elapsedMs={message.elapsed_ms}
+          createdAt={message.created_at}
           enhanced={enhanced}
         />
       </ChatMessageHoverShell>
@@ -597,11 +607,14 @@ function MessageFooter({
   hideCopy?: boolean;
 }) {
   const showCopy = !isPending && !hideCopy;
-  if (message.elapsed_ms == null && !showCopy) return null;
   return (
     <div className="flex items-center gap-1.5">
+      <ChatMessageTimestamp createdAt={message.created_at} />
       {message.elapsed_ms != null && (
-        <ElapsedCaption variant="replied" elapsedMs={message.elapsed_ms} />
+        <>
+          <span aria-hidden className="text-[11px] text-muted-foreground/40">·</span>
+          <ElapsedCaption variant="replied" elapsedMs={message.elapsed_ms} />
+        </>
       )}
       {showCopy && <MessageCopyButton message={message} timeline={timeline} />}
     </div>
@@ -671,17 +684,44 @@ function ElapsedCaption({
   );
 }
 
+function ChatDateDivider({ label }: { label: string }) {
+  return (
+    <div
+      className="flex items-center gap-3 px-5 py-2"
+      data-testid="date-divider"
+    >
+      <div aria-hidden className="h-px min-w-4 flex-1 bg-border/60" />
+      <span className="rounded-full border border-border/60 bg-background/90 px-2.5 py-0.5 text-[11px] font-medium text-muted-foreground shadow-sm">
+        {label}
+      </span>
+      <div aria-hidden className="h-px min-w-4 flex-1 bg-border/60" />
+    </div>
+  );
+}
+
+function ChatMessageTimestamp({ createdAt }: { createdAt: string }) {
+  return (
+    <Time
+      kind="message"
+      value={createdAt}
+      className="text-[11px] tabular-nums text-muted-foreground/70"
+    />
+  );
+}
+
 function FailureBubble({
   reason,
   rawError,
   timeline,
   elapsedMs,
+  createdAt,
   enhanced,
 }: {
   reason: string;
   rawError: string;
   timeline: ChatTimelineItem[];
   elapsedMs?: number | null;
+  createdAt?: string;
   enhanced?: boolean;
 }) {
   const { t } = useT("chat");
@@ -730,9 +770,12 @@ function FailureBubble({
           foldKey={`fail:${reason}:${timeline[0]?.seq ?? 0}`}
         />
       )}
-      {elapsedMs != null && (
-        <ElapsedCaption variant="failed" elapsedMs={elapsedMs} />
-      )}
+      <div className="flex items-center gap-1.5">
+        {createdAt ? <ChatMessageTimestamp createdAt={createdAt} /> : null}
+        {elapsedMs != null && (
+          <ElapsedCaption variant="failed" elapsedMs={elapsedMs} />
+        )}
+      </div>
     </div>
   );
 }

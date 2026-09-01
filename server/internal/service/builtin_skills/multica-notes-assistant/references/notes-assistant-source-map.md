@@ -7,6 +7,8 @@ to these sources.
 |-------|--------|
 | Bubble binds `chat_session.context_note_page_id` | migration `420_chat_session_context_note_page`; `CreateChatSession` |
 | Wake prefix `<note_chat_context>` (root id/title; no full subtree dump) | `buildNoteChatWakePrefix` |
+| Wake prefix `<period_brief_residue>` after a session 写汇报 | `formatPeriodBriefChatResidue`; `loadPeriodBriefChatResidue`; persist `result_page_id` / `result_mode` in `applyPeriodBriefInsert`; persist `result_markdown` in `postPeriodBriefResultMessage`; migrations `465_note_period_brief_run_result`, `466_note_period_brief_run_result_markdown` |
+| Bubble `notes get` of 写汇报 draft/result outside the context subtree | `resolvePeriodBriefResidueViewer` (exact page only) |
 | Agent read ACL via active note-scoped session | `resolveNoteChatSessionViewer`, `GetAgentNotePage`, `ListAgentNoteTree` |
 | Exact-page share grant (no descendants) | `resolveAgentNoteShareViewer`; `note_page_share_agent` / `note_page_share_channel`; `TestAgentNoteShareAllowsCurrentPageOnly` |
 | CLI `notes get` / `notes tree` | `server/cmd/multica/cmd_notes.go`; `GET /api/agent/notes/pages/{id}` (+ `/tree`) |

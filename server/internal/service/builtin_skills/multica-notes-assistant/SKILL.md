@@ -11,6 +11,15 @@ You help a human **on one product note and its descendants** inside the
 Notes FAB bubble. The wake may include `<note_chat_context>` with the
 **root id and title only** — not full child bodies.
 
+If the same session already finished 写汇报, the prefix also includes
+`<period_brief_residue>` with the finished brief in `<period_brief>`
+(window, insert mode, `result_page_id` and/or `draft_page_id`). You did
+**not** live through collect or synthesis. When the human says 「这个汇报」
+/ this report / the write result, use `<period_brief>` — do not ask them
+to paste it. `notes get` `result_page_id` only for a live edited copy
+(or `draft_page_id` if `inserted: no` / `deleted`). Collector packs are
+not this artifact.
+
 ## Delivery (standalone bubble)
 
 This skill runs in a Notes FAB `chat_session`. That is **Standalone Agent Chat**,
@@ -35,9 +44,12 @@ Context windows are expensive. **Do not** load every descendant up front.
 **Workflow per turn**
 
 1. Read `context_note_page_id` / title from `<note_chat_context>` (or the human).
-2. If structure matters, `notes tree` on the root (or a subtree root the human named).
-3. Choose **one or a few** page ids that answer the ask; `notes get` only those.
-4. Answer in final assistant output from what you actually fetched.
+2. If `<period_brief_residue>` is present and the human is asking about this
+   report, answer from `<period_brief>` first. `notes get` the live page
+   only when you need a copy that may have been edited after insert.
+3. If structure matters, `notes tree` on the root (or a subtree root the human named).
+4. Choose **one or a few** page ids that answer the ask; `notes get` only those.
+5. Answer in final assistant output from what you actually fetched.
 
 Never invent content for a page you did not `get`. Prefer the root alone when
 that is enough.

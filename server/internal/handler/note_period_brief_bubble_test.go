@@ -533,6 +533,19 @@ SELECT content FROM note_page WHERE id = $1`, sourcePageID).Scan(&sourceContent)
 		t.Fatalf("source should keep original body and gain a section:\n%s", sourceContent)
 	}
 
+	var resultPageID, resultMode string
+	if err := testPool.QueryRow(context.Background(), `
+SELECT result_page_id::text, result_mode FROM note_period_brief_run WHERE id = $1`, runID).Scan(&resultPageID, &resultMode); err != nil {
+		t.Fatalf("load insert result: %v", err)
+	}
+	if resultPageID != sourcePageID || resultMode != "append" {
+		t.Fatalf("insert result = %s/%s, want append onto %s", resultMode, resultPageID, sourcePageID)
+	}
+	prefix := testHandler.buildNoteChatWakePrefix(context.Background(), parseUUID(created.ChatSessionID))
+	if !strings.Contains(prefix, "<period_brief_residue>") || !strings.Contains(prefix, "inserted: append") || !strings.Contains(prefix, "result_page_id: "+sourcePageID) {
+		t.Fatalf("append insert should leave residue for later bubble Q&A:\n%s", prefix)
+	}
+
 	again := newRequest(http.MethodPost, "/api/notes/period-briefs/"+runID+"/insert", map[string]any{
 		"mode": "child",
 	})

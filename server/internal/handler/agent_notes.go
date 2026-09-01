@@ -96,6 +96,13 @@ func (h *Handler) loadAgentAccessibleNote(w http.ResponseWriter, r *http.Request
 		return notePageRow{}, pgtype.UUID{}, false
 	}
 	if !authorized {
+		viewerID, authorized, err = h.resolvePeriodBriefResidueViewer(r.Context(), agentUUID, workspaceUUID, pageUUID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to authorize note page")
+			return notePageRow{}, pgtype.UUID{}, false
+		}
+	}
+	if !authorized {
 		viewerID, authorized, err = h.resolveAgentNoteShareViewer(r.Context(), agentUUID, workspaceUUID, pageUUID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to authorize note page")

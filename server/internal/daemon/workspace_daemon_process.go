@@ -51,6 +51,31 @@ type WorkspaceDaemonProcessConfig struct {
 	RefreshEvery time.Duration
 }
 
+const workspaceDaemonOrphanRecoveryTimeout = 5 * time.Second
+
+func (d *Daemon) recoverWorkspaceDaemonOrphans(ctx context.Context, workspaceID string, runtimeIDs []string, timeout time.Duration) {
+	if len(runtimeIDs) == 0 {
+		return
+	}
+	if timeout <= 0 {
+		timeout = workspaceDaemonOrphanRecoveryTimeout
+	}
+	recoveryCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	var recoveries sync.WaitGroup
+	for _, runtimeID := range runtimeIDs {
+		runtimeID := runtimeID
+		recoveries.Add(1)
+		go func() {
+			defer recoveries.Done()
+			if err := d.client.RecoverOrphans(recoveryCtx, runtimeID); err != nil && d.logger != nil {
+				d.logger.Warn("WorkspaceDaemon orphan recovery failed", "workspace_id", workspaceID, "runtime_id", runtimeID, "error", err)
+			}
+		}()
+	}
+	recoveries.Wait()
+}
+
 // RunWorkspaceDaemonProcess owns one WorkspaceDaemon and all workspace-scoped
 // execution state until ctx ends. It deliberately does not acquire the
 // machine-wide resident lease or bind the Computer health listener.
@@ -146,11 +171,10 @@ func RunWorkspaceDaemonProcess(ctx context.Context, config WorkspaceDaemonProces
 	if len(runtimeIDs) > 0 {
 		defer d.deregisterRuntimes()
 	}
-	for _, runtimeID := range runtimeIDs {
-		if err := d.client.RecoverOrphans(ctx, runtimeID); err != nil && d.logger != nil {
-			d.logger.Warn("WorkspaceDaemon orphan recovery failed", "workspace_id", workspaceID, "runtime_id", runtimeID, "error", err)
-		}
-	}
+	// Recovery is best-effort, but it must finish before new work is consumed.
+	// Give all Runtimes one shared bounded window so one slow endpoint cannot
+	// consume the WorkspaceDaemon startup deadline before Ready is published.
+	d.recoverWorkspaceDaemonOrphans(ctx, workspaceID, runtimeIDs, workspaceDaemonOrphanRecoveryTimeout)
 	workspaceDaemon, err := d.newWorkspaceDaemon(workspaceID)
 	if err != nil {
 		return err

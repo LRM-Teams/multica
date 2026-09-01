@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -168,6 +169,37 @@ func TestWorkspaceDaemonProcessFallbackRunsTheRealWorkspaceDaemon(t *testing.T) 
 	case <-exited:
 	case <-ctx.Done():
 		t.Fatal("WorkspaceDaemon did not stop through its process handle")
+	}
+}
+
+func TestWorkspaceDaemonOrphanRecoveryUsesOneBoundedParallelWindow(t *testing.T) {
+	const runtimeCount = 4
+	var started atomic.Int32
+	release := make(chan struct{})
+	defer close(release)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/recover-orphans") {
+			http.NotFound(w, r)
+			return
+		}
+		started.Add(1)
+		<-release
+	}))
+	t.Cleanup(server.Close)
+
+	d := New(Config{ServerBaseURL: server.URL}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	runtimeIDs := make([]string, 0, runtimeCount)
+	for i := range runtimeCount {
+		runtimeIDs = append(runtimeIDs, fmt.Sprintf("runtime-%d", i))
+	}
+
+	startedAt := time.Now()
+	d.recoverWorkspaceDaemonOrphans(context.Background(), "workspace-a", runtimeIDs, 100*time.Millisecond)
+	if elapsed := time.Since(startedAt); elapsed > time.Second {
+		t.Fatalf("orphan recovery exceeded one bounded window: %v", elapsed)
+	}
+	if got := started.Load(); got != runtimeCount {
+		t.Fatalf("parallel orphan recovery requests = %d, want %d", got, runtimeCount)
 	}
 }
 

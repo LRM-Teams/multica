@@ -591,11 +591,18 @@ func wrapperBody(envelopePath, binaryPath string) string {
 	body.WriteString("unset ")
 	body.WriteString(strings.Join(keys, " "))
 	body.WriteByte('\n')
-	body.WriteString("export ")
+	// A canonical provider outlives its task binding. Once Unbind removes the
+	// envelope, leave the marker unset so the same process can use its durable
+	// Agent Proxy transport for idle Message delivery.
+	body.WriteString("if [ -f ")
+	body.WriteString(shellQuote(envelopePath))
+	body.WriteString(" ]; then\n  export ")
 	body.WriteString(EnvelopePathEnv)
 	body.WriteByte('=')
 	body.WriteString(shellQuote(envelopePath))
-	body.WriteByte('\n')
+	body.WriteString("\nelse\n  unset ")
+	body.WriteString(EnvelopePathEnv)
+	body.WriteString("\nfi\n")
 	body.WriteString("exec ")
 	body.WriteString(shellQuote(binaryPath))
 	body.WriteString(" \"$@\"\n")
@@ -612,7 +619,11 @@ func windowsWrapperBody(targetEnv, targetValue string, clearKeys []string, binar
 	for _, key := range clearKeys {
 		body.WriteString("set \"" + key + "=\"\r\n")
 	}
-	body.WriteString("set \"" + targetEnv + "=" + targetValue + "\"\r\n")
+	body.WriteString("if exist \"" + targetValue + "\" (\r\n")
+	body.WriteString("  set \"" + targetEnv + "=" + targetValue + "\"\r\n")
+	body.WriteString(") else (\r\n")
+	body.WriteString("  set \"" + targetEnv + "=\"\r\n")
+	body.WriteString(")\r\n")
 	body.WriteString("call \"" + binaryPath + "\" %*\r\n")
 	body.WriteString("exit /b %ERRORLEVEL%\r\n")
 	return body.String()

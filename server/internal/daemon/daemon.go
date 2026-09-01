@@ -2783,10 +2783,17 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		residentConfig := backendCfg
 		residentConfig.ResidentOptions = execOpts
 		residentConfig.ResidentOptions.Cwd = agentRootPath
+		residentAgentInstanceID := "resident-" + uuid.NewString()
 		acquireRequest := agentRuntimeAcquireRequest{
 			Identity:      identity,
 			BackendConfig: residentConfig,
 			Factory:       defaultCanonicalRuntimeFactory(provider),
+			PrepareLaunchEnvironment: func(environment map[string]string) (string, func(), error) {
+				return d.prepareCanonicalAgentProxyLaunch(
+					ctx, environment, task.WorkspaceID, task.RuntimeID, agentID,
+					residentAgentInstanceID, selfBin, false,
+				)
+			},
 		}
 		// A resident slot is deliberately single-flight. Tasks for the same
 		// Agent/runtime wait here and are picked up by the same provider process

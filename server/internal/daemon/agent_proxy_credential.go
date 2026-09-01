@@ -179,6 +179,44 @@ func (d *Daemon) prepareAgentProxyCLITransport(
 	return transport, nil
 }
 
+// prepareCanonicalAgentProxyLaunch equips every newly created canonical
+// provider process with the durable local Agent Proxy transport used by idle
+// Message delivery. Task-created canonical processes keep their stable task
+// wrapper first on PATH; AgentProxyCLIWrapperEnv lets the real CLI recover the
+// authenticated wrapper when a login shell bypasses PATH. Message-created
+// processes have no task wrapper, so callers may prepend the proxy wrapper.
+func (d *Daemon) prepareCanonicalAgentProxyLaunch(
+	ctx context.Context,
+	environment map[string]string,
+	workspaceID, runtimeID, agentID, agentInstanceID, multicaBin string,
+	prependProxyPath bool,
+) (string, func(), error) {
+	if environment == nil {
+		return "", nil, errors.New("canonical Agent environment is unavailable")
+	}
+	launchCredential, err := d.ensureResidentAgentCredential(ctx, workspaceID, runtimeID, agentID)
+	if err != nil {
+		return "", nil, fmt.Errorf("issue Agent launch credential: %w", err)
+	}
+	transport, err := d.prepareAgentProxyCLITransport(
+		InboxKey{WorkspaceID: workspaceID, AgentID: agentID},
+		runtimeID,
+		agentInstanceID,
+		multicaBin,
+		launchCredential,
+	)
+	if err != nil {
+		_ = d.client.RevokeAgentCredential(context.Background(), runtimeID, agentID, launchCredential.CredentialID)
+		_ = removeCachedAgentCredentialIfMatches(d.cfg, workspaceID, runtimeID, agentID, launchCredential.CredentialID)
+		return "", nil, err
+	}
+	environment[AgentProxyCLIWrapperEnv] = transport.wrapperPath
+	if prependProxyPath {
+		environment["PATH"] = filepath.Dir(transport.wrapperPath) + string(os.PathListSeparator) + environment["PATH"]
+	}
+	return launchCredential.CredentialID, func() { _ = transport.Close() }, nil
+}
+
 func (d *Daemon) agentProxyServerCredentialForLaunch(agentID, runtimeID, launchID string) (cachedAgentCredential, bool) {
 	d.agentProxyCredentialMu.RLock()
 	defer d.agentProxyCredentialMu.RUnlock()

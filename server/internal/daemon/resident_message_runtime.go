@@ -224,25 +224,10 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 			return err
 		},
 		PrepareLaunchEnvironment: func(environment map[string]string) (string, func(), error) {
-			launchCredential, err := d.ensureResidentAgentCredential(ctx, config.WorkspaceID, config.RuntimeID, config.Agent.ID)
-			if err != nil {
-				return "", nil, fmt.Errorf("issue Agent launch credential: %w", err)
-			}
-			transport, err := d.prepareAgentProxyCLITransport(
-				InboxKey{WorkspaceID: config.WorkspaceID, AgentID: config.Agent.ID},
-				config.RuntimeID,
-				residentAgentInstanceID,
-				selfBin,
-				launchCredential,
+			return d.prepareCanonicalAgentProxyLaunch(
+				ctx, environment, config.WorkspaceID, config.RuntimeID, config.Agent.ID,
+				residentAgentInstanceID, selfBin, true,
 			)
-			if err != nil {
-				_ = d.client.RevokeAgentCredential(context.Background(), config.RuntimeID, config.Agent.ID, launchCredential.CredentialID)
-				_ = removeCachedAgentCredentialIfMatches(d.cfg, config.WorkspaceID, config.RuntimeID, config.Agent.ID, launchCredential.CredentialID)
-				return "", nil, err
-			}
-			environment[AgentProxyCLIWrapperEnv] = transport.wrapperPath
-			environment["PATH"] = filepath.Dir(transport.wrapperPath) + string(os.PathListSeparator) + environment["PATH"]
-			return launchCredential.CredentialID, func() { _ = transport.Close() }, nil
 		},
 	})
 	if err != nil {

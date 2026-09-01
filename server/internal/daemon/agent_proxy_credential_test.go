@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -293,5 +295,67 @@ func TestAgentProxyCLIWrapperPreservesExistingTaskCredentialTransport(t *testing
 		if !strings.Contains(text, expected) {
 			t.Fatalf("Agent Proxy wrapper output omitted %q: %s", expected, text)
 		}
+	}
+}
+
+func TestPrepareCanonicalAgentProxyLaunchPreservesStableTaskTransport(t *testing.T) {
+	const (
+		workspaceID = "11111111-1111-1111-1111-111111111111"
+		runtimeID   = "22222222-2222-2222-2222-222222222222"
+		agentID     = "33333333-3333-3333-3333-333333333333"
+	)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer daemon-token" {
+			t.Errorf("Authorization = %q, want daemon credential", got)
+		}
+		switch r.Method + " " + r.URL.Path {
+		case "POST /api/daemon/runtimes/" + runtimeID + "/agents/" + agentID + "/credential":
+			_ = json.NewEncoder(w).Encode(AgentCredentialResponse{
+				ID: "credential-1", AgentID: agentID, Prefix: "sk_agent_test", Token: "durable-agent-token",
+			})
+		case "POST /api/daemon/runtimes/" + runtimeID + "/agents/" + agentID + "/credentials/credential-1/revoke":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	root := t.TempDir()
+	client := NewClient(upstream.URL)
+	client.SetRuntimeDaemonToken(runtimeID, "daemon-token", time.Now().Add(time.Hour))
+	d := New(Config{WorkspacesRoot: root, HealthPort: 19514}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d.client = client
+	stablePath := filepath.Join(root, "stable", "bin") + string(os.PathListSeparator) + os.Getenv("PATH")
+	environment := map[string]string{"PATH": stablePath}
+
+	credentialID, cleanup, err := d.prepareCanonicalAgentProxyLaunch(
+		context.Background(), environment, workspaceID, runtimeID, agentID, "resident-launch-1", "/usr/bin/true", false,
+	)
+	if err != nil {
+		t.Fatalf("prepare canonical Agent Proxy launch: %v", err)
+	}
+	defer cleanup()
+	if credentialID != "credential-1" {
+		t.Fatalf("credential id = %q, want credential-1", credentialID)
+	}
+	if environment["PATH"] != stablePath {
+		t.Fatalf("task transport PATH was replaced: %q", environment["PATH"])
+	}
+	wrapperPath := environment[AgentProxyCLIWrapperEnv]
+	if !filepath.IsAbs(wrapperPath) {
+		t.Fatalf("Agent Proxy forward wrapper = %q, want absolute path", wrapperPath)
+	}
+	wrapper, err := os.ReadFile(wrapperPath)
+	if err != nil {
+		t.Fatalf("read Agent Proxy wrapper: %v", err)
+	}
+	for _, expected := range []string{AgentProxyURLEnv, AgentProxyTokenFileEnv} {
+		if !strings.Contains(string(wrapper), expected) {
+			t.Fatalf("Agent Proxy wrapper omitted %q", expected)
+		}
+	}
+	if _, leaked := environment[AgentProxyTokenFileEnv]; leaked {
+		t.Fatal("Agent Proxy token file leaked into provider environment")
 	}
 }

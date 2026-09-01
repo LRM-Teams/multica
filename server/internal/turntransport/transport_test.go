@@ -59,6 +59,28 @@ func TestPrepareKeepsFixedWrapperAndRefreshesBinary(t *testing.T) {
 	}
 }
 
+func TestStableWrapperOmitsEnvelopeMarkerWhenNoTurnIsBound(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX wrapper execution test")
+	}
+	root := t.TempDir()
+	binary := filepath.Join(root, "real-multica")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf '%s' \"$"+EnvelopePathEnv+"\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	transport, err := Prepare(filepath.Join(root, "transport"), binary)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	output, err := exec.Command(transport.WrapperPath()).CombinedOutput()
+	if err != nil {
+		t.Fatalf("execute stable wrapper: %v: %s", err, output)
+	}
+	if got := string(output); got != "" {
+		t.Fatalf("inactive envelope marker = %q, want empty", got)
+	}
+}
+
 func TestBindApplyAndUnbindFailClosed(t *testing.T) {
 	transport := mustPrepare(t)
 	binding, err := transport.Bind("turn-a", "token-a", map[string]string{

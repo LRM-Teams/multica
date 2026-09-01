@@ -739,7 +739,7 @@ func TestAgentRestartUnavailableRunnerDoesNotFabricateCompletion(t *testing.T) {
 	notifier := &capturedAgentRestartNotifier{}
 	testHandler.AgentRestartNotifier = notifier
 	identity := daemonws.ClientIdentity{DaemonID: "agent-restart-test-daemon", WorkspaceID: testWorkspaceID}
-	if err := testHandler.recordWorkspaceDaemonReady(context.Background(), identity, "runner-instance", nil); err != nil {
+	if err := testHandler.recordWorkspaceDaemonReady(context.Background(), identity, "runner-instance", protocol.WorkspaceReadyPayload{}); err != nil {
 		t.Fatalf("Runner ready after undelivered restart: %v", err)
 	}
 	if _, _, eventType, _, payload := notifier.snapshot(); eventType != "" || payload != nil {
@@ -779,7 +779,7 @@ func TestAgentRestartReadyDoesNotRedriveWorkspaceReset(t *testing.T) {
 
 	redriven := &capturedAgentRestartNotifier{}
 	testHandler.AgentRestartNotifier = redriven
-	if err := testHandler.recordWorkspaceDaemonReady(context.Background(), identity, "runner-instance", nil); err != nil {
+	if err := testHandler.recordWorkspaceDaemonReady(context.Background(), identity, "runner-instance", protocol.WorkspaceReadyPayload{}); err != nil {
 		t.Fatalf("Runner ready during workspace reset: %v", err)
 	}
 	if _, _, eventType, _, payload := redriven.snapshot(); eventType != "" || payload != nil {

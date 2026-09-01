@@ -131,6 +131,19 @@ func (runner *WorkspaceDaemon) startAgentNow(startCtx context.Context, start pro
 			startCtx = context.Background()
 		}
 	}
+	startupCanceled, _ := runner.processes.managedStartupCanceled(callback)
+	releaseStart, gateErr := runner.starts.acquire(startCtx, startupCanceled)
+	if gateErr != nil {
+		failed = true
+		if startupSettled != nil {
+			close(startupSettled)
+		}
+		if publicationReady != nil {
+			<-publicationReady
+		}
+		return
+	}
+	defer releaseStart()
 	outcome, err := runner.completeManagedAgentStart(startCtx, start, callback, ack)
 	if startupSettled != nil {
 		close(startupSettled)
@@ -140,6 +153,7 @@ func (runner *WorkspaceDaemon) startAgentNow(startCtx context.Context, start pro
 	}
 	if err != nil {
 		failed = true
+		outcome.status.StartFailure = classifyManagedAgentStartFailure(err)
 		if runner.logger != nil && !errors.Is(err, errManagedAgentStartStopped) {
 			runner.logger.Warn("WorkspaceDaemon provider start failed", runner.managedStartLogAttrs(start, ack.QueueState, "provider_start_failed", "failed", err)...)
 		}

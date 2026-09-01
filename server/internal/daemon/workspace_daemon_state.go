@@ -89,6 +89,7 @@ type WorkspaceDaemon struct {
 	workspacesRoot string
 
 	processes *agentProcessManager
+	starts    *workspaceDaemonProviderStartGate
 	activity  *agentActivityProducer
 	inboxes   *InboxRegistry
 
@@ -122,6 +123,12 @@ type WorkspaceDaemon struct {
 	connection   *DaemonConnection
 	onReady      func()
 }
+
+const (
+	workspaceDaemonInitialReconnectBackoff = time.Second
+	workspaceDaemonMaxReconnectBackoff     = 30 * time.Second
+	workspaceDaemonStableConnection        = 10 * time.Second
+)
 
 func (runner *WorkspaceDaemon) WorkspaceID() string {
 	if runner == nil {
@@ -165,6 +172,7 @@ func newWorkspaceDaemon(config WorkspaceDaemonConfig, dependencies workspaceDaem
 		serverBaseURL:             dependencies.serverBaseURL,
 		workspacesRoot:            dependencies.workspacesRoot,
 		processes:                 newAgentProcessManager(now, dependencies.onTransition),
+		starts:                    newWorkspaceDaemonProviderStartGate(workspaceDaemonProviderStartConcurrency),
 		activity:                  newAgentActivityProducer(config.DaemonInstanceID, now, nil),
 		inboxes:                   inboxes,
 		runtimes:                  dependencies.runtimes,
@@ -215,22 +223,39 @@ func (runner *WorkspaceDaemon) Run(ctx context.Context) {
 		runner.processes.Close()
 		runner.activity.Close()
 	}()
-	backoff := time.Second
+	backoff := workspaceDaemonInitialReconnectBackoff
 	for ctx.Err() == nil {
+		connectedAt := time.Now()
 		if err := runner.runConnection(ctx); err != nil && ctx.Err() == nil && runner.logger != nil {
 			runner.logger.Debug("workspace daemon disconnected", "workspace_id", runner.config.WorkspaceID, "error", err)
 		}
-		timer := time.NewTimer(backoff)
+		connectedFor := time.Since(connectedAt)
+		if connectedFor >= workspaceDaemonStableConnection {
+			backoff = workspaceDaemonInitialReconnectBackoff
+		}
+		timer := time.NewTimer(jitterDuration(backoff))
 		select {
 		case <-ctx.Done():
 			timer.Stop()
 			return
 		case <-timer.C:
 		}
-		if backoff < 15*time.Second {
-			backoff *= 2
-		}
+		backoff = nextWorkspaceDaemonReconnectBackoff(backoff, connectedFor)
 	}
+}
+
+func nextWorkspaceDaemonReconnectBackoff(current, connectedFor time.Duration) time.Duration {
+	if connectedFor >= workspaceDaemonStableConnection {
+		return workspaceDaemonInitialReconnectBackoff
+	}
+	if current < workspaceDaemonInitialReconnectBackoff {
+		current = workspaceDaemonInitialReconnectBackoff
+	}
+	next := current * 2
+	if next > workspaceDaemonMaxReconnectBackoff {
+		return workspaceDaemonMaxReconnectBackoff
+	}
+	return next
 }
 
 func (runner *WorkspaceDaemon) sendOnConnection(connection *DaemonConnection, eventType string, payload any) error {
@@ -320,12 +345,14 @@ func (runner *WorkspaceDaemon) runConnection(ctx context.Context) error {
 	}()
 	if err := connection.Write(protocol.EventWorkspaceDaemonReady, protocol.WorkspaceReadyPayload{
 		WorkspaceID: workspaceID, DaemonInstanceID: runner.config.DaemonInstanceID,
-		DeviceName:         runner.config.DeviceName,
-		OS:                 runner.config.OS,
-		CLIVersion:         runner.config.CLIVersion,
-		MachineID:          runner.config.MachineID,
-		RunningAgents:      runner.processes.RunningAgentIDs(),
-		ActiveCapabilities: runner.activeCapabilities(),
+		DeviceName:             runner.config.DeviceName,
+		OS:                     runner.config.OS,
+		CLIVersion:             runner.config.CLIVersion,
+		MachineID:              runner.config.MachineID,
+		RunningAgents:          runner.processes.RunningAgentIDs(),
+		ProcessSnapshotVersion: protocol.AgentProcessSnapshotV1,
+		AgentProcesses:         runner.processes.ManagedProcessSnapshots(),
+		ActiveCapabilities:     runner.activeCapabilities(),
 	}); err != nil {
 		return err
 	}

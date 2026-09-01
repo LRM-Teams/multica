@@ -60,3 +60,30 @@ func TestReduceRunnerLaunchesSameDaemonMoveWaitsForInactive(t *testing.T) {
 		t.Fatalf("actions after inactive = %#v, want %#v", got, wantStart)
 	}
 }
+
+func TestReadyProcessSnapshotSuppressesReconnectStartBurst(t *testing.T) {
+	store := newRunnerObservationStore()
+	store.replaceInstance("workspace", "daemon", "instance", []runnerObservedAgent{
+		{
+			workspaceID: "workspace", daemonID: "daemon", daemonInstanceID: "instance",
+			agentID: "agent-a", runtimeID: "runtime-a", status: protocol.AgentStatusActive,
+		},
+		{
+			workspaceID: "workspace", daemonID: "daemon", daemonInstanceID: "instance",
+			agentID: "agent-b", runtimeID: "runtime-b", status: runnerObservedStatusManagedStarting,
+		},
+	})
+	observed := make([]runnerObservedLaunch, 0)
+	for _, process := range store.listInstance("workspace", "daemon", "instance") {
+		observed = append(observed, runnerObservedLaunch{
+			agentID: process.agentID, runtimeID: process.runtimeID, status: process.status,
+		})
+	}
+	desired := []runnerDesiredLaunch{
+		{agentID: "agent-a", runtimeID: "runtime-a"},
+		{agentID: "agent-b", runtimeID: "runtime-b"},
+	}
+	if actions := reduceRunnerLaunches(desired, observed); len(actions) != 0 {
+		t.Fatalf("reconnect snapshot produced duplicate launch actions: %#v", actions)
+	}
+}

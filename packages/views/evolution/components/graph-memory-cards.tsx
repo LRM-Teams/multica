@@ -110,9 +110,10 @@ export function GraphMemoryStatusCard({ wsId }: { wsId: string }) {
               <span className="font-mono text-xs text-muted-foreground">{graph.owner_id}</span>
               {graph.consolidation_backoff && <Badge variant="outline">{copy("graphBackoff")}</Badge>}
             </div>
-            <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-muted-foreground sm:grid-cols-4">
+            <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-muted-foreground sm:grid-cols-5">
               <span>{copy("graphVersion")}: {graph.current_version}</span>
               <span>{copy("graphStaging")}: {graph.staging_segments}</span>
+              <span>{copy("graphNodes")}: {graph.node_count}</span>
               <span>{copy("graphRecall24h")}: {graph.recall_queries_24h}</span>
               <span>{copy("graphHitRate")}: {Math.round(graph.recall_hit_rate_24h * 100)}%</span>
             </div>

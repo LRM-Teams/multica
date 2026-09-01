@@ -19,7 +19,8 @@ func TestGraphExecutionMemoriesFailureInjectsNothing(t *testing.T) {
 	defer server.Close()
 
 	d := newGraphRecallTestDaemon(t, server.URL)
-	if out := d.graphExecutionMemories(context.Background(), graphRecallTestTask(), d.logger); out != nil {
-		t.Fatalf("graphExecutionMemories = %+v, want no injection on recall failure", out)
+	current, research := d.graphExecutionMemories(context.Background(), graphRecallTestTask(), d.logger)
+	if current != nil || research != nil {
+		t.Fatalf("graphExecutionMemories = (%+v, %+v), want no injection on recall failure", current, research)
 	}
 }

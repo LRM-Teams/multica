@@ -13,6 +13,7 @@ import enAgents from "../../locales/en/agents.json";
 import enEvolution from "../../locales/en/evolution.json";
 import {
   GraphMemoryAgentModeCard,
+  GraphMemoryStatusCard,
   LegacyCurationNotApplicableCard,
 } from "./graph-memory-cards";
 
@@ -31,6 +32,75 @@ describe("LegacyCurationNotApplicableCard", () => {
     render(<LegacyCurationNotApplicableCard />, { wrapper: I18nWrapper });
     expect(screen.getByText(enEvolution.legacyCurationNotApplicable)).toBeTruthy();
     expect(screen.getByText(enEvolution.legacyCurationNotApplicableHint)).toBeTruthy();
+  });
+});
+
+
+describe("GraphMemoryStatusCard", () => {
+  it("renders the federated research graph row with its node count", () => {
+    const workspaceId = "ws-1";
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    queryClient.setQueryData(evolutionKeys.graphMemoryStatus(workspaceId), {
+      workspace_id: workspaceId,
+      memory_type: "graph" as const,
+      scoped_writer_ready: true,
+      empty_start: false,
+      graphs: [
+        {
+          kind: "research" as const,
+          owner_id: workspaceId,
+          current_version: 3,
+          versions: [1, 2, 3],
+          staging_segments: 0,
+          last_consolidated_at: null,
+          consolidation_backoff: false,
+          recall_queries_24h: 4,
+          recall_hit_rate_24h: 0.75,
+          node_count: 12,
+        },
+      ],
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <I18nWrapper>
+          <GraphMemoryStatusCard wsId={workspaceId} />
+        </I18nWrapper>
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByText("research")).toBeTruthy();
+    expect(screen.getByText(workspaceId)).toBeTruthy();
+    // Research governance stats: staging stays 0 and the node count surfaces.
+    expect(screen.getByText(`${enEvolution.graphStaging}: 0`)).toBeTruthy();
+    expect(screen.getByText(`${enEvolution.graphNodes}: 12`)).toBeTruthy();
+  });
+
+  it("renders no graph rows for a legacy workspace", () => {
+    const workspaceId = "ws-legacy";
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    queryClient.setQueryData(evolutionKeys.graphMemoryStatus(workspaceId), {
+      workspace_id: workspaceId,
+      memory_type: "legacy" as const,
+      scoped_writer_ready: false,
+      empty_start: true,
+      graphs: [],
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <I18nWrapper>
+          <GraphMemoryStatusCard wsId={workspaceId} />
+        </I18nWrapper>
+      </QueryClientProvider>,
+    );
+
+    expect(screen.queryByText("research")).toBeNull();
+    expect(screen.queryByText("project")).toBeNull();
   });
 });
 

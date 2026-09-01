@@ -59,17 +59,20 @@ func TestGraphExecutionMemoriesRequestsServerRecall(t *testing.T) {
 			t.Fatalf("request body = %+v", request)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"recall_id":"recall-1","trace_id":"`+request.TraceID+`","status":"accepted","replayed":false,"k":1,"graph_kind":"project","graph_version":7,"found":true,"summary":"server summary","citations":[{"node_id":"node-1","level":0,"epistemic":"asserted"}],"rounds":2,"injection":"## Graph Memory Recall\nserver summary"}`)
+		_, _ = io.WriteString(w, `{"recall_id":"recall-1","trace_id":"`+request.TraceID+`","status":"accepted","replayed":false,"k":1,"graph_kind":"project","graph_version":7,"found":true,"summary":"server summary","citations":[{"node_id":"node-1","level":0,"epistemic":"asserted"}],"rounds":2,"injection":"## Graph Memory Recall\nserver summary","research_injection":"## Research Memory\nserver research"}`)
 	}))
 	defer server.Close()
 
 	d := newGraphRecallTestDaemon(t, server.URL)
-	memories := d.graphExecutionMemories(context.Background(), graphRecallTestTask(), d.logger)
+	current, research := d.graphExecutionMemories(context.Background(), graphRecallTestTask(), d.logger)
 	if hits.Load() != 1 {
 		t.Fatalf("recall requests = %d, want 1", hits.Load())
 	}
-	if len(memories) != 1 || memories[0].Name != "Graph memory recall" || memories[0].Content != "## Graph Memory Recall\nserver summary" || memories[0].Scope != "workspace" {
-		t.Fatalf("memories = %+v, want one server injection", memories)
+	if len(current) != 1 || current[0].Name != "Graph memory recall" || current[0].Content != "## Graph Memory Recall\nserver summary" || current[0].Scope != "workspace" {
+		t.Fatalf("current = %+v, want one server injection", current)
+	}
+	if len(research) != 1 || research[0].Name != "Research memory recall" || research[0].Content != "## Research Memory\nserver research" || research[0].Scope != "workspace" {
+		t.Fatalf("research = %+v, want the federated research section as its own context", research)
 	}
 }
 
@@ -92,8 +95,8 @@ func TestGraphExecutionMemoriesNonInjectionOutcomes(t *testing.T) {
 			}))
 			defer server.Close()
 			d := newGraphRecallTestDaemon(t, server.URL)
-			if memories := d.graphExecutionMemories(context.Background(), graphRecallTestTask(), d.logger); memories != nil {
-				t.Fatalf("memories = %+v, want nil", memories)
+			if current, research := d.graphExecutionMemories(context.Background(), graphRecallTestTask(), d.logger); current != nil || research != nil {
+				t.Fatalf("memories = (%+v, %+v), want nil", current, research)
 			}
 		})
 	}
@@ -112,8 +115,8 @@ func TestGraphExecutionMemoriesRecallTransportFailureIsNonFatal(t *testing.T) {
 	d.logger = logger
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
-	if memories := d.graphExecutionMemories(ctx, graphRecallTestTask(), logger); memories != nil {
-		t.Fatalf("memories = %+v, want nil", memories)
+	if current, research := d.graphExecutionMemories(ctx, graphRecallTestTask(), logger); current != nil || research != nil {
+		t.Fatalf("memories = (%+v, %+v), want nil", current, research)
 	}
 	close(release)
 	if !strings.Contains(logs.String(), "graph memory recall failed") {
@@ -133,16 +136,16 @@ func TestGraphExecutionMemoriesSkipsRecallWhenGated(t *testing.T) {
 		d := newGraphRecallTestDaemon(t, server.URL)
 		task := graphRecallTestTask()
 		task.MemoryType = MemoryTypeLegacy
-		if memories := d.graphExecutionMemories(context.Background(), task, d.logger); memories != nil {
-			t.Fatalf("memories = %+v, want nil", memories)
+		if current, research := d.graphExecutionMemories(context.Background(), task, d.logger); current != nil || research != nil {
+			t.Fatalf("memories = (%+v, %+v), want nil", current, research)
 		}
 	})
 	t.Run("empty query", func(t *testing.T) {
 		d := newGraphRecallTestDaemon(t, server.URL)
 		task := graphRecallTestTask()
 		task.ChatMessage = ""
-		if memories := d.graphExecutionMemories(context.Background(), task, d.logger); memories != nil {
-			t.Fatalf("memories = %+v, want nil", memories)
+		if current, research := d.graphExecutionMemories(context.Background(), task, d.logger); current != nil || research != nil {
+			t.Fatalf("memories = (%+v, %+v), want nil", current, research)
 		}
 	})
 	if hits.Load() != 0 {

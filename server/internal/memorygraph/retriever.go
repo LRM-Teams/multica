@@ -208,7 +208,7 @@ func (r *HybridRetriever) Search(ctx context.Context, query string) ([]ScoredDoc
 // viewActive reports whether cfg.View filters results (spec §5). The zero
 // GraphView is inactive so legacy callers keep unfiltered retrieval.
 func (r *HybridRetriever) viewActive() bool {
-	return r.cfg.View.AllowProject || r.cfg.View.ChannelID != ""
+	return r.cfg.View.Active()
 }
 
 // nodeForDoc maps a retrieval doc id back to its graph node, or nil for

@@ -24,6 +24,11 @@ const (
 	graphMemoryRecallMaxSummaryChars  = 4000
 	graphMemoryRecallMaxCitationCount = 16
 	graphMemoryRecallTruncationMarker = "…[truncated]"
+
+	// Bounded research federation (spec §4.4): filtered retrieval only, no
+	// second Explore, no provider call.
+	researchRecallTopK         = 5
+	researchRecallMaxBodyChars = 600
 )
 
 // GraphMemoryRecallBackendFactory creates the provider backend for one
@@ -37,8 +42,13 @@ type GraphMemoryRecallInjection struct {
 	Summary   string                 `json:"summary"`
 	Citations []memorygraph.Citation `json:"citations"`
 	Content   string                 `json:"content"`
-	Rounds    int                    `json:"rounds"`
-	Version   int                    `json:"version"`
+	// Research carries the federated research-graph section (spec §4.4) as
+	// its own injection so the daemon can express the 16 KiB trim order
+	// (historical first, then current, then research). Citations already
+	// include the qualified research entries.
+	Research string `json:"research"`
+	Rounds   int    `json:"rounds"`
+	Version  int    `json:"version"`
 }
 
 // GraphMemoryRecallExecutor owns synchronous Explore execution after Begin has
@@ -137,10 +147,135 @@ func (e *GraphMemoryRecallExecutor) Execute(ctx context.Context, plan *GraphMemo
 			slog.Warn("graph memory recall: prior record save failed", "recall_id", plan.RecallID, "error", err)
 		}
 	}
-	if !result.Found {
+	// Research federation (spec §4.4) joins after the primary explore: the
+	// research graph supplements scope-resolved recall but never substitutes
+	// for it. A primary miss plus research hits still surfaces knowledge.
+	researchContent, researchCitations := e.researchRecall(ctx, plan)
+	if !result.Found && researchContent == "" {
 		return &GraphMemoryRecallInjection{Version: plan.GraphVersion, Rounds: result.Rounds}, nil
 	}
-	return graphMemoryRecallInjection(store, plan.GraphVersion, result.Summary, result.NodeIDs, result.Rounds), nil
+	injection := &GraphMemoryRecallInjection{Version: plan.GraphVersion, Rounds: result.Rounds}
+	if result.Found {
+		injection = graphMemoryRecallInjection(store, plan.GraphVersion, result.Summary, result.NodeIDs, result.Rounds)
+	}
+	if researchContent != "" {
+		injection.Research = researchContent
+		injection.Citations = append(injection.Citations, researchCitations...)
+		injection.Found = true
+	}
+	return injection, nil
+}
+
+// researchRecall runs filtered retrieval over the federated research graph:
+// one bounded hybrid search under a research-only view, no second Explore and
+// no provider call (spec §4.4). Hits are recorded in the research graph's own
+// query log so federated reads drive its maintenance rounds. Every failure
+// degrades to empty — federation is additive and never blocks recall.
+func (e *GraphMemoryRecallExecutor) researchRecall(ctx context.Context, plan *GraphMemoryRecallPlan) (string, []memorygraph.Citation) {
+	if plan.Research == nil || strings.TrimSpace(plan.Query) == "" {
+		return "", nil
+	}
+	store := memorygraph.NewStore(plan.Research.Dir)
+	if _, err := store.OpenSnapshot(plan.Research.Version); err != nil {
+		slog.Warn("graph memory recall: research snapshot unavailable", "recall_id", plan.RecallID, "error", err)
+		return "", nil
+	}
+	cfg := memorygraph.DefaultRetrievalConfig()
+	cfg.View = plan.Research.View
+	cfg.TopK = researchRecallTopK
+	retr := memorygraph.NewHybridRetriever(store, e.embedder, cfg)
+	if err := retr.RebuildForVersion(ctx, plan.Research.Version); err != nil {
+		slog.Warn("graph memory recall: research retriever unavailable", "recall_id", plan.RecallID, "error", err)
+		return "", nil
+	}
+	docs, err := retr.Search(ctx, plan.Query)
+	if err != nil || len(docs) == 0 {
+		return "", nil
+	}
+	graph, err := memorygraph.LoadGraph(store, plan.Research.Version)
+	if err != nil {
+		return "", nil
+	}
+	hits := make([]researchRecallHit, 0, len(docs))
+	nodeIDs := make([]string, 0, len(docs))
+	for _, doc := range docs {
+		node := graph.Node(doc.ID)
+		if node == nil {
+			continue
+		}
+		nodeIDs = append(nodeIDs, node.NodeID)
+		hits = append(hits, researchRecallHit{
+			Citation: memorygraph.Citation{NodeID: node.NodeID, Level: node.Level, Epistemic: node.Epistemic},
+			Body:     node.Body,
+		})
+	}
+	if len(hits) == 0 {
+		return "", nil
+	}
+	if err := memorygraph.NewQueryRecorder(store, "daemon").RecordRecall(memorygraph.QueryLogEntry{
+		TraceID:   plan.TraceID,
+		Query:     plan.Query,
+		Timestamp: time.Now().UTC(),
+		Version:   plan.Research.Version,
+		NodeIDs:   nodeIDs,
+		Found:     true,
+	}); err != nil {
+		slog.Warn("graph memory recall: research query log append failed", "trace_id", plan.TraceID, "error", err)
+	}
+	section, qualified := researchRecallSection(plan.WorkspaceID, hits, nil)
+	return section, qualified
+}
+
+// researchRecallHit is one research retrieval hit with its markdown body for
+// the rendered section.
+type researchRecallHit struct {
+	Citation memorygraph.Citation
+	Body     string
+}
+
+// researchQualifiedNodeID graph-qualifies a research node id so citations
+// stay distinguishable from primary-graph ids: research:<workspace>/node:<id>.
+func researchQualifiedNodeID(workspaceID, nodeID string) string {
+	return "research:" + workspaceID + "/node:" + nodeID
+}
+
+// researchRecallSection renders the federated research section and returns
+// the merged citation list: qualified research entries first, then the bare
+// primary citations unchanged.
+func researchRecallSection(workspaceID string, hits []researchRecallHit, primary []memorygraph.Citation) (string, []memorygraph.Citation) {
+	if len(hits) == 0 {
+		return "", primary
+	}
+	citations := make([]memorygraph.Citation, 0, len(hits)+len(primary))
+	var b strings.Builder
+	b.WriteString("## Research Memory\n")
+	for _, hit := range hits {
+		qualifiedID := researchQualifiedNodeID(workspaceID, hit.Citation.NodeID)
+		citations = append(citations, memorygraph.Citation{
+			NodeID: qualifiedID, Level: hit.Citation.Level, Epistemic: hit.Citation.Epistemic,
+		})
+		b.WriteString("\n- ")
+		b.WriteString(qualifiedID)
+		var qualifiers []string
+		if hit.Citation.Epistemic != "" {
+			qualifiers = append(qualifiers, hit.Citation.Epistemic)
+		}
+		if len(qualifiers) > 0 {
+			b.WriteString(" (")
+			b.WriteString(strings.Join(qualifiers, ", "))
+			b.WriteString(")")
+		}
+		body := strings.TrimSpace(hit.Body)
+		if body != "" {
+			if runes := []rune(body); len(runes) > researchRecallMaxBodyChars {
+				body = string(runes[:researchRecallMaxBodyChars]) + graphMemoryRecallTruncationMarker
+			}
+			b.WriteString(": ")
+			b.WriteString(body)
+		}
+	}
+	citations = append(citations, primary...)
+	return b.String(), citations
 }
 
 // graphPriorOwnerKey is the per-channel continuation key: workspace +

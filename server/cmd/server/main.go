@@ -586,6 +586,15 @@ func main() {
 	} else {
 		schedulerRegistered = true
 	}
+	// Research graph export (unification spec §4.2) registers unconditionally
+	// and stays inert until MULTICA_RESEARCH_GRAPH_EXPORT_ENABLED is set; the
+	// exporter additionally fails closed per workspace outside graph memory
+	// mode, so no workspace exports by default.
+	if err := schedulerMgr.Register(scheduler.ResearchGraphExportJob(pool)); err != nil {
+		slog.Warn("scheduler: failed to register research graph export job", "error", err)
+	} else {
+		schedulerRegistered = true
+	}
 	if err := schedulerMgr.Register(scheduler.EnvCheckpointLaneSweepJob(pool)); err != nil {
 		slog.Warn("scheduler: failed to register env checkpoint lane sweep job", "error", err)
 	} else {

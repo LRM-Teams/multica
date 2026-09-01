@@ -585,11 +585,12 @@ export interface GraphMemoryMessageCitations {
 }
 
 export interface GraphMemoryGraphStatus {
-  kind: "project" | "channel";
+  kind: "project" | "channel" | "research";
   owner_id: string;
   current_version: number;
   versions: number[];
   staging_segments: number;
+  node_count: number;
   // Backend emits an RFC3339 timestamp or omits/nulls the field when the
   // graph was never consolidated.
   last_consolidated_at: string | null;

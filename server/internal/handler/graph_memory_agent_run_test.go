@@ -124,38 +124,38 @@ func TestGraphMemoryAgentRunStoreFencingIdempotencyQuotaAndCitation(t *testing.T
 	}
 	defer execution.Shutdown(context.Background())
 
-	if err := store.ValidateToolOperationQuota(ctx, claim.RunID, claim.FencingToken, "explore", "too-many", json.RawMessage(`{"node_ids":["1","2","3","4","5"]}`)); !errors.Is(err, service.ErrGraphMemoryAgentQuotaExceeded) {
+	if err := store.ValidateToolOperationQuota(ctx, claim.RunID, claim.FencingToken, "explore", "too-many", "", json.RawMessage(`{"node_ids":["1","2","3","4","5"]}`)); !errors.Is(err, service.ErrGraphMemoryAgentQuotaExceeded) {
 		t.Fatalf("nodes-per-call quota err=%v", err)
 	}
 	quotaRequest := json.RawMessage(`{"node_ids":["1","2","3","4"]}`)
-	quotaReservation, err := store.ReserveToolOperation(ctx, claim.RunID, claim.FencingToken, "quota-1", "explore", quotaRequest)
+	quotaReservation, err := store.ReserveToolOperation(ctx, claim.RunID, claim.FencingToken, "quota-1", "", "explore", quotaRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := store.CompleteToolOperation(ctx, claim.RunID, claim.FencingToken, quotaReservation.OperationID, json.RawMessage(`{"nodes":[]}`), ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.ValidateToolOperationQuota(ctx, claim.RunID, claim.FencingToken, "explore", "quota-2", json.RawMessage(`{"node_ids":["5","6"]}`)); !errors.Is(err, service.ErrGraphMemoryAgentQuotaExceeded) {
+	if err := store.ValidateToolOperationQuota(ctx, claim.RunID, claim.FencingToken, "explore", "quota-2", "", json.RawMessage(`{"node_ids":["5","6"]}`)); !errors.Is(err, service.ErrGraphMemoryAgentQuotaExceeded) {
 		t.Fatalf("nodes-per-minute quota err=%v", err)
 	}
 
 	request := json.RawMessage(`{"query":"dispatch","limit":4}`)
-	reservation, err := store.ReserveToolOperation(ctx, claim.RunID, claim.FencingToken, "start-1", "start", request)
+	reservation, err := store.ReserveToolOperation(ctx, claim.RunID, claim.FencingToken, "start-1", "", "start", request)
 	if err != nil || reservation.OperationID == "" || reservation.Pending || reservation.Replay {
 		t.Fatalf("reservation = %+v err=%v", reservation, err)
 	}
-	pending, err := store.ReserveToolOperation(ctx, claim.RunID, claim.FencingToken, "start-1", "start", json.RawMessage(`{"limit":4,"query":"dispatch"}`))
+	pending, err := store.ReserveToolOperation(ctx, claim.RunID, claim.FencingToken, "start-1", "", "start", json.RawMessage(`{"limit":4,"query":"dispatch"}`))
 	if err != nil || !pending.Pending || pending.OperationID != reservation.OperationID {
 		t.Fatalf("pending replay = %+v err=%v", pending, err)
 	}
-	if _, err := store.ReserveToolOperation(ctx, claim.RunID, claim.FencingToken, "start-1", "redirect", request); !errors.Is(err, service.ErrGraphMemoryToolReplayConflict) {
+	if _, err := store.ReserveToolOperation(ctx, claim.RunID, claim.FencingToken, "start-1", "", "redirect", request); !errors.Is(err, service.ErrGraphMemoryToolReplayConflict) {
 		t.Fatalf("conflicting replay err=%v", err)
 	}
 	response := json.RawMessage(`{"trajectory_id":"` + claim.TrajectoryID + `","nodes":["n1"]}`)
 	if err := store.CompleteToolOperation(ctx, claim.RunID, claim.FencingToken, reservation.OperationID, response, ""); err != nil {
 		t.Fatal(err)
 	}
-	replay, err := store.ReserveToolOperation(ctx, claim.RunID, claim.FencingToken, "start-1", "start", request)
+	replay, err := store.ReserveToolOperation(ctx, claim.RunID, claim.FencingToken, "start-1", "", "start", request)
 	if err != nil || !replay.Replay || replay.Pending || string(replay.Response) == "" {
 		t.Fatalf("terminal replay = %+v err=%v", replay, err)
 	}
@@ -192,7 +192,9 @@ func TestGraphMemoryAgentRunStoreFencingIdempotencyQuotaAndCitation(t *testing.T
 	if steeringCount != 1 || steeringOrdinal != 1 {
 		t.Fatalf("steering events count=%d ordinal=%d", steeringCount, steeringOrdinal)
 	}
-	if err := store.RecordViewedNodes(ctx, claim.RunID, claim.FencingToken, []string{"n1", "n1"}); err != nil {
+	// Viewed provenance is graph-qualified ("<graph>|<node>"); this direct
+	// store test uses the empty (legacy) graph identity.
+	if err := store.RecordViewedNodes(ctx, claim.RunID, claim.FencingToken, []string{"|n1", "|n1"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.AddUsage(ctx, claim.RunID, claim.FencingToken, 400, 500); err != nil {

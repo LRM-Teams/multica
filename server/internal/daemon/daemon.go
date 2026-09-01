@@ -2340,9 +2340,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			// Graph mode (spec §8): legacy user/agent retained (no daily);
 			// graph owns project/channel/daily. Split agent out for
 			// session-start injection; turn context keeps user + graph blob.
+			graphCurrent, graphResearch := d.graphExecutionMemories(ctx, memoryTask, taskLog)
 			combined := mergeGraphModeExecutionMemory(
-				agentRootPath, memoryTask, serverMemories,
-				d.graphExecutionMemories(ctx, memoryTask, taskLog),
+				agentRootPath, memoryTask, serverMemories, graphCurrent, graphResearch,
 			)
 			allTurnMemories = withoutAgentScopeMemories(combined)
 			agentScopeMemories = withoutGraphModeLegacyDaily(agentScopeMemories)

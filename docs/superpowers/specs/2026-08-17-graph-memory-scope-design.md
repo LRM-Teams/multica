@@ -1,6 +1,7 @@
 # MultiCA Graph Memory Scope and Compatibility Design
 
 - Date: 2026-08-17
+- Revision: 2026-08-31 — adds the research graph as the fourth named scope, per `2026-08-31-research-graph-memory-unification-spec.zh-CN.md`. The prohibition on workspace-wide graphs is narrowed from "any workspace-wide graph" to "implicit workspace-wide fallback"; the explicitly named research scope is the sole exception.
 - Status: Approved design; implementation pending
 - Supersedes: the replacement and workspace-wide storage assumptions in `2026-08-14-graph-memory-reviewer-design.zh-CN.md`
 - Keeps: the existing graph data model, hybrid retrieval, explore, judge/reward, versioning, and backtesting primitives unless this document narrows them
@@ -27,6 +28,7 @@ Graph mode uses a hybrid memory model:
 - User memory remains legacy: `users/<member-id>/USER.md` and `RELATIONSHIP.md`.
 - Agent memory remains legacy: `memory/MEMORY.md` and `memory/STATE.md`.
 - Project, channel, and daily memory use graph storage only.
+- Research knowledge (conclusions/insights/findings exported from research sessions) uses graph storage only, in the workspace research graph. It enters through the research exporter's direct version writes, never through channel staging, and requires workspace Graph mode.
 - A graph miss or graph failure never falls back to legacy project, channel, daily, workspace, or team memory.
 - A task with neither project nor channel scope does not use graph memory.
 - Existing legacy project, channel, and daily files are not migrated or backfilled. The first Graph activation starts from empty graphs.
@@ -40,17 +42,18 @@ Every `(workspace_id, project_id)` pair has one physical project graph. It is sh
 ```text
 <workspaces-root>/<workspace-id>/memory_graph/
 ├── projects/<project-id>/
-└── channels/<channel-id>/
+├── channels/<channel-id>/
+└── research/<workspace-id>/
 ```
 
-`projects/<project-id>` is the canonical project graph. `channels/<channel-id>` exists only for a standalone channel residency.
+`projects/<project-id>` is the canonical project graph. `channels/<channel-id>` exists only for a standalone channel residency. `research/<workspace-id>` is the workspace research graph: exactly one per workspace, owned by the workspace itself, accumulating research-session knowledge with the session as provenance rather than a physical partition.
 
-Root-level and workspace-wide graph fallbacks are forbidden. Each graph root contains immutable identity metadata:
+**Implicit** root-level and workspace-wide graph **fallbacks** are forbidden. The research graph is the sole sanctioned workspace-level graph: it is a **named scope**, resolved explicitly for research export, maintenance, and federated recall — never selected as a fallback when a project or channel target is unresolved, and never used by a task that has neither project nor channel scope. Each graph root contains immutable identity metadata:
 
 ```text
 workspace_id
-kind: project | channel
-owner_id: <project-id | channel-id>
+kind: project | channel | research
+owner_id: <project-id | channel-id | workspace-id>
 ```
 
 A store must verify this identity before reading or writing. Identity mismatch fails closed.
@@ -121,11 +124,12 @@ The project-binding write path updates the registry eagerly. The resolver also r
 Nodes and staging segments add these fields:
 
 ```text
-visibility: project | channel
+visibility: project | channel | research
 channel_id: <uuid|null>
 source_agent_ids: [<uuid>...]
 source_channel_ids: [<uuid>...]
 source_task_ids: [<uuid>...]
+source_session_id: <uuid|null>   # research-exported nodes only
 ```
 
 Rules:
@@ -135,6 +139,7 @@ Rules:
 - A project graph permits project and channel visibility.
 - A channel-origin segment defaults to channel visibility.
 - A project task without a channel defaults to project visibility.
+- A research graph permits only `visibility=research` nodes (no channel ID); research provenance carries the exporting agent IDs and the source session ID. Research nodes never migrate into project/channel graphs and vice versa; merges are valid only within one physical graph.
 - Provenance is monotonic: consolidation may merge source IDs but may not remove them.
 - Stored edges may cross visibility scopes, but every retrieval and traversal step reapplies the caller's graph view. A visible edge cannot reveal a hidden node.
 
@@ -161,6 +166,7 @@ daily:<agent-id>:none:<channel-id>:<YYYY-MM-DD>
 - Update and seal serialize under the same graph mutation lease. An update that loses the seal race must not reopen or mutate the sealed node.
 - A source event arriving after seal is appended to the current open daily node with `late_for_date=<original-local-date>` and original event provenance; it never rewrites the sealed node.
 - Daily nodes are never deleted.
+- The research graph has no daily nodes: its temporal model is research-session provenance (`source_session_id`), not daily sealing.
 - Routine recall applies recency filters, while explicit historical lookup and allowed graph traversal may access older daily nodes.
 - A channel residency change creates a new daily identity in the new graph. Old daily nodes stay in the historical graph.
 
@@ -183,9 +189,9 @@ GraphMemoryContext
 - explore_max_rounds
 - write_target
 - recall_targets[]
-  - graph_kind
+  - graph_kind: project | channel | research
   - graph_owner_id
-  - access: project_and_channel | project_only | exact_channel
+  - access: project_and_channel | project_only | exact_channel | research
   - channel_id
   - lineage_generation
 ```
@@ -198,11 +204,12 @@ The scoped recall matrix is:
 
 | Task scope | Recall targets |
 | --- | --- |
-| Project only | Current project graph, project-visible nodes only |
-| Project + current project-lineage channel | Current project graph, project-visible plus exact current channel; historical graphs exact-channel only |
-| Project + standalone channel | Current project graph project-visible only; standalone graph exact-channel |
-| Channel only | Current route write-target graph plus historical lineage, exact-channel only |
-| Neither project nor channel | No graph recall |
+| Project only | Current project graph, project-visible nodes only; plus the workspace research graph (research-visible nodes) |
+| Project + current project-lineage channel | Current project graph, project-visible plus exact current channel (historical graphs exact-channel only); plus the workspace research graph |
+| Project + standalone channel | Current project graph project-visible only; standalone graph exact-channel; plus the workspace research graph |
+| Channel only | Current route write-target graph plus historical lineage, exact-channel only; plus the workspace research graph |
+| Research session (Director) | Workspace research graph; plus the session's bound project graph (project-visible nodes only, and only if the session creator participates in that project) |
+| Neither project nor channel | No graph recall (the research graph is not a fallback for unscoped tasks) |
 
 `ScopedRecallCoordinator` first runs filtered hybrid retrieval over all targets. It starts explore only for graphs with eligible hits. Explore tools enforce the same graph view for every expansion.
 
@@ -211,6 +218,7 @@ References are graph-qualified, for example:
 ```text
 project:<project-id>/node:<node-id>
 channel:<channel-id>/node:<node-id>
+research:<workspace-id>/node:<node-id>
 ```
 
 Current project and current channel results rank before historical lineage. The combined memory remains within the existing 16 KiB execution-memory budget; existing user/agent caps remain, graph uses the remaining budget, and historical graph results are trimmed first.
@@ -236,6 +244,10 @@ Staging writes use a temporary file and atomic rename. A repeated segment ID is 
 ### 9.2 Daily and consolidation
 
 Daily updates and consolidation operate on one physical graph at a time. Project graphs can create project or channel nodes. Standalone graphs can create only exact-channel nodes.
+
+The research graph is an exception: it has no staging and no daily nodes. Knowledge enters only through the research exporter's direct version writes (terminal epistemic states, idempotent by node UUID + content hash). Its LLM treatment is a maintenance round - the same consolidation machinery with no staging to fold, operating on the bounded working set (usage/exploration/supervision signals plus neighborhoods plus recently imported research nodes and their similarity top-K). Maintenance applies merge/update/delete only to working-set nodes, under the same candidate gates and op-log audit as consolidation.
+
+`merge_node` (added by the unification spec) is valid only within one physical graph: input nodes must exist in the same graph and share its scope. Cross-graph merges are structurally rejected.
 
 Promotion is an explicit validated operation. Candidate backtests are scope-aware. Any cross-channel visibility leak is a hard candidate failure and cannot be offset by aggregate quality.
 
@@ -361,6 +373,10 @@ No part of this document authorizes Graph as the default mode.
 20. Graph jobs remain inert until scoped writer acceptance gates pass, even after the second environment registration gate is removed.
 21. Legacy workspace behavior remains unchanged.
 22. UI mode switching clearly states empty start and no fallback.
+23. The research graph resolves only through explicit research-scope paths (export, maintenance, federated recall, Director recall); an unresolved project/channel target or an unscoped task never falls back to it.
+24. Research graph identity (`kind=research`, `owner_id=workspace`) fails closed like other graphs; research nodes never appear in project/channel graphs and vice versa; cross-graph `merge_node` is rejected.
+25. Channel and project recall federate the workspace research graph alongside their existing targets; results stay graph-qualified and research-visible nodes are never exposed as project/channel content.
+26. Research Director recall reads the workspace research graph, and the bound project graph only when the session is project-bound and the creator participates in that project; the project graph is not read for unbound sessions.
 
 ## 15. Implementation sequencing
 

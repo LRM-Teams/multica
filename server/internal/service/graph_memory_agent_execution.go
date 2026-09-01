@@ -12,10 +12,13 @@ import (
 // Channel-scoped, single-trajectory run. The caller resolves the graph store
 // and pinned version before handing ownership to this service.
 type GraphMemoryAgentExecutionRequest struct {
-	WorkspaceID   string
-	ChannelID     string
-	TargetKind    string
-	TargetID      string
+	WorkspaceID string
+	ChannelID   string
+	TargetKind  string
+	TargetID    string
+	// GraphIdentity namespaces the ledger's durable rows ("<kind>:<owner>";
+	// empty keeps the pre-federation namespace, unification spec §4.4).
+	GraphIdentity string
 	InitialQuery  string
 	GraphVersion  int64
 	ConsumedSeq   int64
@@ -62,7 +65,7 @@ func (o *GraphMemoryAgentExecutionOwner) ClaimAndStart(ctx context.Context, req 
 	if err != nil {
 		return nil, err
 	}
-	ledger := NewGraphMemoryAgentToolLedger(o.runs, claim, req.ConsumedSeq)
+	ledger := NewGraphMemoryAgentToolLedger(o.runs, claim, req.ConsumedSeq, req.GraphIdentity)
 	server, err := memorygraph.NewExploreToolServerWithAgentLedger(req.Store, req.Retriever, req.ExploreConfig, int(claim.GraphVersion), nil, ledger)
 	if err != nil {
 		return nil, err

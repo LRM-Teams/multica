@@ -122,17 +122,18 @@ func (h *Handler) RequestGraphMemoryRecall(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	writeJSON(w, status, map[string]any{
-		"recall_id":     plan.RecallID,
-		"trace_id":      plan.TraceID,
-		"status":        "accepted",
-		"replayed":      plan.Replayed,
-		"k":             plan.K,
-		"graph_kind":    plan.GraphKind,
-		"graph_version": plan.GraphVersion,
-		"found":         injection.Found,
-		"summary":       injection.Summary,
-		"citations":     injection.Citations,
-		"rounds":        injection.Rounds,
-		"injection":     injection.Content,
+		"recall_id":          plan.RecallID,
+		"trace_id":           plan.TraceID,
+		"status":             "accepted",
+		"replayed":           plan.Replayed,
+		"k":                  plan.K,
+		"graph_kind":         plan.GraphKind,
+		"graph_version":      plan.GraphVersion,
+		"found":              injection.Found,
+		"summary":            injection.Summary,
+		"citations":          injection.Citations,
+		"rounds":             injection.Rounds,
+		"injection":          injection.Content,
+		"research_injection": injection.Research,
 	})
 }

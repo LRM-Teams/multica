@@ -47,6 +47,15 @@ supersedes: docs/adr/0018-machine-work-journal-period-brief.md
 > ∪ `/workspace` (when that directory exists) ∪ other visible project dirs
 > outside agent-private `.multica`. HOME-only is incomplete on container
 > sandboxes. Non-git in-window source files are evidence.
+>
+> **Amendment (2026-09-01):** “Other visible project dirs” on Linux includes
+> one level of HOME symlink children, common parents (`~/go`, `~/repos`,
+> `~/src/github.com`, …), and shallow git roots under `/opt` / `/srv` /
+> `/usr/local/src` — not those parents as whole-tree scan roots. Git harvest
+> uses `--all` (not local branches only) and keeps porcelain-dirty paths
+> when mtime is outside the window (labeled). Non-git names include shell,
+> yaml, Docker/Make, Terraform, and Nix. Still no browser, journal, Docker
+> daemon, or other-machine harvest.
 
 A Period Work Brief remains a Notes narrative for colleagues or a manager —
 not an activity dump and not a PPT file. Collection and synthesis are split:

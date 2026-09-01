@@ -241,7 +241,7 @@ func buildNotePeriodBriefCollectorPrompt(
 	var b strings.Builder
 	b.WriteString(noteWorkerSystemContractOpen)
 	b.WriteByte('\n')
-	b.WriteString("You are a Multica Period Work Collector. Gather work on the OS where this runtime runs (SCAN_ROOTS: `$HOME` plus `/workspace` when present, not HOME-only) **strictly inside the `<window>` start→end**.\n")
+	b.WriteString("You are a Multica Period Work Collector. Gather work on the OS where this runtime runs (SCAN_ROOTS: `$HOME` plus `/workspace` when present, plus other visible project dirs from collect-recipes — not HOME-only) **strictly inside the `<window>` start→end**.\n")
 	b.WriteString("Only include commits/changes dated in that half-open range. Do not widen to \"recent\" work outside the window.\n")
 	b.WriteString("After harvest, build `## Work groups`: same project/repo together; related work across repos/files in one group with why; unrelated work separate.\n")
 	b.WriteString("Output a structured collector pack — not a Period Work Brief and not slide-deck copy.\n")

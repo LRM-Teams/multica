@@ -16,6 +16,7 @@ to these sources.
 | Collector must add `## Work groups` + optional Mermaid (evidence remains required) | ADR 0019 Detail level; this skill `SKILL.md` pack shape; `notePeriodBriefCollectorInstruction` |
 | Product contract | `docs/adr/0019-runtime-agent-collectors-period-brief.md` |
 | Scan roots = HOME ∪ `/workspace` ∪ visible project dirs; non-git in-window files | this skill `SKILL.md`; `references/collect-recipes.md` `SCAN_ROOTS`; `notePeriodBriefCollectorInstruction` |
+| Linux / off-HOME harvest (HOME symlink children, `~/go` `~/repos`, shallow `/opt` `/srv` git, `--all` refs, dirty-without-mtime, extra source-like names, prune `.venv`) | `references/collect-recipes.md`; this skill Scope + procedure; `notePeriodBriefCollectorInstruction`; `period-work-collector.json`; ADR 0019 2026-09-01 amendment |
 
 ## Delivery / submit-pack
 

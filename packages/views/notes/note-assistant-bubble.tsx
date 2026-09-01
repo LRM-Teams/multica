@@ -23,7 +23,7 @@ import {
 } from "@multica/core/notes/period-brief-compose";
 import { type PeriodBriefCollectorSlot } from "@multica/core/notes/period-brief-collectors";
 import { isValidPeriodBriefCustomRange } from "@multica/core/notes/period-brief-window";
-import { noteListOptions, notePeriodBriefActiveOptions } from "@multica/core/notes/queries";
+import { noteKeys, noteListOptions, notePeriodBriefActiveOptions } from "@multica/core/notes/queries";
 import { abbreviateNoteSelection, attachNoteSelectionQuote, type NoteSelectionExcerpt } from "@multica/core/notes/selection-quote";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { runtimeListOptions } from "@multica/core/runtimes";
@@ -395,6 +395,25 @@ export function NoteAssistantBubble({
     return true;
   }, [composerLocked, highlightsOpen, periodBriefOpen]);
 
+  const handleStopPeriodBrief = React.useCallback(() => {
+    const run = activePeriodBrief?.run;
+    if (!run?.id || !periodBriefRunLocksComposer(run.status)) return;
+    queryClient.setQueryData(noteKeys.periodBriefActive(wsId, pageId), { run: null });
+    void api.cancelNotePeriodBrief(run.id).then(
+      () => {
+        void queryClient.invalidateQueries({ queryKey: noteKeys.periodBriefActive(wsId, pageId) });
+      },
+      (err: unknown) => {
+        void queryClient.invalidateQueries({ queryKey: noteKeys.periodBriefActive(wsId, pageId) });
+        showErrorToast(
+          err instanceof Error && err.message
+            ? err.message
+            : t(($) => $.notes_page.period_brief_stop_failed),
+        );
+      },
+    );
+  }, [activePeriodBrief?.run, pageId, queryClient, t, wsId]);
+
   const acceptPeriodBriefIntent = React.useCallback(() => {
     setPeriodBriefConfirmText(null);
     setHighlightsOpen(false);
@@ -539,6 +558,7 @@ export function NoteAssistantBubble({
         onSendIntercept={interceptPeriodBriefCompose}
         onSendOverride={periodBriefOpen && !composerLocked ? submitPeriodBrief : undefined}
         composerLocked={composerLocked}
+        onLockedComposerStop={handleStopPeriodBrief}
       />
       {createDialogOpen ? (
         <CreateAgentDialog

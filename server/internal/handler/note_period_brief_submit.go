@@ -56,6 +56,10 @@ func (h *Handler) SubmitAgentNotePeriodBriefPack(w http.ResponseWriter, r *http.
 		return
 	}
 
+	if !periodBriefRunLocksComposerStatus(run.Status) {
+		writeError(w, http.StatusConflict, "period brief run is not collecting")
+		return
+	}
 	ref, _, found := findCollectorRef(run.Collectors, uuidToString(agentUUID))
 	if !found {
 		writeError(w, http.StatusForbidden, "only a collector on this Period Brief run may submit a pack")

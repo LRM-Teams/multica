@@ -31,6 +31,20 @@ func prepareStableAgentCLITransport(cfg Config, workspaceID, agentID, multicaBin
 	return turntransport.Prepare(root, multicaBin)
 }
 
+// stableCanonicalRuntimeEnvironment is the inbox-task → resident identity
+// adapter. Product-task agentEnv always carries current-turn keys
+// (MULTICA_TASK_ID, inbox lease, …). Those belong on the turn transport bind,
+// never in the long-lived resident fingerprint. Strip credentials, then keep
+// only the stable half.
+func stableCanonicalRuntimeEnvironment(environment map[string]string) (map[string]string, error) {
+	stripped := stripProviderCredentialTransport(environment)
+	stable, _, err := splitAgentProcessEnvironment(stripped)
+	if err != nil {
+		return nil, err
+	}
+	return stable, nil
+}
+
 // stripProviderCredentialTransport removes raw credential transport keys from a
 // process-identity environment. Credentials bind via request.Token → Bind /
 // CLI wrapper (MULTICA_TOKEN_FILE only inside the wrapper), never in the

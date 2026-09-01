@@ -229,7 +229,7 @@ func (h *Handler) updateNotePeriodBriefRunCollectors(
 	_, err = h.DB.Exec(ctx, `
 UPDATE note_period_brief_run
 SET collectors = $1::jsonb, status = $2, updated_at = now()
-WHERE id = $3`, raw, status, runID)
+WHERE id = $3 AND status IN ('planning', 'collecting', 'synthesizing')`, raw, status, runID)
 	return err
 }
 

@@ -19,6 +19,7 @@ const {
   ensureNotesAssistantAgent,
   ensurePeriodBriefCollectors,
   createNotePeriodBrief,
+  cancelNotePeriodBrief,
   getActiveNotePeriodBrief,
   toggleNoteBubble,
   setNoteBubbleOpenPageId,
@@ -35,6 +36,7 @@ const {
   ensureNotesAssistantAgent: vi.fn(),
   ensurePeriodBriefCollectors: vi.fn(),
   createNotePeriodBrief: vi.fn(),
+  cancelNotePeriodBrief: vi.fn(),
   getActiveNotePeriodBrief: vi.fn(),
   toggleNoteBubble: vi.fn(),
   setNoteBubbleOpenPageId: vi.fn(),
@@ -69,6 +71,7 @@ vi.mock("@multica/core/api", () => ({
     ensureNotesAssistantAgent: (...args: unknown[]) => ensureNotesAssistantAgent(...args),
     ensurePeriodBriefCollectors: (...args: unknown[]) => ensurePeriodBriefCollectors(...args),
     createNotePeriodBrief: (...args: unknown[]) => createNotePeriodBrief(...args),
+    cancelNotePeriodBrief: (...args: unknown[]) => cancelNotePeriodBrief(...args),
     getActiveNotePeriodBrief: (...args: unknown[]) => getActiveNotePeriodBrief(...args),
     getAgentTemplate: () => Promise.resolve(null),
     listComputers: () => Promise.resolve([]),
@@ -147,6 +150,7 @@ vi.mock("../chat/components/chat-window", () => ({
     onSendOverride,
     onSendIntercept,
     onSendAccepted,
+    onLockedComposerStop,
     seedSend,
     layout,
   }: {
@@ -157,6 +161,7 @@ vi.mock("../chat/components/chat-window", () => ({
     onSendOverride?: (text: string) => boolean | Promise<boolean>;
     onSendIntercept?: (text: string) => boolean;
     onSendAccepted?: () => void;
+    onLockedComposerStop?: () => void;
     seedSend?: { nonce: number; text: string } | null;
     layout?: string;
   }) => (
@@ -191,6 +196,9 @@ vi.mock("../chat/components/chat-window", () => ({
       </button>
       <button type="button" onClick={() => void onSendOverride?.("只采集 Cloud Box")}>
         send-override
+      </button>
+      <button type="button" onClick={() => onLockedComposerStop?.()}>
+        stop-locked
       </button>
     </div>
   ),
@@ -233,6 +241,7 @@ describe("NoteAssistantBubble period brief", () => {
     ensureNotesAssistantAgent.mockReset();
     ensurePeriodBriefCollectors.mockReset();
     createNotePeriodBrief.mockReset();
+    cancelNotePeriodBrief.mockReset();
     getActiveNotePeriodBrief.mockReset();
     toggleNoteBubble.mockReset();
     setNoteBubbleOpenPageId.mockReset();
@@ -244,6 +253,7 @@ describe("NoteAssistantBubble period brief", () => {
     chatState.noteSelectionQuote = null;
     lastOutgoing.text = "";
     getActiveNotePeriodBrief.mockResolvedValue({ run: null });
+    cancelNotePeriodBrief.mockResolvedValue({ run: { id: "run-1", status: "cancelled" } });
     const collectorA = agent({
       id: "collector-a",
       name: "period-collect-laptopa",
@@ -384,6 +394,29 @@ describe("NoteAssistantBubble period brief", () => {
         "data-running",
         "true",
       );
+    });
+  });
+
+  it("stops a collecting period brief from the composer stop button", async () => {
+    getActiveNotePeriodBrief.mockResolvedValue({
+      run: { id: "run-1", status: "collecting", draft_page_id: "draft-1" },
+    });
+    const user = userEvent.setup();
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    renderWithI18n(
+      <QueryClientProvider client={qc}>
+        <NoteAssistantBubble pageId="page-1" pageTitle="Note" />
+      </QueryClientProvider>,
+      { locale: "zh-Hans" },
+    );
+    await waitFor(() => {
+      expect(getActiveNotePeriodBrief).toHaveBeenCalled();
+    });
+    await user.click(screen.getByRole("button", { name: "stop-locked" }));
+    await waitFor(() => {
+      expect(cancelNotePeriodBrief).toHaveBeenCalledWith("run-1");
     });
   });
 
@@ -710,6 +743,7 @@ describe("NoteAssistantBubble highlights", () => {
     listPendingChatTasks.mockReset();
     ensureNotesAssistantAgent.mockReset();
     createNotePeriodBrief.mockReset();
+    cancelNotePeriodBrief.mockReset();
     getActiveNotePeriodBrief.mockReset();
     toggleNoteBubble.mockReset();
     setNoteBubbleOpenPageId.mockReset();

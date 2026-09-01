@@ -156,6 +156,8 @@ export interface ChatWindowProps {
   composerPrefix?: React.ReactNode;
   /** Hide the composer until a page-bound Period Brief run finishes. */
   composerLocked?: boolean;
+  /** Stop a locked 写汇报 run. Chat cancel only covers standalone turns. */
+  onLockedComposerStop?: () => void;
   /**
    * Force layout. Default: floating desktop window; on mobile with a
    * lockedAgentId, fullscreen sheet is used automatically.
@@ -307,6 +309,7 @@ export function ChatWindow({
   onSendAccepted,
   composerPrefix,
   composerLocked = false,
+  onLockedComposerStop,
   layout = "floating",
 }: ChatWindowProps = {}) {
   const { t } = useT("chat");
@@ -867,16 +870,19 @@ export function ChatWindow({
   }, [seedSend, isOpen, activeAgent, onSeedSendConsumed]);
 
   const handleStop = useCallback(() => {
+    if (composerLocked) {
+      onLockedComposerStop?.();
+    }
     if (!activeSessionId) {
       apiLogger.debug("cancelStandalone skipped: no active session");
       return;
     }
     if (!turnOutstanding) {
-      stopRequestedBeforeTaskRef.current = true;
+      if (!composerLocked) stopRequestedBeforeTaskRef.current = true;
       return;
     }
     void cancelStandaloneTurn(activeSessionId, { source: "active-input" });
-  }, [turnOutstanding, activeSessionId, cancelStandaloneTurn]);
+  }, [composerLocked, onLockedComposerStop, turnOutstanding, activeSessionId, cancelStandaloneTurn]);
 
   const handleSelectAgent = useCallback(
     (agent: Agent) => {

@@ -434,9 +434,10 @@ type AgentTaskResponse struct {
 	Kind           string `json:"kind"`                      // discriminator: "comment" | "autopilot" | "chat" | "quick_create" | "direct" — used by the activity row to label tasks that have no linked issue
 	// AuthToken is the `mat_` bearer the daemon writes into the per-run
 	// MULTICA_TOKEN_FILE wrapper. Canonical inbox runs bind it to a single
-	// delivery. Credential-transport-capable runs leave this empty so the daemon
-	// provisions/reuses a durable agent credential locally. In all cases,
-	// auth middleware treats requests authenticated with an agent bearer as
+	// delivery. Credential-transport-capable runtimes still receive this token:
+	// durable agent credentials are launch-scoped (resident Message delivery)
+	// and must not be copied into a task token file. In all cases, auth
+	// middleware treats requests authenticated with an agent bearer as
 	// actor=agent and owner-only endpoints reject it.
 	// Empty when the runtime has no owning user.
 	AuthToken string `json:"auth_token,omitempty"`

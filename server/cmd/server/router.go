@@ -901,6 +901,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Post("/period-briefs", h.CreateNotePeriodBrief)
 				r.Get("/period-briefs/active", h.GetActiveNotePeriodBrief)
 				r.Post("/period-briefs/{runId}/insert", h.InsertNotePeriodBrief)
+				r.Post("/period-briefs/{runId}/cancel", h.CancelNotePeriodBrief)
 				r.Route("/pages", func(r chi.Router) {
 					r.Get("/", h.ListNotePages)
 					r.Post("/", h.CreateNotePage)

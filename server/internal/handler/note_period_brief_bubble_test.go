@@ -257,9 +257,10 @@ RETURNING id`, testWorkspaceID, testUserID, title+" "+uuid.NewString()[:8]).Scan
 	return id
 }
 
-func insertPeriodBriefFixtureRun(t *testing.T, sourcePageID, folderID, synthID, draftID, status string, createdAt time.Time) {
+func insertPeriodBriefFixtureRun(t *testing.T, sourcePageID, folderID, synthID, draftID, status string, createdAt time.Time) string {
 	t.Helper()
-	if _, err := testPool.Exec(context.Background(), `
+	var id string
+	if err := testPool.QueryRow(context.Background(), `
 INSERT INTO note_period_brief_run (
   workspace_id, owner_user_id, draft_page_id, folder_page_id, synthesizer_agent_id,
   window_label, window_start, window_end, timezone, window_kind,
@@ -268,9 +269,11 @@ INSERT INTO note_period_brief_run (
   $1, $2, $3, $4, $5,
   'week', now() - interval '7 days', now(), 'UTC', 'week',
   '', '[]'::jsonb, $6, $7, $8, $8
-)`, testWorkspaceID, testUserID, draftID, folderID, synthID, status, sourcePageID, createdAt); err != nil {
+)
+RETURNING id`, testWorkspaceID, testUserID, draftID, folderID, synthID, status, sourcePageID, createdAt).Scan(&id); err != nil {
 		t.Fatalf("insert run %s: %v", status, err)
 	}
+	return id
 }
 
 func TestPeriodBriefConfirmDecision(t *testing.T) {

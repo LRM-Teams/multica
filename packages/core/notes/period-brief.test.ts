@@ -199,10 +199,41 @@ describe("listOwnedPeriodBriefCollectorSlots", () => {
     const a = slots.find((slot) => slot.label === "Laptop A");
     const b = slots.find((slot) => slot.label === "Laptop B");
     expect(a?.needsSetup).toBe(false);
+    expect(a?.needsRuntime).toBe(false);
     expect(a?.collector?.id).toBe("c-a");
     expect(b?.needsSetup).toBe(true);
+    expect(b?.needsRuntime).toBe(false);
     expect(b?.collector).toBeNull();
     expect(b?.machineId).toBe("local:pc-daemon-BBBB");
+  });
+
+  it("does not ask to configure a collector on a connected computer with no runtime", () => {
+    const slots = listOwnedPeriodBriefCollectorSlots(
+      [laptopA],
+      [
+        {
+          id: "c-a",
+          name: periodBriefCollectorNameForSeed(laptopA.daemon_id),
+          display_name: "采集 · Laptop A",
+          runtime_id: "rt-a",
+          runtime_mode: "local",
+          runtime_status: "online",
+          owner_id: "user-1",
+        },
+      ],
+      "user-1",
+      [
+        { daemon_id: laptopA.daemon_id, owner_id: "user-1", deviceName: "Laptop A" },
+        { daemon_id: "win-daemon-lijian", owner_id: "user-1", deviceName: "lijian" },
+      ],
+    );
+    const windows = slots.find((slot) => slot.label === "lijian");
+    const linux = slots.find((slot) => slot.label === "Laptop A");
+    expect(windows?.needsRuntime).toBe(true);
+    expect(windows?.needsSetup).toBe(false);
+    expect(windows?.runtimeIds).toEqual([]);
+    expect(linux?.needsSetup).toBe(false);
+    expect(linux?.needsRuntime).toBe(false);
   });
 
   it("marks a collector bound to the wrong computer as needing setup", () => {

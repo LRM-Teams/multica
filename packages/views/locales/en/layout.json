@@ -184,6 +184,7 @@
     "period_brief_collector_setup_body": "This Computer is already chosen. Pick a runtime on it to create or repair the collector.",
     "period_brief_collector_setup_choose_runtime": "Configure",
     "period_brief_collector_missing_hint": "No collector yet. Ignore to keep going with the other computers.",
+    "period_brief_collector_missing_runtime_hint": "This computer is connected, but no runtime has registered yet. Start Cursor or Pi on it before configuring a collector.",
     "period_brief_collector_missing_dismiss": "Ignore",
     "period_brief_collector_offline": "offline",
     "period_brief_focus_placeholder": "Paths, topics, a time range, or computers — typed text wins if it conflicts with the chips",

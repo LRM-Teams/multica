@@ -1324,7 +1324,11 @@ func formatNotePeriodBriefPacks(packs []notePeriodBriefPackResult) string {
 		case "running", "pending":
 			b.WriteString("(still running — platform should not have woken you yet)\n")
 		default:
-			b.WriteString("调用采集 Agent 失败了（未交付采集包）— retryable; do not invent OS work.\n")
+			if pack.Retryable && pack.RetryCount < notePeriodBriefCollectorMaxRetries {
+				b.WriteString("调用采集 Agent 失败了（未交付采集包）— retryable; do not invent OS work.\n")
+			} else {
+				b.WriteString("采集完成，没有可用采集包。空源，不是失败。Write the Brief from other sources; do not invent OS work.\n")
+			}
 		}
 	}
 	return b.String()

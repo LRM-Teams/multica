@@ -85,8 +85,19 @@ func TestClassifyPeriodBriefCollectorOutcomeFailedTransient(t *testing.T) {
 func TestClassifyPeriodBriefCollectorOutcomeEmptyCompleted(t *testing.T) {
 	t.Parallel()
 	d := classifyPeriodBriefCollectorOutcome("completed", "", "", false, false)
+	if d.Status != "empty" || d.Retryable {
+		t.Fatalf("clean complete without a pack is settled empty, not a retry: %+v", d)
+	}
+	if d.FailureKind != "empty_pack" {
+		t.Fatalf("kind = %q", d.FailureKind)
+	}
+}
+
+func TestClassifyPeriodBriefCollectorOutcomeEmptyCompletedWithError(t *testing.T) {
+	t.Parallel()
+	d := classifyPeriodBriefCollectorOutcome("completed", "", "daemon disconnected", false, false)
 	if d.Status != "empty" || !d.Retryable {
-		t.Fatalf("%+v", d)
+		t.Fatalf("completed with an error and no pack still gets one retry: %+v", d)
 	}
 }
 
@@ -139,6 +150,40 @@ func TestPeriodBriefCollectorNeedsAssistantRetryOnce(t *testing.T) {
 		{Status: "ready"},
 	}); !strings.Contains(got, "收到了所有需要的材料") {
 		t.Fatalf("ready copy = %q", got)
+	}
+	if periodBriefCollectorNeedsAssistantRetry(notePeriodBriefPackResult{Status: "empty", Retryable: false, RetryCount: 0}) {
+		t.Fatal("clean empty pack must go to the Notes Assistant, not a re-collect")
+	}
+	if got := periodBriefMaterialsProgressCopy([]notePeriodBriefPackResult{
+		{Status: "empty", Retryable: false, RetryCount: 0},
+	}); !strings.Contains(got, "没有采到可用材料") {
+		t.Fatalf("clean empty copy = %q", got)
+	}
+	if strings.Contains(periodBriefMaterialsProgressCopy([]notePeriodBriefPackResult{
+		{Status: "empty", Retryable: false, RetryCount: 0},
+	}), "再发起一次采集") {
+		t.Fatal("clean empty must not ask for a re-collect")
+	}
+}
+
+func TestFormatNotePeriodBriefPacksEmptyCompletedIsNotFailure(t *testing.T) {
+	t.Parallel()
+	got := formatNotePeriodBriefPacks([]notePeriodBriefPackResult{{
+		AgentID:     "agent-1",
+		PageID:      "page-1",
+		Status:      "empty",
+		Retryable:   false,
+		Detail:      "collector completed with no pack",
+		FailureKind: "empty_pack",
+	}})
+	if strings.Contains(got, "失败了") {
+		t.Fatalf("clean empty must not be framed as failure: %s", got)
+	}
+	if strings.Contains(got, "MUST call the retry CLI") {
+		t.Fatalf("clean empty must not demand retry: %s", got)
+	}
+	if !strings.Contains(got, "空源") {
+		t.Fatalf("expected settled-empty board copy: %s", got)
 	}
 }
 

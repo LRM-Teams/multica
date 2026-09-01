@@ -10,9 +10,10 @@ import type { Agent } from "@multica/core/types";
 import { renderWithI18n } from "../test/i18n";
 import { NotePeriodBriefCompose } from "./note-period-brief-compose";
 
-const { listAgents, listRuntimes, ensurePeriodBriefCollectors } = vi.hoisted(() => ({
+const { listAgents, listRuntimes, listComputers, ensurePeriodBriefCollectors } = vi.hoisted(() => ({
   listAgents: vi.fn(),
   listRuntimes: vi.fn(),
+  listComputers: vi.fn(),
   ensurePeriodBriefCollectors: vi.fn(),
 }));
 
@@ -20,8 +21,8 @@ vi.mock("@multica/core/api", () => ({
   api: {
     listAgents: (...args: unknown[]) => listAgents(...args),
     listRuntimes: (...args: unknown[]) => listRuntimes(...args),
+    listComputers: (...args: unknown[]) => listComputers(...args),
     ensurePeriodBriefCollectors: (...args: unknown[]) => ensurePeriodBriefCollectors(...args),
-    listComputers: () => Promise.resolve([]),
   },
 }));
 
@@ -85,6 +86,8 @@ describe("NotePeriodBriefCompose", () => {
   beforeEach(() => {
     listAgents.mockReset();
     listRuntimes.mockReset();
+    listComputers.mockReset();
+    listComputers.mockResolvedValue([]);
     ensurePeriodBriefCollectors.mockReset();
     const collectorA = agent({
       id: "collector-a",
@@ -261,6 +264,30 @@ describe("NotePeriodBriefCompose", () => {
     await user.click(within(missing).getByTestId("period-brief-collector-missing-dismiss"));
     expect(screen.queryByTestId("period-brief-collector-missing-local:pc-daemon-cccc")).toBeNull();
     expect(screen.getByTestId("period-brief-collector-collector-a")).toBeTruthy();
+  });
+
+  it("does not offer Configure for a connected computer that has no runtime", async () => {
+    listComputers.mockResolvedValue([
+      {
+        daemon_id: "win-daemon-lijian",
+        owner_id: "user-1",
+        connected: true,
+        last_seen_at: "2026-09-01T07:13:52Z",
+        deviceName: "lijian",
+        os: "windows",
+      },
+    ]);
+    renderCompose();
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("period-brief-collector-waiting-runtime-local:win-daemon-lijian"),
+      ).toBeTruthy();
+    });
+    const waiting = screen.getByTestId(
+      "period-brief-collector-waiting-runtime-local:win-daemon-lijian",
+    );
+    expect(within(waiting).queryByTestId("period-brief-collector-missing-configure")).toBeNull();
+    expect(waiting).toHaveTextContent("还没有运行时");
   });
 
   it("offers cancel while choosing chips", async () => {

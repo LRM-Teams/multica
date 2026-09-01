@@ -74,12 +74,23 @@ func classifyPeriodBriefCollectorOutcome(
 			FailureKind: "cancelled",
 		}
 	case jobStatus == "completed":
-		// Finished without a pack — often a glitchy turn; retry may help.
+		// Clean complete + no pack is a settled empty harvest, not a failure.
+		// Retry only when the completed turn still carried an error string.
+		if combined == "" {
+			return periodBriefCollectorDisposition{
+				Status:      "empty",
+				Retryable:   false,
+				AbandonWhy:  "collector completed with no pack — treat as empty, do not retry",
+				Detail:      "collector completed with no pack",
+				FailureKind: "empty_pack",
+			}
+		}
 		return periodBriefCollectorDisposition{
 			Status:      "empty",
-			Retryable:   true,
-			Detail:      firstNonEmpty(combined, "collector finished without submit-pack"),
-			FailureKind: "empty_pack",
+			Retryable:   !permanent,
+			AbandonWhy:  why,
+			Detail:      combined,
+			FailureKind: firstNonEmpty(kind, "empty_pack"),
 		}
 	case jobStatus == "pending" || jobStatus == "dispatched" || jobStatus == "running":
 		return periodBriefCollectorDisposition{

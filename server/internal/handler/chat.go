@@ -17,6 +17,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/messageparts"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/middleware"
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -547,6 +548,16 @@ func (h *Handler) DeleteChatSession(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to record chat task cancellation")
 			return
 		}
+	}
+
+	// Task 8A: fence the chat session's canonical memory sources in the same
+	// transaction as the business delete — no HTTP success with an unfenced
+	// source left behind.
+	if err := h.fenceMemorySourcesTx(r.Context(), tx, session.WorkspaceID,
+		[]service.MemorySourceRef{memorySourceRef(session.WorkspaceID, service.MemorySourceChatSession, session.ID)},
+		"member:"+userID, "chat session deleted"); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to fence chat session memory")
+		return
 	}
 
 	if err := qtx.DeleteChatSession(r.Context(), db.DeleteChatSessionParams{

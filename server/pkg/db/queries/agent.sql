@@ -968,18 +968,18 @@ ORDER BY atq.created_at ASC;
 WITH revoked AS (
   UPDATE agent_credential
   SET revoked_at = now(), updated_at = now()
-  WHERE agent_id = sqlc.arg(agent_id)
-    AND id = sqlc.arg(credential_id)
-    AND workspace_id = sqlc.arg(workspace_id)
-    AND user_id = sqlc.arg(owner_id)
-    AND issuance_source = 'daemon'
-    AND revoked_at IS NULL
-    AND disabled_at IS NULL
+  WHERE agent_credential.agent_id = sqlc.arg(agent_id)
+    AND agent_credential.id = sqlc.arg(credential_id)
+    AND agent_credential.workspace_id = sqlc.arg(workspace_id)
+    AND agent_credential.user_id = sqlc.arg(owner_id)
+    AND agent_credential.issuance_source = 'daemon'
+    AND agent_credential.revoked_at IS NULL
+    AND agent_credential.disabled_at IS NULL
   RETURNING agent_id
 )
 UPDATE agent
 SET crashed_since = now(), updated_at = now()
-WHERE id IN (SELECT agent_id FROM revoked);
+WHERE agent.id IN (SELECT agent_id FROM revoked);
 
 -- name: ClearAgentCrashed :exec
 -- Clears a prior MarkAgentCrashed once the daemon has a live resident

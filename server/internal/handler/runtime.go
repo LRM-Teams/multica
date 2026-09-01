@@ -48,10 +48,16 @@ type AgentRuntimeResponse struct {
 	DeviceName string `json:"device_name"`
 	// OS is the daemon-reported GOOS value from registration metadata. Older
 	// daemons omit it, in which case clients must render an unknown value.
-	OS             string   `json:"os"`
-	Metadata       any      `json:"metadata"`
-	Capabilities   []string `json:"capabilities"`
-	CurrentVersion *string  `json:"current_version"`
+	OS           string   `json:"os"`
+	Metadata     any      `json:"metadata"`
+	Capabilities []string `json:"capabilities"`
+	// MemoryExploreGeneration is the negotiated Graph Memory Agent protocol
+	// generation for this workspace at the runtime's last registration
+	// (plan Task 12): 2 only while the daemon advertised memory_explore_v2
+	// AND the workspace explore gate was green; 1 otherwise. Older servers
+	// omit the field — treat missing as 1.
+	MemoryExploreGeneration int     `json:"memoryExploreGeneration"`
+	CurrentVersion          *string `json:"current_version"`
 	// DaemonTargetVersion is the one release target for the physical daemon.
 	// Runtime TargetVersion below is retained only as a legacy lifecycle
 	// projection; Computer clients must use this daemon-scoped field.
@@ -335,34 +341,35 @@ func runtimeToResponseWithUpdateReleaseAndObservation(
 		updateError = &msg
 	}
 	return AgentRuntimeResponse{
-		ID:                   uuidToString(rt.ID),
-		WorkspaceID:          uuidToString(rt.WorkspaceID),
-		DaemonID:             textToPtr(rt.DaemonID),
-		Name:                 rt.Name,
-		DisplayName:          rt.DisplayName,
-		RuntimeMode:          rt.RuntimeMode,
-		Provider:             rt.Provider,
-		LaunchHeader:         agent.LaunchHeader(rt.Provider),
-		ProviderCapabilities: providerCapabilitiesWire(rt.Provider),
-		Status:               rt.Status,
-		DeviceInfo:           rt.DeviceInfo,
-		DeviceName:           deviceNameFromRuntime(rt.DeviceInfo, metadata),
-		OS:                   operatingSystemFromRuntime(metadata),
-		Metadata:             metadata,
-		Capabilities:         runtimeCapabilities(metadata),
-		CurrentVersion:       currentVersion,
-		TargetVersion:        targetVersion,
-		UpdateState:          updateState,
-		RuntimeHealth:        runtimeHealth,
-		UpdateError:          updateError,
-		AutoUpdate:           autoUpdate,
-		OwnerID:              uuidToPtr(pgtype.UUID{}),
-		Visibility:           rt.Visibility,
-		LastSeenAt:           timestampToPtr(rt.LastSeenAt),
-		CreatedAt:            timestampToString(rt.CreatedAt),
-		UpdatedAt:            timestampToString(rt.UpdatedAt),
-		PinnedVersion:        nullableTextPtr(rt.PinnedVersion),
-		OfflineReason:        nullableTextPtr(rt.OfflineReason),
+		ID:                      uuidToString(rt.ID),
+		WorkspaceID:             uuidToString(rt.WorkspaceID),
+		DaemonID:                textToPtr(rt.DaemonID),
+		Name:                    rt.Name,
+		DisplayName:             rt.DisplayName,
+		RuntimeMode:             rt.RuntimeMode,
+		Provider:                rt.Provider,
+		LaunchHeader:            agent.LaunchHeader(rt.Provider),
+		ProviderCapabilities:    providerCapabilitiesWire(rt.Provider),
+		Status:                  rt.Status,
+		DeviceInfo:              rt.DeviceInfo,
+		DeviceName:              deviceNameFromRuntime(rt.DeviceInfo, metadata),
+		OS:                      operatingSystemFromRuntime(metadata),
+		Metadata:                metadata,
+		Capabilities:            runtimeCapabilities(metadata),
+		MemoryExploreGeneration: memoryExploreGenerationFromRuntime(metadata),
+		CurrentVersion:          currentVersion,
+		TargetVersion:           targetVersion,
+		UpdateState:             updateState,
+		RuntimeHealth:           runtimeHealth,
+		UpdateError:             updateError,
+		AutoUpdate:              autoUpdate,
+		OwnerID:                 uuidToPtr(pgtype.UUID{}),
+		Visibility:              rt.Visibility,
+		LastSeenAt:              timestampToPtr(rt.LastSeenAt),
+		CreatedAt:               timestampToString(rt.CreatedAt),
+		UpdatedAt:               timestampToString(rt.UpdatedAt),
+		PinnedVersion:           nullableTextPtr(rt.PinnedVersion),
+		OfflineReason:           nullableTextPtr(rt.OfflineReason),
 	}
 }
 

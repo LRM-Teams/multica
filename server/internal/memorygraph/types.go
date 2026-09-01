@@ -85,6 +85,7 @@ const (
 	CreatorIngester     = "ingester"
 	CreatorConsolidator = "consolidator"
 	CreatorMigration    = "migration"
+	CreatorPromoter     = "promoter"
 )
 
 // RelationEdgeTypes is the accepted set for relations.jsonl entries.
@@ -110,6 +111,7 @@ type Node struct {
 	NodeID         string     `yaml:"node_id" json:"node_id"`
 	ContentHash    string     `yaml:"content_hash" json:"content_hash"` // sha256 of Body only
 	SegmentRefs    []string   `yaml:"segment_refs,omitempty" json:"segment_refs,omitempty"`
+	AtomRefs       []string   `yaml:"atom_refs,omitempty" json:"atom_refs,omitempty"`
 	Level          int        `yaml:"level" json:"level"` // -1 = source layer; 0 = most specific statement layer
 	Epistemic      string     `yaml:"epistemic_status" json:"epistemic_status"`
 	EntityRefs     []string   `yaml:"entity_refs,omitempty" json:"entity_refs,omitempty"`
@@ -122,6 +124,9 @@ type Node struct {
 	CreatedBy      string     `yaml:"created_by" json:"created_by"`
 	CreatedVersion int        `yaml:"created_version" json:"created_version"`
 	UpdatedVersion int        `yaml:"updated_version" json:"updated_version"`
+	// PolicyVersion stamps the server policy that authorized a promotion
+	// (empty for ordinary consolidated nodes).
+	PolicyVersion string `yaml:"policy_version,omitempty" json:"policy_version,omitempty"`
 
 	// Scope and provenance (spec §5). Empty Visibility reads as "project"
 	// for pre-scope graphs. Provenance is monotonic: consolidation may merge
@@ -200,6 +205,37 @@ func (v GraphView) Allows(n *Node) bool {
 	default:
 		return false
 	}
+}
+
+// MemoryRefKind names the class of memory a hit resolves to (spec §8.3):
+// graph nodes of the current consolidated graph, or active staging atoms of
+// the Task 7 ledger.
+type MemoryRefKind string
+
+const (
+	MemoryRefGraphNode   MemoryRefKind = "graph_node"
+	MemoryRefStagingAtom MemoryRefKind = "staging_atom"
+)
+
+// MemoryRef is the stable, class-aware pointer every search/explore result
+// carries. Authorization always comes from the caller's plan and the Task 8A
+// read gate — never from these fields.
+type MemoryRef struct {
+	Kind      MemoryRefKind `json:"kind"`
+	NodeID    string        `json:"node_id,omitempty"`
+	SegmentID string        `json:"segment_id,omitempty"`
+	AtomID    string        `json:"atom_id,omitempty"`
+	ChannelID string        `json:"channel_id,omitempty"`
+}
+
+// Key returns the deterministic identity used for tie-breaking and dedupe:
+// "<kind>:<id>". Refs of the same kind with the same id share a key.
+func (m MemoryRef) Key() string {
+	id := m.NodeID
+	if m.Kind == MemoryRefStagingAtom {
+		id = m.AtomID
+	}
+	return string(m.Kind) + ":" + id
 }
 
 // SegmentMeta is the scope/provenance sidecar for one staged segment

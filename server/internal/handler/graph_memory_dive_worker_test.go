@@ -206,8 +206,12 @@ func TestGraphMemoryDiveWorkerEndToEnd(t *testing.T) {
 		t.Fatalf("miss row = %+v, want graded reward −0.3", r2)
 	}
 	r3 := read(errID)
-	if r3.diveStatus != "bypassed" || r3.reward == nil || *r3.reward != 0 {
-		t.Fatalf("error row = %+v, want bypassed/reward 0", r3)
+	// Task 19: the bypassed run carries the deterministic negative, never a
+	// neutral 0 (rounds 0 fixture run, default round weight).
+	wantBypass := memorygraph.DeterministicViolationReward(0.1, 0)
+	if r3.diveStatus != "bypassed" || r3.reward == nil ||
+		*r3.reward < wantBypass-1e-9 || *r3.reward > wantBypass+1e-9 {
+		t.Fatalf("error row = %+v, want bypassed/deterministic %v", r3, wantBypass)
 	}
 	if status := recallStatus(t, recallID); status != "completed" {
 		t.Fatalf("recall status = %s, want completed", status)
@@ -300,8 +304,10 @@ func TestGraphMemoryDiveWorkerPinnedVersionMissing(t *testing.T) {
 		if err := rows.Scan(&reward, &ds); err != nil {
 			t.Fatal(err)
 		}
-		if reward == nil || *reward != 0 || ds != "judge_failed" {
-			t.Fatalf("normal run after terminal fail: reward=%v dive_status=%q", reward, ds)
+		// Task 19 (A46): a judge infrastructure failure never synthesizes a
+		// numeric 0; the projection goes unavailable with a NULL value.
+		if reward != nil || ds != "judge_failed" {
+			t.Fatalf("normal run after terminal fail: reward=%v dive_status=%q, want NULL/judge_failed", reward, ds)
 		}
 		n++
 	}
@@ -389,8 +395,12 @@ func TestGraphMemoryDiveWorkerOnlineRLOutbox(t *testing.T) {
 	if missReward < -0.3-1e-9 || missReward > -0.3+1e-9 {
 		t.Fatalf("miss outbox reward = %v, want −0.3", missReward)
 	}
-	if errReward != 0 {
-		t.Fatalf("bypassed outbox reward = %v, want 0", errReward)
+	// The bypassed run carries its deterministic negative (Task 19): the
+	// fixture run ended 'error' with 0 explore rounds, so the violation
+	// floor applies at the default round weight.
+	wantBypass := memorygraph.DeterministicViolationReward(0.1, 0)
+	if errReward < wantBypass-1e-9 || errReward > wantBypass+1e-9 {
+		t.Fatalf("bypassed outbox reward = %v, want deterministic %v", errReward, wantBypass)
 	}
 }
 

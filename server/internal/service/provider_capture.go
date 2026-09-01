@@ -390,9 +390,11 @@ func sha256Prefixed(raw []byte) string {
 	return fmt.Sprintf("sha256:%x", sum[:])
 }
 
-// assignMixedRLSegmentsForCapture creates message/reaction segments for
-// successful actions and assigns unowned calls in canonical order with
-// first-success owned + sibling shared_producer associations.
+// assignMixedRLSegmentsForCapture validates the trusted capture's visible
+// actions and records them in the canonical Universal DAG; the frozen run
+// projection is then derived from the canonical store by the projector in
+// this same transaction. There is no independent frozen-snapshot writer
+// wherever the canonical store exists.
 func assignMixedRLSegmentsForCapture(ctx context.Context, qtx *db.Queries, tx pgx.Tx, ledger *ProviderCallLedger, input TrustedTurnCapture) error {
 	actions := append([]VisibleActionInput(nil), input.Actions...)
 	sort.SliceStable(actions, func(i, j int) bool {
@@ -401,6 +403,39 @@ func assignMixedRLSegmentsForCapture(ctx context.Context, qtx *db.Queries, tx pg
 		}
 		return actions[i].CreatedAt.Before(actions[j].CreatedAt)
 	})
+	for _, action := range actions {
+		if action.Status != "succeeded" {
+			continue
+		}
+		if action.Kind != "message" && action.Kind != "reaction" {
+			return fmt.Errorf("unsupported visible action kind %q", action.Kind)
+		}
+		if !action.CanonicalID.Valid {
+			return errors.New("successful visible action requires a canonical id")
+		}
+	}
+	if err := attachUniversalDAGCapture(ctx, qtx, tx, input, actions); err != nil {
+		return err
+	}
+	storePresent, err := qtx.UniversalDAGStorePresent(ctx)
+	if err != nil {
+		return err
+	}
+	if !storePresent {
+		// Pre-454 repository fixtures keep the migration 315 semantics: no
+		// canonical store exists to project from, so the direct frozen-snapshot
+		// writer remains their only segment source.
+		return assignLegacyMixedRLSegmentsForCapture(ctx, qtx, ledger, input, actions)
+	}
+	_, err = NewUniversalDAGFrozenProjector().ProjectRunSnapshot(ctx, qtx, input.WorkspaceID, input.RunID)
+	return err
+}
+
+// assignLegacyMixedRLSegmentsForCapture creates message/reaction segments for
+// successful actions and assigns unowned calls in canonical order with
+// first-success owned + sibling shared_producer associations. It serves only
+// schemas predating the universal interaction DAG store.
+func assignLegacyMixedRLSegmentsForCapture(ctx context.Context, qtx *db.Queries, ledger *ProviderCallLedger, input TrustedTurnCapture, actions []VisibleActionInput) error {
 	allCalls, err := qtx.ListMixedRLProviderCallsCanonical(ctx, input.RunID)
 	if err != nil {
 		return err
@@ -481,9 +516,6 @@ func assignMixedRLSegmentsForCapture(ctx context.Context, qtx *db.Queries, tx pg
 			}
 			owned[call.CallID] = segmentID
 		}
-	}
-	if err := attachUniversalDAGCapture(ctx, qtx, tx, input, actions); err != nil {
-		return err
 	}
 	return nil
 }

@@ -174,6 +174,7 @@ func TestUniversalDAGSchema(t *testing.T) {
 		t.Fatalf("create pre-454 schema: %v", err)
 	}
 	applyUniversalDAGMigrationIfPresent(t, ctx, conn)
+	applyUniversalDAGLegacyBackfillMarker(t, ctx, conn)
 
 	for table, columns := range map[string][]string{
 		"interaction_dag_segment": {
@@ -1660,6 +1661,7 @@ func TestUniversalDAGCanonicalQueriesIntegration(t *testing.T) {
 		t.Fatalf("create pre-454 schema: %v", err)
 	}
 	applyUniversalDAGMigrationIfPresent(t, ctx, conn)
+	applyUniversalDAGLegacyBackfillMarker(t, ctx, conn)
 	seedUniversalDAGCanonicalOwners(t, ctx, conn)
 
 	for _, segment := range []universalDAGSegment{
@@ -1859,6 +1861,7 @@ func TestUniversalDAGRetainedWriterGenerationConcurrency(t *testing.T) {
 		t.Fatalf("create pre-454 schema: %v", err)
 	}
 	applyUniversalDAGMigrationIfPresent(t, ctx, conn)
+	applyUniversalDAGLegacyBackfillMarker(t, ctx, conn)
 	seedUniversalDAGCanonicalOwners(t, ctx, conn)
 
 	var schema string
@@ -1938,6 +1941,7 @@ func TestUniversalDAGRetainedWriterOwnershipMismatchFailsClosed(t *testing.T) {
 		t.Fatalf("create pre-454 schema: %v", err)
 	}
 	applyUniversalDAGMigrationIfPresent(t, ctx, conn)
+	applyUniversalDAGLegacyBackfillMarker(t, ctx, conn)
 	seedUniversalDAGCanonicalOwners(t, ctx, conn)
 
 	q := db.New(conn)

@@ -86,6 +86,11 @@ func (e *GraphMemoryRecallExecutor) Execute(ctx context.Context, plan *GraphMemo
 	if err := retr.RebuildForVersion(ctx, plan.GraphVersion); err != nil {
 		return e.executionFailure(ctx, plan, "pinned retriever unavailable: "+err.Error(), resolved.Model)
 	}
+	// Task 13 adoption: while the workspace's atom_search gate is green the
+	// walk's retriever carries the active-atom staging channel too (the same
+	// snapshot the seeder used). Any snapshot failure is non-fatal — the
+	// legacy graph-only walk continues unchanged.
+	installActiveAtomSnapshotIfAdopted(ctx, e.pool, workspaceUUID, plan.GraphView.ChannelID, retr)
 	if e.backendFor == nil {
 		return e.executionFailure(ctx, plan, "agent backend is not configured", resolved.Model)
 	}

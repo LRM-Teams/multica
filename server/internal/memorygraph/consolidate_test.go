@@ -9,6 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/multica-ai/multica/server/pkg/agent"
 )
 
@@ -790,4 +793,86 @@ func TestConsolidatorRejectsMismatchedEmbedderScopeBeforeBackend(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Task 14: atom-manifest consolidation
+// ---------------------------------------------------------------------------
+
+// The atom-manifest prompt teaches the generation-2 contract: atom_refs are
+// explicit, coverage is required, and the ops vocabulary is unchanged.
+func TestConsolidateAtomsPromptRequiresAtomRefs(t *testing.T) {
+	store := newTestStore(t)
+	seedGraphNode(t, store, 1, "n-base", "base body")
+	backend := &fakeConsolidateBackend{respond: func(string, int) string {
+		return consolidateOpsJSON()
+	}}
+	c := NewConsolidator(store, backend, DefaultConsolidateConfig(), testConsolidateScope(), nil, nil)
+
+	_, err := c.ConsolidateAtoms(context.Background(), 1, []AtomManifestEntry{
+		{AtomID: "atom-1", SegmentID: "seg-1", Body: "NIMBUS launches in March"},
+	})
+	require.NoError(t, err)
+	prompt := backend.allPrompts()
+	assert.Contains(t, prompt, "atom_refs")
+	assert.Contains(t, prompt, "atom atom-1 (segment seg-1)")
+	assert.Contains(t, prompt, "every atom id must end up cited")
+	assert.Contains(t, prompt, "\"op\":\"add_node\"")
+}
+
+// Even the single-trajectory flow writes a NEW immutable candidate version
+// and never touches the current pointer: publication is the coordinator's
+// decision, not the consolidator's.
+func TestConsolidateAtomsAlwaysWritesImmutableCandidate(t *testing.T) {
+	store := newTestStore(t)
+	seedGraphNode(t, store, 1, "n-base", "base body")
+	backend := &fakeConsolidateBackend{respond: func(string, int) string {
+		return consolidateOpsJSON(ConsolidateOp{Op: OpAddNode, Node: &Node{
+			NodeID: "n-nimbus", Body: "NIMBUS launch facts", AtomRefs: []string{"atom-1"},
+		}})
+	}}
+	c := NewConsolidator(store, backend, DefaultConsolidateConfig(), testConsolidateScope(), nil, nil)
+
+	res, err := c.ConsolidateAtoms(context.Background(), 1, []AtomManifestEntry{
+		{AtomID: "atom-1", SegmentID: "seg-1", Body: "NIMBUS launches in March"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 2, res.CandidateVersion, "candidate must be a fresh version")
+	assert.Equal(t, 1, res.OpsApplied)
+	assert.Empty(t, res.UncitedAtomIDs)
+	assert.Equal(t, []string{"atom-1"}, res.NodeAtoms["n-nimbus"])
+
+	current, err := store.CurrentVersion()
+	require.NoError(t, err)
+	assert.Equal(t, 1, current, "the current pointer must not move during consolidation")
+
+	// The candidate is complete on disk: the node cites its atoms.
+	g, err := LoadGraph(store, res.CandidateVersion)
+	require.NoError(t, err)
+	require.NotNil(t, g.Node("n-nimbus"))
+	assert.Equal(t, []string{"atom-1"}, g.Node("n-nimbus").AtomRefs)
+	// The base version is untouched (immutability).
+	base, err := LoadGraph(store, 1)
+	require.NoError(t, err)
+	assert.Nil(t, base.Node("n-nimbus"))
+}
+
+// Uncited atoms are reported, not consumed: a partial fold leaves the atom
+// visible to the next cycle, and the caller can refuse publication.
+func TestConsolidateAtomsReportsUncitedAtomsWithoutConsuming(t *testing.T) {
+	store := newTestStore(t)
+	seedGraphNode(t, store, 1, "n-base", "base body")
+	backend := &fakeConsolidateBackend{respond: func(string, int) string {
+		return consolidateOpsJSON(ConsolidateOp{Op: OpAddNode, Node: &Node{
+			NodeID: "n-nimbus", Body: "NIMBUS launch facts", AtomRefs: []string{"atom-1"},
+		}})
+	}}
+	c := NewConsolidator(store, backend, DefaultConsolidateConfig(), testConsolidateScope(), nil, nil)
+
+	res, err := c.ConsolidateAtoms(context.Background(), 1, []AtomManifestEntry{
+		{AtomID: "atom-1", SegmentID: "seg-1", Body: "cited"},
+		{AtomID: "atom-2", SegmentID: "seg-2", Body: "left for the next cycle"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"atom-2"}, res.UncitedAtomIDs)
 }

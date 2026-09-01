@@ -125,9 +125,7 @@ func TestCreateIssueWithGroupChannelDoesNotInferProjectAndCanClearAnchor(t *test
 		t.Fatalf("seed project: %v", err)
 	}
 	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM project WHERE id = $1`, projectID) })
-	if _, err := testPool.Exec(ctx, `UPDATE channel SET project_id = $1 WHERE id = $2`, projectID, channelID); err != nil {
-		t.Fatalf("bind channel project: %v", err)
-	}
+	bindChannelProjectStrings(t, ctx, channelID, projectID)
 
 	create := httptest.NewRecorder()
 	testHandler.CreateIssue(create, newRequest("POST", "/api/issues?workspace_id="+testWorkspaceID, map[string]any{

@@ -5,6 +5,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -141,7 +142,7 @@ func TestGraphMemoryOfflineExportGradedComplete(t *testing.T) {
 		{TrajectoryID: t1, Relevance: 0.2, Groundedness: 0.2, Completeness: 0.2},
 	}, nil, false)
 
-	lines := mustListOfflineExports(t, fx.workspaceID)
+	lines := mustListOfflineExports(t, fx.workspaceID, fx.projectID, recallID)
 	if len(lines) != 2 {
 		t.Fatalf("lines = %d, want 2", len(lines))
 	}
@@ -174,7 +175,7 @@ func TestGraphMemoryOfflineExportGradedIncomplete(t *testing.T) {
 		{TrajectoryID: t0, Relevance: 0.6, Groundedness: 0.6, Completeness: 0.6},
 	}, nil, true)
 
-	lines := mustListOfflineExports(t, fx.workspaceID)
+	lines := mustListOfflineExports(t, fx.workspaceID, fx.projectID, recallID)
 	if len(lines) != 1 {
 		t.Fatalf("lines = %d, want 1", len(lines))
 	}
@@ -215,7 +216,7 @@ func TestGraphMemoryOfflineExportJudgeFailed(t *testing.T) {
 		t.Fatal("max_attempts=1 must terminalize on first failure")
 	}
 
-	lines := mustListOfflineExports(t, fx.workspaceID)
+	lines := mustListOfflineExports(t, fx.workspaceID, fx.projectID, recallID)
 	if len(lines) != 2 {
 		t.Fatalf("lines = %d, want 2", len(lines))
 	}
@@ -238,7 +239,7 @@ func TestGraphMemoryOfflineExportExploreBypassed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	lines := mustListOfflineExports(t, fx.workspaceID)
+	lines := mustListOfflineExports(t, fx.workspaceID, fx.projectID, recallID)
 	if len(lines) != 3 {
 		t.Fatalf("lines = %d, want 3", len(lines))
 	}
@@ -254,7 +255,7 @@ func TestGraphMemoryOfflineExportNotTerminal(t *testing.T) {
 	fx, recallID := mustOfflineRLExportFixture(t, "export-open-"+uuid.NewString()[:8], 1)
 	mustTerminalTrajectoryWithRounds(t, recallID, 0, "found", 2)
 
-	lines := mustListOfflineExports(t, fx.workspaceID)
+	lines := mustListOfflineExports(t, fx.workspaceID, fx.projectID, recallID)
 	if len(lines) != 1 {
 		t.Fatalf("lines = %d, want 1", len(lines))
 	}
@@ -275,13 +276,13 @@ func TestGraphMemoryOfflineExportWrongModeOnlineRL(t *testing.T) {
 		{TrajectoryID: t1, Relevance: 0.7, Groundedness: 0.7, Completeness: 0.7},
 	}, nil, false)
 
-	var ws pgtype.UUID
+	var ws, owner pgtype.UUID
 	if err := testPool.QueryRow(context.Background(), `
-		SELECT workspace_id FROM graph_memory_recall WHERE id = $1
-	`, recallID).Scan(&ws); err != nil {
+		SELECT workspace_id, graph_owner_id FROM graph_memory_recall WHERE id = $1
+	`, recallID).Scan(&ws, &owner); err != nil {
 		t.Fatal(err)
 	}
-	lines := mustListOfflineExports(t, ws)
+	lines := mustListOfflineExports(t, ws, owner, recallID)
 	if len(lines) != 2 {
 		t.Fatalf("lines = %d, want 2", len(lines))
 	}
@@ -301,7 +302,7 @@ func TestGraphMemoryOfflineExportWrongModeOfflineCapture(t *testing.T) {
 		{TrajectoryID: t0, Relevance: 0.5, Groundedness: 0.5, Completeness: 0.5},
 	}, nil, false)
 
-	lines := mustListOfflineExports(t, fx.workspaceID)
+	lines := mustListOfflineExports(t, fx.workspaceID, fx.projectID, recallID)
 	if len(lines) != 1 {
 		t.Fatalf("lines = %d, want 1", len(lines))
 	}
@@ -333,7 +334,7 @@ func TestGraphMemoryOfflineExportDoesNotTouchProviderCallLedger(t *testing.T) {
 	if err := testPool.QueryRow(context.Background(), `SELECT count(*) FROM pi_provider_call`).Scan(&before); err != nil {
 		t.Fatal(err)
 	}
-	lines := mustListOfflineExports(t, fx.workspaceID)
+	lines := mustListOfflineExports(t, fx.workspaceID, fx.projectID, recallID)
 	var after int
 	if err := testPool.QueryRow(context.Background(), `SELECT count(*) FROM pi_provider_call`).Scan(&after); err != nil {
 		t.Fatal(err)
@@ -396,14 +397,83 @@ func mustGradeOfflineRecall(t *testing.T, recallID pgtype.UUID, scores []memoryg
 	}
 }
 
-func mustListOfflineExports(t *testing.T, workspaceID pgtype.UUID) []service.GraphMemoryOfflineExportLine {
+// mustSeedManifestBackfillTrajectory seeds one minimal graded offline_rl
+// trajectory in the workspace so the training-manifest selection always has
+// at least one item, even when every fixture trajectory of the recall under
+// test is itself excluded (Task 18: an empty selection is not a manifest).
+// It lives under its own scratch recall and is filtered out of the returned
+// lines.
+func mustSeedManifestBackfillTrajectory(t *testing.T, ws, owner pgtype.UUID) {
 	t.Helper()
+	// The faithful schema's recall identity trigger requires a task from the
+	// same workspace and daemon_id is NOT NULL; reuse both from the
+	// workspace's existing fixture recalls.
+	var taskID, runtimeID pgtype.UUID
+	var daemonID string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT task_id, daemon_id, runtime_id FROM graph_memory_recall
+		WHERE workspace_id = $1 AND task_id IS NOT NULL LIMIT 1`, ws).Scan(&taskID, &daemonID, &runtimeID); err != nil {
+		t.Fatalf("resolve workspace recall task: %v", err)
+	}
+	if _, err := testPool.Exec(context.Background(), `
+		WITH r AS (
+			INSERT INTO graph_memory_recall (
+			  workspace_id, task_id, daemon_id, runtime_id, training_mode, trace_id,
+			  graph_kind, graph_owner_id, graph_version, k, query, terminal_at
+			) VALUES ($1, $2, $3, $4, 'offline_rl', 'manifest-backfill', 'project', $5, 1, 4, 'q', now())
+			RETURNING id
+		), tr AS (
+			INSERT INTO graph_memory_trajectory (
+			  workspace_id, recall_id, seed_index, dive_status, reward, rounds
+			)
+			SELECT $1, r.id, 0, 'graded', 0.5, 1 FROM r
+			RETURNING id, recall_id
+		)
+		INSERT INTO graph_memory_dive_job (
+		  recall_id, workspace_id, trace_id, graph_kind, graph_owner_id, graph_version, status, incomplete
+		)
+		SELECT recall_id, $1, 'manifest-backfill', 'project', $5, 1, 'completed', false FROM tr
+	`, ws, taskID, daemonID, runtimeID, owner); err != nil {
+		t.Fatalf("seed manifest backfill trajectory: %v", err)
+	}
+}
+
+// mustListOfflineExports drives the Task 18 governance path for the export
+// tests: selection switch on, workspace grant acknowledged, a graph
+// trajectory manifest selected and exported, then the raw NDJSON listing
+// scoped to that manifest. Only lines of the recall under test are returned.
+func mustListOfflineExports(t *testing.T, ws, owner, recallID pgtype.UUID) []service.GraphMemoryOfflineExportLine {
+	t.Helper()
+	ctx := context.Background()
+	restoreTrainingPolicy(t)
+	gov := service.NewTrainingGovernanceService(testPool, nil)
+	on := true
+	if _, err := gov.SetTrainingPolicy(ctx, service.TrainingPolicyPatch{SelectionEnabled: &on}, "export-test"); err != nil {
+		t.Fatalf("enable training selection: %v", err)
+	}
+	mustAckTrainingGrant(t, gov, ctx, util.UUIDToString(ws))
+	mustSeedManifestBackfillTrajectory(t, ws, owner)
+	manifest, err := gov.SelectGraphTrainingManifest(ctx, service.TrainingSelectionRequest{
+		WorkspaceID: util.UUIDToString(ws), Purpose: "tenant", Actor: "export-test",
+	})
+	if err != nil {
+		t.Fatalf("select graph training manifest: %v", err)
+	}
+	if _, err := gov.ExportTrainingManifest(ctx, util.UUIDToString(ws), manifest.ManifestID); err != nil {
+		t.Fatalf("export graph training manifest: %v", err)
+	}
 	svc := service.NewGraphMemoryOfflineExportService(testPool)
-	lines, err := svc.ListOfflineExports(context.Background(), util.UUIDToString(workspaceID), 100)
+	lines, err := svc.ListOfflineExports(ctx, util.UUIDToString(ws), manifest.ManifestID, 100)
 	if err != nil {
 		t.Fatalf("ListOfflineExports: %v", err)
 	}
-	return lines
+	filtered := make([]service.GraphMemoryOfflineExportLine, 0, len(lines))
+	for _, line := range lines {
+		if line.RecallID == util.UUIDToString(recallID) || (line.Status == "excluded" && line.RecallID == util.UUIDToString(recallID)) {
+			filtered = append(filtered, line)
+		}
+	}
+	return filtered
 }
 
 func recallTraceID(t *testing.T, recallID pgtype.UUID) string {
@@ -490,4 +560,60 @@ func fmtFloat(p *float64) any {
 		return nil
 	}
 	return *p
+}
+
+// Task 18: the raw graph-memory NDJSON export is closed without governance —
+// the global switch off answers training_disabled, a missing manifest
+// answers manifest_required, and no payload line serializes either way.
+func TestGraphMemoryOfflineExportRequiresTrainingManifest(t *testing.T) {
+	if testPool == nil {
+		t.Skip("handler test database unavailable")
+	}
+	fx, recallID := mustOfflineRLExportFixture(t, "export-gate-"+uuid.NewString()[:8], 1)
+	mustTerminalTrajectoryWithRounds(t, recallID, 0, "found", 1)
+	t0 := trajectoryIDBySeed(t, recallID, 0)
+	mustGradeOfflineRecall(t, recallID, []memorygraph.DiveTrajectoryScore{
+		{TrajectoryID: t0, Relevance: 0.9, Groundedness: 0.9, Completeness: 0.9},
+	}, nil, false)
+
+	ctx := context.Background()
+	restoreTrainingPolicy(t)
+	svc := service.NewGraphMemoryOfflineExportService(testPool)
+	gov := service.NewTrainingGovernanceService(testPool, nil)
+
+	// Switch off -> training_disabled even when a manifest id is supplied.
+	off := false
+	if _, err := gov.SetTrainingPolicy(ctx, service.TrainingPolicyPatch{SelectionEnabled: &off}, "export-test"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := svc.ListOfflineExports(ctx, util.UUIDToString(fx.workspaceID), uuid.NewString(), 100)
+	if resolveErr := (*service.OfflineResolveError)(nil); errors.As(err, &resolveErr) && resolveErr.Code != "training_disabled" {
+		t.Fatalf("disabled export error = %v, want training_disabled", err)
+	} else if !errors.As(err, &resolveErr) {
+		t.Fatalf("disabled export error = %v, want OfflineResolveError", err)
+	}
+
+	// Switch on but no manifest -> manifest_required.
+	on := true
+	if _, err := gov.SetTrainingPolicy(ctx, service.TrainingPolicyPatch{SelectionEnabled: &on}, "export-test"); err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.ListOfflineExports(ctx, util.UUIDToString(fx.workspaceID), "", 100)
+	var gateErr *service.OfflineResolveError
+	if !errors.As(err, &gateErr) || gateErr.Code != "manifest_required" {
+		t.Fatalf("manifestless export error = %v, want manifest_required", err)
+	}
+
+	// An un-exported (only selected) manifest authorizes nothing.
+	mustAckTrainingGrant(t, gov, ctx, util.UUIDToString(fx.workspaceID))
+	manifest, err := gov.SelectGraphTrainingManifest(ctx, service.TrainingSelectionRequest{
+		WorkspaceID: util.UUIDToString(fx.workspaceID), Purpose: "tenant", Actor: "export-test",
+	})
+	if err != nil {
+		t.Fatalf("select graph training manifest: %v", err)
+	}
+	_, err = svc.ListOfflineExports(ctx, util.UUIDToString(fx.workspaceID), manifest.ManifestID, 100)
+	if !errors.As(err, &gateErr) || gateErr.Code != "manifest_not_exported" {
+		t.Fatalf("unexported manifest error = %v, want manifest_not_exported", err)
+	}
 }

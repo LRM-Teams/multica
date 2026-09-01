@@ -527,7 +527,11 @@ func (d *Daemon) prepareResidentMessageBatch(ctx context.Context, agentID, runti
 			InitiatorName:   message.InitiatorName,
 		})
 		if message.GraphMemoryTools {
-			message.RuntimeContext += graphMemoryAgentToolContext(message)
+			if d.memoryExploreV2Negotiated(workspaceID) {
+				message.RuntimeContext += graphMemoryAgentToolContextV2(message)
+			} else {
+				message.RuntimeContext += graphMemoryAgentToolContext(message)
+			}
 		}
 		prepared = append(prepared, message)
 	}
@@ -552,6 +556,58 @@ Required headers:
   Content-Type: application/json
 Use curl with JSON bodies. Every operation requires a stable idempotency_key; derive it from message %s and the operation. Call start with {query,idempotency_key}; use the returned trajectory_id for all later calls. Explore accepts at most the configured server limit and only explicit node_ids. For an in-place directed correction call redirect with trajectory_id, query, steering_message_id, and idempotency_key. End the run exactly once with submit (cited visible memory) or checkpoint (durable private state). Never send workspace, Channel scope, graph owner, or graph version in a tool body. A rejected/fenced/quota response is terminal for this turn; checkpoint if still available and do not bypass the gateway.
 `, channelID, messageID)
+}
+
+// graphMemoryAgentToolContextV2 teaches the same five operation names under
+// the negotiated generation-2 payload contract (plan Task 12 Step 3): the
+// canonical Interaction DAG surface with structured MemoryRef objects, plans
+// and seeds. It is rendered only when the server echoed the
+// memory_explore_v2 capability for this workspace at registration.
+func graphMemoryAgentToolContextV2(message protocol.AgentMessageProjection) string {
+	channelID := strings.TrimSpace(message.ChannelID)
+	messageID := strings.TrimSpace(message.ID)
+	if channelID == "" || messageID == "" {
+		return ""
+	}
+	return fmt.Sprintf(`
+
+## Managed Graph Memory tools (protocol generation 2)
+You are the managed Memory Agent for this Channel. Memory scope, plan, run, and trajectory are server-owned; never invent or override them.
+Use only these five Graph operations through the daemon credential proxy:
+  POST http://127.0.0.1:$MULTICA_DAEMON_PORT/api/agent/channels/%s/graph-memory/{start|explore|redirect|submit|checkpoint}
+Required headers:
+  X-Agent-ID: $MULTICA_AGENT_ID
+  X-Workspace-ID: $MULTICA_WORKSPACE_ID
+  Content-Type: application/json
+Use curl with JSON bodies. Every operation requires a stable idempotency_key; derive it from message %s and the operation, and every body after start carries the trajectory_id returned by start.
+start: {"query":"...","idempotency_key":"..."} returns {"protocol_generation":2,"trajectory_id":"...","plan":{"segment_publish_seq_max":...,"interaction_edge_seq_max":...,"budgets":{...}},"seeds":[{"ref":{"kind":"staging_atom","atom_id":"...","segment_id":"..."},"segment_id":"...","publish_seq":...}]}.
+explore: {"trajectory_id":"...","ref":{"kind":"staging_atom","atom_id":"...","segment_id":"...","channel_id":"..."},"idempotency_key":"..."} — use only refs the server handed you (seeds, earlier explore results); an invented or retracted ref is refused. It returns authorized neighbor "refs", "sibling_atoms" and bidirectional DAG "edges" under the plan's frozen watermarks.
+redirect: {"trajectory_id":"...","focus":"new direction","idempotency_key":"..."}.
+End the run exactly once: submit {"trajectory_id":"...","idempotency_key":"..."} or checkpoint {"trajectory_id":"...","idempotency_key":"..."} (returns the bounded checkpoint with prior refs, rounds and segments used).
+Budgets (rounds, neighbors, distinct segments, atoms per response, tool calls) are hard: exhausting one is a refused operation, not a retryable error. Never send workspace, Channel scope, graph owner, or watermark values in a tool body. A rejected/fenced/quota/disabled response is terminal for this turn; checkpoint if still available and do not bypass the gateway.
+`, channelID, messageID)
+}
+
+// memoryExploreV2Negotiated reports whether the server echoed the
+// memory_explore_v2 capability for this workspace at registration — the
+// daemon-side half of the bidirectional negotiation. The server still
+// re-checks its own gate on every call; this only selects the prompt.
+func (d *Daemon) memoryExploreV2Negotiated(workspaceID string) bool {
+	if d == nil {
+		return false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	ws, ok := d.workspaces[strings.TrimSpace(workspaceID)]
+	if !ok {
+		return false
+	}
+	for _, capability := range ws.serverCapabilities {
+		if capability == protocol.DaemonCapabilityMemoryExploreV2 {
+			return true
+		}
+	}
+	return false
 }
 
 func residentMessageMemoryTask(workspaceID, agentID, runtimeID string, messages []protocol.AgentMessageProjection) Task {

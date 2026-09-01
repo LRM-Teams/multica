@@ -1126,6 +1126,17 @@ func (h *Handler) DeleteChannel(w http.ResponseWriter, r *http.Request) {
 
 	wsUUID := parseUUID(workspaceID)
 
+	// Task 8A: fence the channel's memory sources inside the same delete
+	// transaction — the channel cascade, its fences, and the quarantined
+	// provenance closure commit together or all roll back.
+	actor := "user:" + userID
+	if err := h.fenceMemorySourcesTx(ctx, tx, wsUUID,
+		[]service.MemorySourceRef{memorySourceRef(wsUUID, service.MemorySourceChannel, channelID)},
+		actor, "channel deleted"); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete channel")
+		return
+	}
+
 	// voice_call_session.channel_id has no ON DELETE clause (default RESTRICT).
 	if _, err := tx.Exec(ctx, `
 		DELETE FROM voice_call_session

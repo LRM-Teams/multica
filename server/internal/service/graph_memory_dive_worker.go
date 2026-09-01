@@ -102,9 +102,12 @@ func (w *GraphMemoryDiveWorker) RunOnce(ctx context.Context, workerID string) (b
 		return true, nil
 	}
 
-	// Reload the persisted rewards after ApplyDiveResult so the outbox carries
-	// server-authoritative values, including zero for bypassed runs. The
-	// outbox's trajectory uniqueness makes repeat attempts idempotent.
+	// Reload the persisted reward records after ApplyDiveResult so the
+	// outbox carries server-authoritative values with their delivery
+	// identity (trajectory, reward_kind, revision). Bypassed runs enqueue
+	// their deterministic negative; unavailable records (judge failure)
+	// never enqueue (Task 19, A46). The outbox's identity uniqueness makes
+	// repeat attempts idempotent.
 	if trainingMode == "online_rl" && w.rl != nil {
 		if err := w.enqueueRewards(ctx, job.RecallID); err != nil {
 			return w.retry(ctx, job, workerID, "reward_outbox", err)
@@ -217,27 +220,35 @@ func (w *GraphMemoryDiveWorker) enqueueRewards(ctx context.Context, recallID str
 	if err != nil {
 		return fmt.Errorf("graph memory dive: recall id: %w", err)
 	}
+	// Only AVAILABLE revisions enqueue: an unavailable judge failure has no
+	// numeric value and must never reach the outbox (A46).
 	rows, err := w.pool.Query(ctx, `
-		SELECT id, reward FROM graph_memory_trajectory
-		WHERE recall_id = $1 AND status IN ('found', 'miss', 'error', 'budget', 'timeout')
-		ORDER BY seed_index
+		SELECT r.trajectory_id, r.reward_kind, r.revision, r.value
+		FROM graph_memory_reward_record r
+		JOIN graph_memory_trajectory t ON t.id = r.trajectory_id
+		WHERE t.recall_id = $1 AND r.status = 'available'
+		ORDER BY t.seed_index, r.revision
 	`, rUUID)
 	if err != nil {
-		return fmt.Errorf("graph memory dive: reread rewards: %w", err)
+		return fmt.Errorf("graph memory dive: reread reward records: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var id pgtype.UUID
-		var reward float64
-		if err := rows.Scan(&id, &reward); err != nil {
-			return fmt.Errorf("graph memory dive: scan reward: %w", err)
+		var (
+			id       pgtype.UUID
+			kind     string
+			revision int
+			value    float64
+		)
+		if err := rows.Scan(&id, &kind, &revision, &value); err != nil {
+			return fmt.Errorf("graph memory dive: scan reward record: %w", err)
 		}
-		if err := w.rl.EnqueueReward(ctx, util.UUIDToString(id), reward); err != nil {
+		if err := w.rl.EnqueueReward(ctx, util.UUIDToString(id), kind, revision, value); err != nil {
 			return err
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("graph memory dive: iterate rewards: %w", err)
+		return fmt.Errorf("graph memory dive: iterate reward records: %w", err)
 	}
 	return nil
 }

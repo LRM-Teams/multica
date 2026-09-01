@@ -24,7 +24,7 @@ type fakeRecallSeeder struct {
 	ids []string
 }
 
-func (f fakeRecallSeeder) Seeds(_ context.Context, _ string, _ int, _ string, _ memorygraph.GraphView) ([]string, error) {
+func (f fakeRecallSeeder) Seeds(_ context.Context, _, _ string, _ int, _ string, _ memorygraph.GraphView) ([]string, error) {
 	return f.ids, nil
 }
 
@@ -131,9 +131,7 @@ func TestGraphMemoryRecallResolveKAndCallerAuthority(t *testing.T) {
 	// Channel task routed into the project lineage (spec §4): the recall must
 	// resolve the project graph from the server-side binding, never from the
 	// caller's claimed scope.
-	if _, err := testPool.Exec(ctx, `UPDATE channel SET project_id = $2 WHERE id = $1`, fx.channelID, fx.projectID); err != nil {
-		t.Fatal(err)
-	}
+	bindChannelProject(t, ctx, fx.channelID, fx.projectID)
 	mustGraphMemoryTaskScope(t, fx.taskID, "channel_id", fx.channelID)
 
 	svc := newGraphMemoryRecallServiceForTest(root)
@@ -260,9 +258,7 @@ func TestGraphMemoryRecallTrainingModeResolution(t *testing.T) {
 		fx := mustGraphMemoryRecallFixture(t)
 		root := t.TempDir()
 		mustGraphMemoryGraphDir(t, root, util.UUIDToString(fx.workspaceID), memorygraph.GraphDirKindProject, fx.projectID)
-		if _, err := testPool.Exec(ctx, `UPDATE channel SET project_id = $2 WHERE id = $1`, fx.channelID, fx.projectID); err != nil {
-			t.Fatal(err)
-		}
+		bindChannelProject(t, ctx, fx.channelID, fx.projectID)
 		mustGraphMemoryTaskScope(t, fx.taskID, "channel_id", fx.channelID)
 		mustGraphMemoryGraphProfile(t, fx.workspaceID, false, 4)
 		return fx, root

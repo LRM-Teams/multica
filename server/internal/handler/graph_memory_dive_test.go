@@ -302,36 +302,57 @@ func TestGraphMemoryDiveTerminalFailureJudgeFailed(t *testing.T) {
 		t.Fatalf("recall status = %s, want judge_failed", status)
 	}
 
-	// Normally completed runs carry reward 0 and the judge_failed marker; no
-	// ground truth was produced (job result stays empty).
-	var rewards []float64
+	// Normally completed runs become reward-unavailable with the judge_failed
+	// marker — a judge infrastructure failure is never a synthetic numeric 0
+	// (Task 19, A46); no ground truth was produced (job result stays empty).
 	var diveStatuses []string
 	rows, err := testPool.Query(ctx, `
-		SELECT reward, dive_status FROM graph_memory_trajectory WHERE recall_id = $1 ORDER BY seed_index
+		SELECT reward, dive_status, reward_status, reward_revision
+		FROM graph_memory_trajectory WHERE recall_id = $1 ORDER BY seed_index
 	`, recallID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var reward *float64
-		var ds string
-		if err := rows.Scan(&reward, &ds); err != nil {
+		var (
+			reward *float64
+			ds, rs string
+			rev    int
+		)
+		if err := rows.Scan(&reward, &ds, &rs, &rev); err != nil {
 			t.Fatal(err)
 		}
-		if reward == nil {
-			t.Fatal("normal run reward is NULL after judge_failed, want 0")
+		if reward != nil {
+			t.Fatal("normal run reward is numeric after judge_failed, want NULL (A46)")
 		}
-		rewards = append(rewards, *reward)
+		if rs != "unavailable" {
+			t.Fatalf("trajectory reward_status = %q, want unavailable", rs)
+		}
+		if rev != 1 {
+			t.Fatalf("trajectory reward_revision = %d, want 1", rev)
+		}
 		diveStatuses = append(diveStatuses, ds)
 	}
-	if len(rewards) != 2 || rewards[0] != 0 || rewards[1] != 0 {
-		t.Fatalf("normal-run rewards after judge_failed = %v, want [0 0]", rewards)
+	if len(diveStatuses) != 2 {
+		t.Fatalf("judged-affected trajectories = %d, want 2", len(diveStatuses))
 	}
 	for _, ds := range diveStatuses {
 		if ds != "judge_failed" {
 			t.Fatalf("trajectory dive_status = %q, want judge_failed", ds)
 		}
+	}
+	// The immutable ledger carries one unavailable record per run (no value).
+	var unavail int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM graph_memory_reward_record
+		WHERE trajectory_id IN (SELECT id FROM graph_memory_trajectory WHERE recall_id = $1)
+		  AND status = 'unavailable' AND value IS NULL
+	`, recallID).Scan(&unavail); err != nil {
+		t.Fatal(err)
+	}
+	if unavail != 2 {
+		t.Fatalf("unavailable reward records = %d, want 2", unavail)
 	}
 	var result string
 	if err := testPool.QueryRow(ctx, `

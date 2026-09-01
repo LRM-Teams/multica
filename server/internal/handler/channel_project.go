@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -245,10 +246,17 @@ func (h *Handler) SetChannelProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "channel not found")
 		return
 	}
-	if _, err := h.DB.Exec(r.Context(),
-		`UPDATE channel SET project_id = $2, updated_at = now() WHERE id = $1 AND workspace_id = $3`,
-		channelID, projectID, parseUUID(workspaceID),
-	); err != nil {
+	// Task 16: the binding service is the single writer of channel.project_id
+	// (route CAS + binding generation + queued Graph migration, one tx; the
+	// migration-470 guard rejects any other UPDATE path).
+	if h.ChannelProjectBindings == nil {
+		writeError(w, http.StatusServiceUnavailable, "channel project binding is not configured")
+		return
+	}
+	if _, err := h.ChannelProjectBindings.SetChannelProject(r.Context(), service.ChannelProjectBindingParams{
+		WorkspaceID: parseUUID(workspaceID), ChannelID: channelID,
+		NewProjectID: projectID, Actor: "user:" + userID,
+	}); err != nil {
 		if isSystemGeneralGuardError(err) {
 			writeSystemChannelProtected(w)
 			return

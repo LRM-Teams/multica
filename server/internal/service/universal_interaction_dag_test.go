@@ -51,6 +51,39 @@ func applyUniversalDAGEdgeOnlyLinkageMigration(t *testing.T, ctx context.Context
 	}
 }
 
+// applyUniversalDAGLegacyBackfillMarker applies migration 475 (the
+// boundary_quality provenance marker) so `SELECT *` segment reads against
+// this harness schema match the generated model. The column doubles as the
+// applied marker: higher harness layers (e.g. the Task 22 backfill harness)
+// may also request it on the same schema.
+func applyUniversalDAGLegacyBackfillMarker(t *testing.T, ctx context.Context, conn *pgxpool.Conn) {
+	t.Helper()
+	var applied bool
+	if err := conn.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_schema = current_schema()
+			  AND table_name = 'interaction_dag_segment'
+			  AND column_name = 'boundary_quality')`).Scan(&applied); err != nil {
+		t.Fatalf("probe migration 475 marker: %v", err)
+	}
+	if applied {
+		return
+	}
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate universal DAG boundary test")
+	}
+	path := filepath.Join(filepath.Dir(filename), "..", "..", "migrations", "475_universal_dag_legacy_backfill.up.sql")
+	migration, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read migration 475: %v", err)
+	}
+	if _, err := conn.Exec(ctx, string(migration)); err != nil {
+		t.Fatalf("apply migration 475 in private schema: %v", err)
+	}
+}
+
 func TestUniversalInteractionDAGGenerationStateMachine(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
@@ -741,6 +774,7 @@ func newUniversalDAGBoundaryHarness(t *testing.T, ctx context.Context) *universa
 	}
 	applyUniversalDAGMigrationIfPresent(t, ctx, conn)
 	applyUniversalDAGEdgeOnlyLinkageMigration(t, ctx, conn)
+	applyUniversalDAGLegacyBackfillMarker(t, ctx, conn)
 	seedUniversalDAGCanonicalOwners(t, ctx, conn)
 	var schema string
 	if err := conn.QueryRow(ctx, `SELECT current_schema()`).Scan(&schema); err != nil {

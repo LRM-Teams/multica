@@ -15,8 +15,11 @@ import (
 // finalizeMixedRLCausalEdges derives channel_message, reaction, and
 // session_continuation edges from provisional capture evidence. Ownership and
 // consumptions are already durable; freeze is the moment edges become part of
-// the immutable snapshot.
-func finalizeMixedRLCausalEdges(ctx context.Context, qtx *db.Queries, ledger *ProviderCallLedger, runID pgtype.UUID) error {
+// the immutable snapshot. Endpoints resolve through the canonical projection
+// identity maps — never through legacy segment-id string conventions — and an
+// edge whose trigger message has exactly one matching canonical Edge carries
+// that mapping for provenance.
+func finalizeMixedRLCausalEdges(ctx context.Context, qtx *db.Queries, runID pgtype.UUID, projected ProjectedRunSnapshot) error {
 	existing, err := qtx.ListMixedRLCausalEdgesCanonical(ctx, runID)
 	if err != nil {
 		return err
@@ -39,11 +42,14 @@ func finalizeMixedRLCausalEdges(ctx context.Context, qtx *db.Queries, ledger *Pr
 			ownedByCall[association.ProviderCallID] = association.SegmentID
 		}
 	}
-	segments, err := qtx.ListMixedRLRunSegmentsCanonical(ctx, runID)
+	// On canonical stores the projection already loaded the run's frozen rows
+	// with their mapping column; pre-454 repository fixtures fall back to the
+	// migration 315 listing, which cannot carry a mapping.
+	segments, err := mixedRLEdgeSegments(ctx, qtx, runID, projected)
 	if err != nil {
 		return err
 	}
-	segmentByID := make(map[string]db.InteractionDagRunSegment, len(segments))
+	segmentByID := make(map[string]mixedRLEdgeSegment, len(segments))
 	for _, segment := range segments {
 		segmentByID[segment.SegmentID] = segment
 	}
@@ -52,20 +58,48 @@ func finalizeMixedRLCausalEdges(ctx context.Context, qtx *db.Queries, ledger *Pr
 		return err
 	}
 	nextOrdinal := int64(len(existing))
-	insertEdge := func(input CausalEdgeInput) error {
-		key := mixedRLEdgeKey(input.Type, input.SourceSegmentID, input.DestinationSegmentID, input.DestinationCallID, input.TriggerMessageID)
+	insertEdge := func(edgeType, sourceSegmentID, destinationSegmentID string, trigger pgtype.UUID, destinationCallID string) error {
+		key := mixedRLEdgeKey(edgeType, sourceSegmentID, destinationSegmentID, destinationCallID, trigger)
 		if _, exists := existingKeys[key]; exists {
 			return nil
 		}
 		nextOrdinal++
-		input.EdgeOrdinal = nextOrdinal
-		if !input.EdgeID.Valid {
-			input.EdgeID = pgtype.UUID{Bytes: uuid.NewSHA1(uuid.NameSpaceURL, []byte(
-				runID.String()+":"+key,
-			)), Valid: true}
+		var universalEdgeID pgtype.Int8
+		if projected.StorePresent && trigger.Valid {
+			if source, ok := segmentByID[sourceSegmentID]; ok && source.UniversalSegmentID.Valid {
+				candidates, err := qtx.FindUniversalDAGEdgesByTriggerAndDestination(ctx, db.FindUniversalDAGEdgesByTriggerAndDestinationParams{
+					WorkspaceID:      projected.WorkspaceID,
+					TriggerMessageID: trigger,
+					DstSegmentID:     source.UniversalSegmentID.String,
+				})
+				if err != nil {
+					return err
+				}
+				// Ambiguous provenance stays unmapped rather than guessed.
+				if len(candidates) == 1 {
+					universalEdgeID = pgtype.Int8{Int64: candidates[0], Valid: true}
+				}
+			}
 		}
-		input.RunID = runID
-		if _, err := ledger.InsertCausalEdge(ctx, input); err != nil {
+		edgeID := pgtype.UUID{Bytes: uuid.NewSHA1(uuid.NameSpaceURL, []byte(
+			runID.String()+":"+key,
+		)), Valid: true}
+		if projected.StorePresent {
+			if _, err := qtx.InsertMixedRLCausalEdgeWithUniversal(ctx, db.InsertMixedRLCausalEdgeWithUniversalParams{
+				EdgeID: edgeID, RunID: runID,
+				SrcSegmentID: sourceSegmentID, DstSegmentID: destinationSegmentID,
+				Type: edgeType, TriggerMessageID: trigger,
+				DstCallID: destinationCallID, EdgeOrdinal: nextOrdinal,
+				UniversalEdgeID: universalEdgeID,
+			}); err != nil {
+				return err
+			}
+		} else if _, err := qtx.InsertMixedRLCausalEdge(ctx, db.InsertMixedRLCausalEdgeParams{
+			EdgeID: edgeID, RunID: runID,
+			SrcSegmentID: sourceSegmentID, DstSegmentID: destinationSegmentID,
+			Type: edgeType, TriggerMessageID: trigger,
+			DstCallID: destinationCallID, EdgeOrdinal: nextOrdinal,
+		}); err != nil {
 			return err
 		}
 		existingKeys[key] = struct{}{}
@@ -77,15 +111,11 @@ func finalizeMixedRLCausalEdges(ctx context.Context, qtx *db.Queries, ledger *Pr
 		if dstSegment == "" {
 			continue
 		}
-		srcSegment := "message:" + consumption.ChannelMessageID.String()
-		if _, ok := segmentByID[srcSegment]; !ok {
+		srcSegment, ok := projected.ByCanonicalID[consumption.ChannelMessageID]
+		if !ok {
 			continue
 		}
-		if err := insertEdge(CausalEdgeInput{
-			SourceSegmentID: srcSegment, DestinationSegmentID: dstSegment,
-			Type: "channel_message", TriggerMessageID: consumption.ChannelMessageID,
-			DestinationCallID: consumption.EffectiveFromCallID,
-		}); err != nil {
+		if err := insertEdge("channel_message", srcSegment, dstSegment, consumption.ChannelMessageID, consumption.EffectiveFromCallID); err != nil {
 			return err
 		}
 	}
@@ -101,14 +131,11 @@ func finalizeMixedRLCausalEdges(ctx context.Context, qtx *db.Queries, ledger *Pr
 		if err != nil {
 			return err
 		}
-		srcSegment := "message:" + reactedMessageID.String()
-		if _, ok := segmentByID[srcSegment]; !ok {
+		srcSegment, ok := projected.ByCanonicalID[reactedMessageID]
+		if !ok {
 			continue
 		}
-		if err := insertEdge(CausalEdgeInput{
-			SourceSegmentID: srcSegment, DestinationSegmentID: segment.SegmentID,
-			Type: "reaction", TriggerMessageID: reactedMessageID,
-		}); err != nil {
+		if err := insertEdge("reaction", srcSegment, segment.SegmentID, reactedMessageID, ""); err != nil {
 			return err
 		}
 	}
@@ -155,14 +182,44 @@ func finalizeMixedRLCausalEdges(ctx context.Context, qtx *db.Queries, ledger *Pr
 			continue
 		}
 		seenContinuation[key] = struct{}{}
-		if err := insertEdge(CausalEdgeInput{
-			SourceSegmentID: prev.SegmentID, DestinationSegmentID: cur.SegmentID,
-			Type: "session_continuation", DestinationCallID: cur.CallID,
-		}); err != nil {
+		if err := insertEdge("session_continuation", prev.SegmentID, cur.SegmentID, pgtype.UUID{}, cur.CallID); err != nil {
 			return fmt.Errorf("session continuation edge: %w", err)
 		}
 	}
 	return nil
+}
+
+// mixedRLEdgeSegment is the migration 315 view of one frozen run segment the
+// edge finalizer needs, with the canonical mapping when the store provides it.
+type mixedRLEdgeSegment struct {
+	SegmentID          string
+	Kind               string
+	CanonicalActionID  pgtype.UUID
+	UniversalSegmentID pgtype.Text
+}
+
+func mixedRLEdgeSegments(ctx context.Context, qtx *db.Queries, runID pgtype.UUID, projected ProjectedRunSnapshot) ([]mixedRLEdgeSegment, error) {
+	if projected.StorePresent {
+		out := make([]mixedRLEdgeSegment, 0, len(projected.Segments))
+		for _, row := range projected.Segments {
+			out = append(out, mixedRLEdgeSegment{
+				SegmentID: row.SegmentID, Kind: row.Kind,
+				CanonicalActionID: row.CanonicalActionID, UniversalSegmentID: row.UniversalSegmentID,
+			})
+		}
+		return out, nil
+	}
+	rows, err := qtx.ListMixedRLRunSegmentsCanonical(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]mixedRLEdgeSegment, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, mixedRLEdgeSegment{
+			SegmentID: row.SegmentID, Kind: row.Kind, CanonicalActionID: row.CanonicalActionID,
+		})
+	}
+	return out, nil
 }
 
 func mixedRLEdgeKey(edgeType, src, dst, dstCall string, trigger pgtype.UUID) string {

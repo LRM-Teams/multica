@@ -662,6 +662,9 @@ func daemonRegistrationCapabilities(includeCredentialTransport bool) []string {
 		// deliver the machine action. They only forward it to ComputerCore;
 		// acceptance and execution do not live in this package.
 		protocol.DaemonCapabilityMachineUpgrade,
+		// Explore v2 is negotiated per run: the server only offers
+		// generation 2 when this capability AND its phase gate are green.
+		protocol.DaemonCapabilityMemoryExploreV2,
 	}
 	if includeCredentialTransport {
 		capabilities = append(capabilities, protocol.DaemonCapabilityAgentCredentialTransport)

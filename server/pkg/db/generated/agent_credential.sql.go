@@ -244,6 +244,33 @@ func (q *Queries) GetAgentCredentialForDaemonEnsure(ctx context.Context, arg Get
 	return i, err
 }
 
+const hasLiveDaemonAgentCredential = `-- name: HasLiveDaemonAgentCredential :one
+SELECT EXISTS (
+  SELECT 1
+  FROM agent_credential
+  WHERE agent_id = $1
+    AND workspace_id = $2
+    AND user_id = $3
+    AND issuance_source = 'daemon'
+    AND revoked_at IS NULL
+    AND disabled_at IS NULL
+    AND (expires_at IS NULL OR expires_at > now())
+)
+`
+
+type HasLiveDaemonAgentCredentialParams struct {
+	AgentID     pgtype.UUID `json:"agent_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	UserID      pgtype.UUID `json:"user_id"`
+}
+
+func (q *Queries) HasLiveDaemonAgentCredential(ctx context.Context, arg HasLiveDaemonAgentCredentialParams) (bool, error) {
+	row := q.db.QueryRow(ctx, hasLiveDaemonAgentCredential, arg.AgentID, arg.WorkspaceID, arg.UserID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const hasOtherLiveDaemonAgentCredential = `-- name: HasOtherLiveDaemonAgentCredential :one
 SELECT EXISTS (
   SELECT 1
@@ -273,33 +300,6 @@ func (q *Queries) HasOtherLiveDaemonAgentCredential(ctx context.Context, arg Has
 		arg.UserID,
 		arg.ID,
 	)
-	var exists bool
-	err := row.Scan(&exists)
-	return exists, err
-}
-
-const hasLiveDaemonAgentCredential = `-- name: HasLiveDaemonAgentCredential :one
-SELECT EXISTS (
-  SELECT 1
-  FROM agent_credential
-  WHERE agent_id = $1
-    AND workspace_id = $2
-    AND user_id = $3
-    AND issuance_source = 'daemon'
-    AND revoked_at IS NULL
-    AND disabled_at IS NULL
-    AND (expires_at IS NULL OR expires_at > now())
-)
-`
-
-type HasLiveDaemonAgentCredentialParams struct {
-	AgentID     pgtype.UUID `json:"agent_id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	UserID      pgtype.UUID `json:"user_id"`
-}
-
-func (q *Queries) HasLiveDaemonAgentCredential(ctx context.Context, arg HasLiveDaemonAgentCredentialParams) (bool, error) {
-	row := q.db.QueryRow(ctx, hasLiveDaemonAgentCredential, arg.AgentID, arg.WorkspaceID, arg.UserID)
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
@@ -377,6 +377,17 @@ func (q *Queries) RevokeAgentCredential(ctx context.Context, id pgtype.UUID) (Ag
 	return i, err
 }
 
+const revokeAgentCredentialsByAgent = `-- name: RevokeAgentCredentialsByAgent :exec
+UPDATE agent_credential
+SET revoked_at = COALESCE(revoked_at, now()), updated_at = now()
+WHERE agent_id = $1 AND revoked_at IS NULL
+`
+
+func (q *Queries) RevokeAgentCredentialsByAgent(ctx context.Context, agentID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, revokeAgentCredentialsByAgent, agentID)
+	return err
+}
+
 const revokeDaemonAgentCredentialForLaunch = `-- name: RevokeDaemonAgentCredentialForLaunch :execrows
 UPDATE agent_credential
 SET revoked_at = now(), updated_at = now()
@@ -406,17 +417,6 @@ func (q *Queries) RevokeDaemonAgentCredentialForLaunch(ctx context.Context, arg 
 		return 0, err
 	}
 	return result.RowsAffected(), nil
-}
-
-const revokeAgentCredentialsByAgent = `-- name: RevokeAgentCredentialsByAgent :exec
-UPDATE agent_credential
-SET revoked_at = COALESCE(revoked_at, now()), updated_at = now()
-WHERE agent_id = $1 AND revoked_at IS NULL
-`
-
-func (q *Queries) RevokeAgentCredentialsByAgent(ctx context.Context, agentID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, revokeAgentCredentialsByAgent, agentID)
-	return err
 }
 
 const revokeDaemonAgentCredentialsForSubject = `-- name: RevokeDaemonAgentCredentialsForSubject :execrows

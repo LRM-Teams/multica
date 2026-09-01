@@ -14,9 +14,13 @@ import (
 
 // OfflineTrajectoriesResolveRequest is the body of
 // POST /api/v1/env-dispatch/runs/{run_id}/offline-trajectories:resolve.
+// training_manifest_id is the Task 18 governance authorization: raw NDJSON
+// resolution without a valid exported manifest answers training_disabled /
+// manifest_required instead of any frozen payload.
 type OfflineTrajectoriesResolveRequest struct {
-	SnapshotID string   `json:"snapshot_id"`
-	CallIDs    []string `json:"call_ids"`
+	SnapshotID         string   `json:"snapshot_id"`
+	CallIDs            []string `json:"call_ids"`
+	TrainingManifestID string   `json:"training_manifest_id"`
 }
 
 // ResolveOfflineTrajectories streams one NDJSON result per deduplicated
@@ -52,10 +56,11 @@ func (h *Handler) ResolveOfflineTrajectories(w http.ResponseWriter, r *http.Requ
 
 	resolver := service.NewOfflineTrajectoryService(h.Queries)
 	lines, err := resolver.Resolve(r.Context(), service.OfflineResolveRequest{
-		RunID:       runID,
-		WorkspaceID: wsUUID,
-		SnapshotID:  req.SnapshotID,
-		CallIDs:     req.CallIDs,
+		RunID:              runID,
+		WorkspaceID:        wsUUID,
+		SnapshotID:         req.SnapshotID,
+		CallIDs:            req.CallIDs,
+		TrainingManifestID: req.TrainingManifestID,
 	})
 	if err != nil {
 		writeOfflineResolveError(w, err)

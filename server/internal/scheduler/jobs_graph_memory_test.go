@@ -3,7 +3,6 @@ package scheduler
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/multica-ai/multica/server/internal/memorygraph"
+	"github.com/multica-ai/multica/server/internal/service"
 )
 
 func TestGraphMemoryConsolidationSkipsWhenReviewerNotGraph(t *testing.T) {
@@ -67,7 +67,7 @@ func TestGraphMemoryConsolidationBelowThreshold(t *testing.T) {
 	}
 }
 
-// A3 time-based fallback: at least one new staging segment and no
+// A3 time-based fallback: at least one uncovered active atom and no
 // successful consolidation in over 24h triggers even below the dual
 // threshold. A fresh last success does not.
 func TestGraphMemoryConsolidationTimeFallback(t *testing.T) {
@@ -76,22 +76,22 @@ func TestGraphMemoryConsolidationTimeFallback(t *testing.T) {
 	if err := store.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := store.WriteStagingSegment("seg-1", []byte("staging body")); err != nil {
-		t.Fatalf("WriteStagingSegment: %v", err)
-	}
 
-	cfg := memorygraph.DefaultConsolidateConfig() // thresholds 50/200: unreachable with 1 segment
+	cfg := memorygraph.DefaultConsolidateConfig() // thresholds 50/200: unreachable with 1 atom
 	now := time.Now().UTC()
 
 	runs := 0
-	run := func(context.Context) (*memorygraph.ConsolidateResult, error) {
+	run := func(context.Context) (*service.GraphMemoryConsolidationPublishReport, error) {
 		runs++
-		return &memorygraph.ConsolidateResult{Switched: true}, nil
+		return &service.GraphMemoryConsolidationPublishReport{
+			Outcome: service.GraphMemoryConsolidationPublishPublished, Generation: 1, CandidateVersion: 2,
+		}, nil
 	}
 
-	// Fresh last success: neither the threshold nor the fallback fires.
+	// Fresh last success: neither the threshold (1 atom < 50) nor the
+	// fallback fires.
 	ds := &graphDirState{LastConsolidated: now.Add(-time.Hour), LastSuccessAt: now.Add(-time.Hour)}
-	ran, err := consolidateOneGraphWith(context.Background(), dir, store, cfg, ds, nil, run, now)
+	ran, err := consolidateOneGraphWith(context.Background(), dir, store, cfg, ds, nil, 1, 1, run, now)
 	if err != nil {
 		t.Fatalf("consolidateOneGraphWith: %v", err)
 	}
@@ -99,9 +99,9 @@ func TestGraphMemoryConsolidationTimeFallback(t *testing.T) {
 		t.Fatalf("ran=%v runs=%d, want no trigger on fresh last success", ran, runs)
 	}
 
-	// Stale last success (>24h) with one new segment: the fallback fires.
+	// Stale last success (>24h) with one uncovered atom: the fallback fires.
 	ds.LastSuccessAt = now.Add(-25 * time.Hour)
-	ran, err = consolidateOneGraphWith(context.Background(), dir, store, cfg, ds, nil, run, now)
+	ran, err = consolidateOneGraphWith(context.Background(), dir, store, cfg, ds, nil, 1, 1, run, now)
 	if err != nil {
 		t.Fatalf("consolidateOneGraphWith: %v", err)
 	}
@@ -109,15 +109,15 @@ func TestGraphMemoryConsolidationTimeFallback(t *testing.T) {
 		t.Fatalf("ran=%v runs=%d, want time-fallback trigger", ran, runs)
 	}
 	if ds.LastSuccessAt != now || ds.LastConsolidated != now {
-		t.Fatalf("state = %+v, want watermarks at now after a successful run", ds)
+		t.Fatalf("state = %+v, want watermarks at now after a published run", ds)
 	}
 	if ds.ConsecutiveNoSwitch != 0 || ds.Backoff {
-		t.Fatalf("state = %+v, want no backoff after a switching run", ds)
+		t.Fatalf("state = %+v, want no backoff after a published run", ds)
 	}
 
 	// Missing LastSuccessAt (pre-A3 state file) counts as maximally stale.
 	ds2 := &graphDirState{LastConsolidated: now.Add(-time.Hour)}
-	ran, err = consolidateOneGraphWith(context.Background(), dir, store, cfg, ds2, nil, run, now)
+	ran, err = consolidateOneGraphWith(context.Background(), dir, store, cfg, ds2, nil, 1, 1, run, now)
 	if err != nil {
 		t.Fatalf("consolidateOneGraphWith: %v", err)
 	}
@@ -126,9 +126,9 @@ func TestGraphMemoryConsolidationTimeFallback(t *testing.T) {
 	}
 }
 
-// A3 failure backoff: three consecutive no-switch TTT consolidations engage
-// the backoff; the dir is skipped until the total staging count grows past
-// the watermark recorded at backoff entry.
+// A3 failure backoff: three consecutive aborting/erroring cycles engage the
+// backoff; the dir is skipped until the scope's total active atom count
+// grows past the watermark recorded at backoff entry.
 func TestGraphMemoryConsolidationFailureBackoff(t *testing.T) {
 	dir := t.TempDir()
 	store := memorygraph.NewStore(dir)
@@ -137,39 +137,28 @@ func TestGraphMemoryConsolidationFailureBackoff(t *testing.T) {
 	}
 
 	cfg := memorygraph.DefaultConsolidateConfig()
-	cfg.TriggerSegments = 1 // one new segment per round keeps the trigger firing
+	cfg.TriggerSegments = 1 // one uncovered atom per round keeps the trigger firing
 	ds := &graphDirState{}
+	now := time.Now().UTC()
 
 	runs := 0
-	noSwitch := func(context.Context) (*memorygraph.ConsolidateResult, error) {
+	aborted := func(context.Context) (*service.GraphMemoryConsolidationPublishReport, error) {
 		runs++
-		return &memorygraph.ConsolidateResult{Switched: false}, nil
-	}
-	// The container filesystem has coarse modtime granularity, so pin each
-	// segment's modtime on an explicit timeline.
-	base := time.Now().UTC().Add(-time.Hour)
-	roundTime := func(i int) time.Time { return base.Add(time.Duration(i) * time.Minute) }
-	addSegment := func(i int) {
-		t.Helper()
-		id := fmt.Sprintf("seg-%d", i)
-		if err := store.WriteStagingSegment(id, []byte("body")); err != nil {
-			t.Fatalf("WriteStagingSegment: %v", err)
-		}
-		path := filepath.Join(store.Root, "staging", "segments", id+".md")
-		if err := os.Chtimes(path, roundTime(i), roundTime(i)); err != nil {
-			t.Fatalf("Chtimes: %v", err)
-		}
+		return &service.GraphMemoryConsolidationPublishReport{
+			Outcome: service.GraphMemoryConsolidationPublishAbortedUncited,
+		}, nil
 	}
 
-	// Three rounds, each with one new segment and a no-switch outcome.
+	// Three rounds, each seeing one more active atom and aborting without
+	// consuming anything.
 	for i := 1; i <= 3; i++ {
-		addSegment(i)
-		ran, err := consolidateOneGraphWith(context.Background(), dir, store, cfg, ds, nil, noSwitch, roundTime(i).Add(30*time.Second))
-		if err != nil {
-			t.Fatalf("round %d: %v", i, err)
+		ran, err := consolidateOneGraphWith(context.Background(), dir, store, cfg, ds, nil, i, i, aborted,
+			now.Add(time.Duration(i)*time.Minute))
+		if err == nil {
+			t.Fatalf("round %d: want the abort outcome propagated", i)
 		}
-		if !ran {
-			t.Fatalf("round %d did not trigger", i)
+		if ran {
+			t.Fatalf("round %d: ran=true on an aborted cycle", i)
 		}
 		if ds.ConsecutiveNoSwitch != i {
 			t.Fatalf("round %d: consecutive_no_switch = %d, want %d", i, ds.ConsecutiveNoSwitch, i)
@@ -179,8 +168,8 @@ func TestGraphMemoryConsolidationFailureBackoff(t *testing.T) {
 		t.Fatalf("state = %+v, want backoff entered with watermark 3", ds)
 	}
 
-	// Backoff active: no new staging segments -> skipped, runner not called.
-	ran, err := consolidateOneGraphWith(context.Background(), dir, store, cfg, ds, nil, noSwitch, roundTime(3).Add(45*time.Second))
+	// Backoff active: no atom growth -> skipped, runner not called.
+	ran, err := consolidateOneGraphWith(context.Background(), dir, store, cfg, ds, nil, 3, 3, aborted, now.Add(4*time.Minute))
 	if err != nil {
 		t.Fatalf("backoff round: %v", err)
 	}
@@ -188,14 +177,15 @@ func TestGraphMemoryConsolidationFailureBackoff(t *testing.T) {
 		t.Fatalf("ran=%v runs=%d, want skipped under backoff", ran, runs)
 	}
 
-	// A new staging segment beyond the watermark clears the backoff and the
+	// New active atoms beyond the watermark clear the backoff and the
 	// consolidation runs again.
-	addSegment(4)
-	switching := func(context.Context) (*memorygraph.ConsolidateResult, error) {
+	publishing := func(context.Context) (*service.GraphMemoryConsolidationPublishReport, error) {
 		runs++
-		return &memorygraph.ConsolidateResult{Switched: true}, nil
+		return &service.GraphMemoryConsolidationPublishReport{
+			Outcome: service.GraphMemoryConsolidationPublishPublished, Generation: 1,
+		}, nil
 	}
-	ran, err = consolidateOneGraphWith(context.Background(), dir, store, cfg, ds, nil, switching, roundTime(4).Add(30*time.Second))
+	ran, err = consolidateOneGraphWith(context.Background(), dir, store, cfg, ds, nil, 4, 4, publishing, now.Add(5*time.Minute))
 	if err != nil {
 		t.Fatalf("post-backoff round: %v", err)
 	}
@@ -203,7 +193,7 @@ func TestGraphMemoryConsolidationFailureBackoff(t *testing.T) {
 		t.Fatalf("ran=%v runs=%d, want backoff cleared and consolidation run", ran, runs)
 	}
 	if ds.Backoff || ds.ConsecutiveNoSwitch != 0 {
-		t.Fatalf("state = %+v, want backoff cleared and counter reset after a switch", ds)
+		t.Fatalf("state = %+v, want backoff cleared and counter reset after publishing", ds)
 	}
 }
 
@@ -217,24 +207,17 @@ func TestGraphMemoryConsolidationErrorsCountTowardBackoff(t *testing.T) {
 	cfg := memorygraph.DefaultConsolidateConfig()
 	cfg.TriggerSegments = 1
 	ds := &graphDirState{}
+	now := time.Now().UTC()
 
 	boom := errors.New("backend down")
 	runs := 0
-	failing := func(context.Context) (*memorygraph.ConsolidateResult, error) {
+	failing := func(context.Context) (*service.GraphMemoryConsolidationPublishReport, error) {
 		runs++
 		return nil, boom
 	}
-	base := time.Now().UTC().Add(-time.Hour)
 	for i := 1; i <= 3; i++ {
-		id := fmt.Sprintf("seg-%d", i)
-		if err := store.WriteStagingSegment(id, []byte("body")); err != nil {
-			t.Fatalf("WriteStagingSegment: %v", err)
-		}
-		segTime := base.Add(time.Duration(i) * time.Minute)
-		if err := os.Chtimes(filepath.Join(store.Root, "staging", "segments", id+".md"), segTime, segTime); err != nil {
-			t.Fatalf("Chtimes: %v", err)
-		}
-		ran, err := consolidateOneGraphWith(context.Background(), dir, store, cfg, ds, nil, failing, segTime.Add(30*time.Second))
+		ran, err := consolidateOneGraphWith(context.Background(), dir, store, cfg, ds, nil, i, i, failing,
+			now.Add(time.Duration(i)*time.Minute))
 		if err == nil {
 			t.Fatalf("round %d: want the consolidation error propagated", i)
 		}
@@ -251,34 +234,46 @@ func TestGraphMemoryConsolidationErrorsCountTowardBackoff(t *testing.T) {
 	}
 }
 
-// A clean non-TTT (in-place) consolidation never switches versions by
-// design (Q16) and must reset the no-switch counter instead of feeding it.
-func TestGraphMemoryConsolidationNonTTTSuccessResetsBackoff(t *testing.T) {
+// A published outcome resets the no-switch counter, and a skipped-no-atoms
+// outcome consumes nothing: no watermark moves and no failure is recorded.
+func TestGraphMemoryConsolidationOutcomeStateTransitions(t *testing.T) {
 	dir := t.TempDir()
 	store := memorygraph.NewStore(dir)
 	if err := store.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := store.WriteStagingSegment("seg-1", []byte("body")); err != nil {
-		t.Fatalf("WriteStagingSegment: %v", err)
-	}
 	cfg := memorygraph.DefaultConsolidateConfig()
 	cfg.TriggerSegments = 1
-	cfg.TTVTrajectories = 1 // non-TTT in-place mode
-	ds := &graphDirState{ConsecutiveNoSwitch: 2}
+	now := time.Now().UTC()
 
-	run := func(context.Context) (*memorygraph.ConsolidateResult, error) {
-		return &memorygraph.ConsolidateResult{Switched: false}, nil
+	// Published: watermarks move and the counter resets.
+	ds := &graphDirState{ConsecutiveNoSwitch: 2}
+	run := func(context.Context) (*service.GraphMemoryConsolidationPublishReport, error) {
+		return &service.GraphMemoryConsolidationPublishReport{
+			Outcome: service.GraphMemoryConsolidationPublishPublished, Generation: 3, AtomCount: 4,
+		}, nil
 	}
-	ran, err := consolidateOneGraphWith(context.Background(), dir, store, cfg, ds, nil, run, time.Now().UTC())
+	ran, err := consolidateOneGraphWith(context.Background(), dir, store, cfg, ds, nil, 4, 4, run, now)
 	if err != nil {
 		t.Fatalf("consolidateOneGraphWith: %v", err)
 	}
-	if !ran {
-		t.Fatalf("non-TTT consolidation did not trigger")
+	if !ran || ds.ConsecutiveNoSwitch != 0 || ds.Backoff || ds.LastSuccessAt != now {
+		t.Fatalf("ran=%v state=%+v, want published outcome to reset the counter and move watermarks", ran, ds)
 	}
-	if ds.ConsecutiveNoSwitch != 0 || ds.Backoff {
-		t.Fatalf("state = %+v, want counter reset after a clean non-TTT run", ds)
+
+	// Skipped-no-atoms: nothing consumed, nothing recorded.
+	ds2 := &graphDirState{ConsecutiveNoSwitch: 1}
+	skip := func(context.Context) (*service.GraphMemoryConsolidationPublishReport, error) {
+		return &service.GraphMemoryConsolidationPublishReport{
+			Outcome: service.GraphMemoryConsolidationPublishSkippedNoAtoms,
+		}, nil
+	}
+	ran, err = consolidateOneGraphWith(context.Background(), dir, store, cfg, ds2, nil, 1, 1, skip, now)
+	if err != nil {
+		t.Fatalf("consolidateOneGraphWith: %v", err)
+	}
+	if ran || ds2.ConsecutiveNoSwitch != 1 || ds2.Backoff || !ds2.LastSuccessAt.IsZero() {
+		t.Fatalf("ran=%v state=%+v, want skipped-no-atoms to consume and record nothing", ran, ds2)
 	}
 }
 
@@ -354,62 +349,6 @@ func TestResolveGraphMemoryGate(t *testing.T) {
 	}
 }
 
-func TestGraphMemoryConsolidationConfigs(t *testing.T) {
-	cases := []struct {
-		name       string
-		rounds     int
-		tttEnabled bool
-		wantRounds int
-		wantTTV    int
-	}{
-		{name: "zero keeps default rounds", rounds: 0, tttEnabled: true, wantRounds: 6, wantTTV: 4},
-		{name: "profile rounds override default", rounds: 10, tttEnabled: true, wantRounds: 10, wantTTV: 4},
-		{name: "negative keeps default rounds", rounds: -1, tttEnabled: true, wantRounds: 6, wantTTV: 4},
-		{name: "ttt off forces non-TTT in-place", rounds: 10, tttEnabled: false, wantRounds: 10, wantTTV: 1},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg, exploreCfg := graphMemoryConsolidationConfigs("model", tc.rounds, tc.tttEnabled)
-			if exploreCfg.MaxRounds != tc.wantRounds {
-				t.Fatalf("exploreCfg.MaxRounds = %d, want %d", exploreCfg.MaxRounds, tc.wantRounds)
-			}
-			if cfg.ExploreMaxRounds != tc.wantRounds {
-				t.Fatalf("cfg.ExploreMaxRounds = %d, want %d", cfg.ExploreMaxRounds, tc.wantRounds)
-			}
-			if cfg.TTVTrajectories != tc.wantTTV {
-				t.Fatalf("cfg.TTVTrajectories = %d, want %d", cfg.TTVTrajectories, tc.wantTTV)
-			}
-			if exploreCfg.Model != "model" {
-				t.Fatalf("exploreCfg.Model = %q, want model", exploreCfg.Model)
-			}
-		})
-	}
-}
-
-func TestResolveGraphMemoryProfile(t *testing.T) {
-	ctx := context.Background()
-	wsID := "3f6b1c2e-7a8d-4e5f-9a0b-1c2d3e4f5a6b"
-	wsDir := "/root/" + wsID + "/memory_graph/projects/1f2e3d4c-5b6a-4978-8c7d-6e5f4a3b2c1d"
-
-	var gotWorkspaceID string
-	lookup := func(_ context.Context, workspaceID string) (int, bool) {
-		gotWorkspaceID = workspaceID
-		return 10, true
-	}
-	if rounds, ttt := resolveGraphMemoryProfile(ctx, wsDir, lookup); rounds != 10 || !ttt {
-		t.Fatalf("resolveGraphMemoryProfile = (%d, %v), want (10, true)", rounds, ttt)
-	}
-	if gotWorkspaceID != wsID {
-		t.Fatalf("lookup workspace ID = %q, want %q", gotWorkspaceID, wsID)
-	}
-	if rounds, ttt := resolveGraphMemoryProfile(ctx, "/root/memory_graph", lookup); rounds != 0 || ttt {
-		t.Fatalf("root-level profile = (%d, %v), want (0, false)", rounds, ttt)
-	}
-	if rounds, ttt := resolveGraphMemoryProfile(ctx, wsDir, nil); rounds != 0 || ttt {
-		t.Fatalf("nil lookup profile = (%d, %v), want (0, false)", rounds, ttt)
-	}
-}
-
 func TestGraphMemoryJobSpecValid(t *testing.T) {
 	job := GraphMemoryJobs(nil, nil, nil)
 	if err := job.validate(); err != nil {
@@ -457,5 +396,65 @@ func TestGraphMemoryJobsSpecRequiresNoEnvGate(t *testing.T) {
 	spec := GraphMemoryJobs(nil, nil, nil)
 	if spec.Name != JobNameGraphMemoryConsolidation || spec.Handler == nil {
 		t.Fatalf("graph memory job must register without any env switch: %+v", spec)
+	}
+}
+
+// Task 16: the consolidation handler reports the channel-migration drain
+// count; with no pool wired (or nothing queued) it reports zero and never
+// blocks the consolidation sweep.
+func TestGraphMemoryConsolidationReportsChannelMigrationDrain(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("MULTICA_MEMORY_TYPE", "graph")
+	t.Setenv("MULTICA_WORKSPACES_ROOT", root)
+
+	ws, pid := uuid.NewString(), uuid.NewString()
+	dir, err := memorygraph.EnsureScopedDir(root, ws, memorygraph.GraphDirKindProject, pid)
+	if err != nil {
+		t.Fatalf("EnsureScopedDir: %v", err)
+	}
+	store := memorygraph.NewStore(dir)
+	if err := store.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	res, err := GraphMemoryJobs(nil, nil, nil).Handler(context.Background(), HandlerInput{})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if res.Result["channel_migrations"] != 0 {
+		t.Fatalf("channel_migrations = %v, want 0 with no pool queued", res.Result["channel_migrations"])
+	}
+	if res.Result["graph_dirs"] != 1 {
+		t.Fatalf("graph_dirs = %v, want 1 (drain must not short-circuit the sweep)", res.Result["graph_dirs"])
+	}
+}
+
+// Task 17: the consolidation handler reports the retention sweep count
+// alongside consolidation; without a pool the sweep is skipped but the
+// handler still completes.
+func TestGraphMemoryConsolidationReportsRetentionSweep(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("MULTICA_MEMORY_TYPE", "graph")
+	t.Setenv("MULTICA_WORKSPACES_ROOT", root)
+
+	ws, pid := uuid.NewString(), uuid.NewString()
+	dir, err := memorygraph.EnsureScopedDir(root, ws, memorygraph.GraphDirKindProject, pid)
+	if err != nil {
+		t.Fatalf("EnsureScopedDir: %v", err)
+	}
+	store := memorygraph.NewStore(dir)
+	if err := store.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	res, err := GraphMemoryJobs(nil, nil, nil).Handler(context.Background(), HandlerInput{})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if _, ok := res.Result["retention_swept"]; !ok {
+		t.Fatalf("result = %v, want retention_swept present", res.Result)
+	}
+	if res.Result["graph_dirs"] != 1 {
+		t.Fatalf("graph_dirs = %v, want 1 (retention sweep must not block)", res.Result["graph_dirs"])
 	}
 }

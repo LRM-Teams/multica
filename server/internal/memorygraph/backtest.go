@@ -171,8 +171,12 @@ type BacktestQuery struct {
 
 // QueryBacktestStat records the per-query outcome on one candidate.
 type QueryBacktestStat struct {
-	TraceID          string            `json:"trace_id,omitempty"`
-	Query            string            `json:"query"`
+	TraceID string `json:"trace_id,omitempty"`
+	Query   string `json:"query"`
+	// Partition is the stable fnv-1a evaluation/holdout/safety split of the
+	// query's trace (spec §14.4): rewards read the evaluation partition only;
+	// holdout and safety stay out of every reward and gate signal.
+	Partition        string            `json:"partition,omitempty"`
 	BaselineRounds   int               `json:"baseline_rounds"` // n: rounds the original query needed
 	BaselineFound    bool              `json:"baseline_found"`  // baseline-side pass
 	Covered          bool              `json:"covered"`         // all ground truth within the n-hop hit neighborhood
@@ -221,6 +225,83 @@ type CandidateStats struct {
 	EmbedBytes   int     `json:"embed_bytes"`
 	EdgeChurn    int     `json:"edge_churn"`
 	Cost         float64 `json:"cost"`
+
+	// Consolidation reward (spec §14.3, Task 19): computed from the
+	// candidate's OWN absolute stats over the evaluation partition — never
+	// SelectWinner's batch-relative cost. Shadow-recorded on the
+	// select_version op-log entry for offline calibration; no model update
+	// (spec §14.4). A hard-gate failure carries the deterministic negative.
+	Reward              float64          `json:"reward"`
+	RewardComponents    RewardComponents `json:"reward_components,omitempty"`
+	RewardPolicyVersion string           `json:"reward_policy_version,omitempty"`
+}
+
+// ConsolidationRewardInputFromStats derives the §14.3 reward input from one
+// candidate's own backtest record: every aggregate reads the evaluation
+// partition only (holdout/safety never influence a reward), costs stay
+// absolute, and the baseline aggregates use the recorded baseline-side
+// signals. With no evaluation queries (cold windows) the deltas are zero,
+// leaving the absolute efficiency costs.
+func ConsolidationRewardInputFromStats(c *CandidateStats) ConsolidationRewardInput {
+	in := ConsolidationRewardInput{
+		Passed:          c.Passed,
+		GateFailures:    c.GateFailures,
+		CandidateRounds: c.MeanRounds,
+		EmbedBytes:      c.EmbedBytes,
+		ChangedNodes:    c.ChangedNodes,
+		EdgeChurn:       c.EdgeChurn,
+	}
+	if len(c.Queries) == 0 {
+		return in
+	}
+	var eval, evalFound, evalBaseFound, evalCovered, evalRegressed int
+	var candRounds, baseRounds float64
+	for i := range c.Queries {
+		q := &c.Queries[i]
+		switch q.Partition {
+		case "holdout":
+			in.HoldoutQueries++
+			continue
+		case "safety":
+			in.SafetyQueries++
+			continue
+		case "":
+			// Unstated rows (older records) default to evaluation.
+		}
+		in.EvaluationQueries++
+		if q.Skipped {
+			// Budget-audit row: never measured, so it carries no signal and
+			// stays out of the recall/regression denominators (mirrors
+			// recallRates excluding skipped rows from statistics).
+			continue
+		}
+		eval++
+		if q.Found {
+			evalFound++
+		}
+		if q.BaselineFound {
+			evalBaseFound++
+		}
+		if q.Covered {
+			evalCovered++
+		}
+		if q.Regressed {
+			evalRegressed++
+		}
+		candRounds += q.Rounds
+		baseRounds += float64(q.BaselineRounds)
+	}
+	in.Queries = eval
+	in.Regressions = evalRegressed
+	if eval > 0 {
+		in.Recall = float64(evalFound) / float64(eval)
+		in.BaselineRecall = float64(evalBaseFound) / float64(eval)
+		in.Coverage = float64(evalCovered) / float64(eval)
+		in.BaselineCoverage = in.BaselineRecall
+		in.CandidateRounds = candRounds / float64(eval)
+		in.BaselineRounds = baseRounds / float64(eval)
+	}
+	return in
 }
 
 // backtestWindowBounds returns the adjacent graph-version interval used by a
@@ -529,7 +610,7 @@ func stableItemMissID(item BacktestItem, index int) string {
 func (b *Backtester) evalQuery(ctx context.Context, retr *HybridRetriever, g *Graph, version int, q *BacktestQuery) QueryBacktestStat {
 	n := baselineRounds(q.BaselineRounds)
 	items := resolveBacktestItems(q)
-	stat := QueryBacktestStat{TraceID: q.TraceID, Query: q.Query, BaselineRounds: n, BaselineFound: q.BaselineFound, ItemsTotal: len(items)}
+	stat := QueryBacktestStat{TraceID: q.TraceID, Query: q.Query, Partition: QueryPartition(q.TraceID), BaselineRounds: n, BaselineFound: q.BaselineFound, ItemsTotal: len(items)}
 	hits, err := retr.Search(ctx, q.Query)
 	if err != nil {
 		stat.Regressed = q.BaselineFound

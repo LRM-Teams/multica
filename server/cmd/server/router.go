@@ -704,6 +704,31 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Put("/graph-memory/channels/{channelId}/mode", h.UpdateGraphMemoryChannelMode)
 					r.Post("/graph-memory/channels/{channelId}/reset", h.ResetGraphMemoryChannelAgent)
 					r.Get("/graph-memory/messages/{messageId}/citations", h.GetGraphMemoryMessageCitations)
+					// External Memory Explore v2 (plan Task 13): registration alone
+					// never enables access — every request re-checks the
+					// memory_explore_v2 gate plus the current fence.
+					r.Post("/memory/graph/corrections", h.GraphMemoryCorrection)
+					// Task 17: versioned retention policy (owner/admin).
+					r.Get("/memory/retention", h.GetMemoryRetention)
+					r.Put("/memory/retention", h.UpdateMemoryRetention)
+					// Task 18: training governance (owner/admin) — grants,
+					// global switches, selection manifests, executions and
+					// the deletion/unlearning ledger.
+					r.Get("/training/grant", h.GetTrainingGrant)
+					r.Put("/training/grant", h.UpdateTrainingGrant)
+					r.Get("/training/policy", h.GetTrainingPolicyRoute)
+					r.Put("/training/policy", h.UpdateTrainingPolicyRoute)
+					r.Get("/training/manifests", h.ListTrainingManifestsRoute)
+					r.Post("/training/manifests", h.CreateTrainingManifest)
+					r.Get("/training/manifests/{manifestId}", h.GetTrainingManifestRoute)
+					r.Post("/training/manifests/{manifestId}/export", h.ExportTrainingManifestRoute)
+					r.Post("/training/manifests/{manifestId}/execute", h.BeginTrainingExecutionRoute)
+					r.Post("/training/manifests/{manifestId}/consume", h.ConsumeTrainingExecutionRoute)
+					r.Get("/training/deletion-ledger", h.ListTrainingDeletionLedgerRoute)
+					r.Get("/training/selection-audit", h.AuditTrainingSelectionRoute)
+					r.Post("/memory/explore-v2/search", h.MemoryExploreV2Search)
+					r.Post("/memory/explore-v2/evidence", h.MemoryExploreV2Evidence)
+					r.Get("/memory/explore-v2/history", h.MemoryExploreV2History)
 					r.Get("/memory-curation/daily-summary", h.ListMemoryCurationDailySummary)
 					r.Get("/memory-curation/candidates", h.ListMemoryCurationCandidates)
 					r.Get("/memory-curation/candidates/{candidateId}", h.GetMemoryCurationCandidate)

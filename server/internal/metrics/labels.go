@@ -33,6 +33,17 @@ const (
 	labelOp           = "op"
 	labelOutcome      = "outcome"
 	labelDecision     = "decision"
+
+	// Shadow gate rollout labels (Task 21): closed sets only — canary names,
+	// gate names, phases and transition triggers. Memory content, workspace
+	// ids and free-form error text are forbidden (AC51 observability).
+	labelCanary    = "canary"
+	labelGate      = "gate"
+	labelFromPhase = "from_phase"
+	labelToPhase   = "to_phase"
+	labelPhase     = "phase"
+	labelScope     = "scope"
+	labelTrigger   = "trigger"
 )
 
 var businessMetricLabels = map[string][]string{
@@ -65,6 +76,11 @@ var businessMetricLabels = map[string][]string{
 	"multica_graph_memory_ingest_total":                  {labelResult},
 	"multica_graph_memory_version_switch_total":          {},
 	"multica_graph_memory_backtest_bypass_ratio":         {},
+
+	// Shadow gate rollout (Task 21).
+	"multica_shadow_gate_canary_ok":         {labelCanary},
+	"multica_shadow_gate_phase":             {labelScope, labelGate},
+	"multica_shadow_gate_transitions_total": {labelGate, labelFromPhase, labelToPhase, labelTrigger},
 
 	// PR3 funnel / community / commercial.
 	"multica_signup_total":                             {labelSignupSource},
@@ -199,6 +215,34 @@ var (
 	}
 	knownFailureReasons = map[string]string{}
 	modelAliasUnsafeRe  = regexp.MustCompile(`[^a-z0-9._:/+-]+`)
+
+	// Shadow gate rollout closed sets (Task 21). Every value outside the set
+	// normalizes to "other"/"unknown" so a caller bug can never mint an
+	// unbounded label series.
+	knownShadowCanaries = map[string]string{
+		"sequence_gap":          "sequence_gap",
+		"outbox_loss":           "outbox_loss",
+		"cross_channel_leak":    "cross_channel_leak",
+		"sanitizer_fail_open":   "sanitizer_fail_open",
+		"retraction_visibility": "retraction_visibility",
+		"cost_latency_budget":   "cost_latency_budget",
+	}
+	knownShadowGates = map[string]string{
+		"atoms":              "atoms",
+		"search_v2":          "search_v2",
+		"explore":            "explore",
+		"citations":          "citations",
+		"atom_consolidation": "atom_consolidation",
+		"channel_migration":  "channel_migration",
+		"reward_shadow":      "reward_shadow",
+		"tenant_training":    "tenant_training",
+		"pooled_training":    "pooled_training",
+	}
+	knownShadowPhases = map[string]string{
+		"disabled": "disabled",
+		"shadow":   "shadow",
+		"enabled":  "enabled",
+	}
 )
 
 func init() {
@@ -229,6 +273,57 @@ func NormalizeTaskSource(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
 	if normalized, ok := knownSources[value]; ok {
 		return normalized
+	}
+	return "other"
+}
+
+// NormalizeShadowCanary maps a canary name onto the closed six-name set
+// (Task 21); unknown values collapse to "other".
+func NormalizeShadowCanary(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if normalized, ok := knownShadowCanaries[value]; ok {
+		return normalized
+	}
+	return "other"
+}
+
+// NormalizeShadowGate maps a gate name onto the closed nine-name set;
+// unknown values collapse to "other".
+func NormalizeShadowGate(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if normalized, ok := knownShadowGates[value]; ok {
+		return normalized
+	}
+	return "other"
+}
+
+// NormalizeShadowPhase maps a phase onto the closed three-name set; unknown
+// values collapse to "unknown".
+func NormalizeShadowPhase(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if normalized, ok := knownShadowPhases[value]; ok {
+		return normalized
+	}
+	return "unknown"
+}
+
+// NormalizeShadowGateScope maps a scope onto workspace/global; unknown
+// values collapse to "other".
+func NormalizeShadowGateScope(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "workspace" || value == "global" {
+		return value
+	}
+	return "other"
+}
+
+// NormalizeShadowGateTrigger maps a transition trigger onto the closed
+// manual/auto_shutdown/failure set; unknown values collapse to "other".
+func NormalizeShadowGateTrigger(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	switch value {
+	case "manual", "auto_shutdown", "failure":
+		return value
 	}
 	return "other"
 }

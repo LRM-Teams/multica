@@ -5,18 +5,12 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
-	"strconv"
 	"testing"
-	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/multica-ai/multica/server/internal/memorygraph"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -56,54 +50,6 @@ const shardExport = `{"input_ids":{"shard_id":"s","node_addr":"n"}}`
 // TestDelegation_ClosesParentSegment: a root parent delegates -> its segment
 // closes with closing_event="delegation"; no edge (no grandparent). The
 // parent->child edge is recorded later at the child's close (see completion test).
-func TestDelegation_ClosesParentSegment(t *testing.T) {
-	store := newFakeInteractionDAGStore()
-	client := &fakeArealSegmentClient{closeSegmentID: 7, exportPayload: json.RawMessage(shardExport)}
-	svc := newSeamTaskService(store, client)
-
-	parentID := testUUID(1)
-	parent := db.AgentInboxEvent{WorkspaceID: testUUID(90), ID: parentID, Context: arealProxyContext("sess-1", "key-1")}
-	require.NoError(t, svc.Training.DAG.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", util.UUIDToString(parentID), "issue-1"))
-
-	svc.closeSegmentForDelegation(context.Background(), parent, "proj-1", leanSnap())
-
-	require.Len(t, store.segmentSnapshots, 1)
-	seg := store.segmentSnapshots[0]
-	assert.Equal(t, "sess-1-7", seg.SegmentID)
-	assert.Equal(t, util.UUIDToString(parentID), util.UUIDToString(seg.AgentRunID))
-	assert.True(t, seg.ClosingEvent.Valid)
-	assert.Equal(t, "delegation", seg.ClosingEvent.String)
-	assert.Empty(t, store.edges, "root parent has no grandparent -> no edge at delegation")
-}
-
-// TestDelegation_LinksGrandparentEdge: a parent that was itself delegated to
-// (has a parent) delegates -> grandparent->parent delegation edge recorded.
-func TestDelegation_LinksGrandparentEdge(t *testing.T) {
-	store := newFakeInteractionDAGStore()
-	client := &fakeArealSegmentClient{exportPayload: json.RawMessage(shardExport)}
-	svc := newSeamTaskService(store, client)
-
-	gpID, parentID := testUUID(1), testUUID(2)
-	// Grandparent already closed its segment (sess-gp -> "sess-gp-3").
-	require.NoError(t, svc.Training.DAG.RecordSessionAgentRun(context.Background(), "proj-1", "sess-gp", util.UUIDToString(gpID), "issue-1"))
-	client.closeSegmentID = 3
-	_, _, err := svc.Training.DAG.CloseSegmentForEvent(context.Background(), "proj-1", "sess-gp", "key-gp", "completion", leanSnap())
-	require.NoError(t, err)
-
-	// Parent (with grandparent) now delegates.
-	client.closeSegmentID = 5
-	parent := db.AgentInboxEvent{WorkspaceID: testUUID(90), ID: parentID, ParentTaskID: gpID, Context: arealProxyContext("sess-p", "key-p")}
-	require.NoError(t, svc.Training.DAG.RecordSessionAgentRun(context.Background(), "proj-1", "sess-p", util.UUIDToString(parentID), "issue-1"))
-	svc.closeSegmentForDelegation(context.Background(), parent, "proj-1", leanSnap())
-
-	require.Len(t, store.segmentSnapshots, 2)
-	assert.Equal(t, "sess-p-5", store.segmentSnapshots[1].SegmentID)
-	require.Len(t, store.edges, 1)
-	assert.Equal(t, "sess-gp-3", store.edges[0].SrcSegmentID)
-	assert.Equal(t, "sess-p-5", store.edges[0].DstSegmentID)
-	assert.Equal(t, EdgeTypeDelegation, store.edges[0].EdgeType)
-}
-
 func TestDiscoverDelegationParent_ExcludesNewChildTask(t *testing.T) {
 	pool := interactionDAGTestPool(t)
 	defer pool.Close()
@@ -161,355 +107,35 @@ func TestDiscoverDelegationParent_ExcludesNewChildTask(t *testing.T) {
 // TestCompletion_ClosesChildSegmentAndRecordsDelegationEdge: a child (with a
 // parent) completes -> child segment closes ("completion") + parent->child
 // delegation edge recorded at the child's close (where childSeg is finally known).
-func TestCompletion_ClosesChildSegmentAndRecordsDelegationEdge(t *testing.T) {
-	store := newFakeInteractionDAGStore()
-	client := &fakeArealSegmentClient{exportPayload: json.RawMessage(shardExport)}
-	svc := newSeamTaskService(store, client)
 
-	parentID, childID := testUUID(1), testUUID(2)
-	// Parent already closed its segment at delegation (sess-p -> "sess-p-1").
-	require.NoError(t, svc.Training.DAG.RecordSessionAgentRun(context.Background(), "proj-1", "sess-p", util.UUIDToString(parentID), "issue-1"))
-	client.closeSegmentID = 1
-	_, _, err := svc.Training.DAG.CloseSegmentForEvent(context.Background(), "proj-1", "sess-p", "key-p", "delegation", leanSnap())
-	require.NoError(t, err)
+func TestTerminalSideEffectsWriteNoLegacySegments(t *testing.T) {
+	env := setupRetryTestDB(t, "timeout")
 
-	// Child completes.
-	client.closeSegmentID = 9
-	child := db.AgentInboxEvent{WorkspaceID: testUUID(90), ID: childID, ParentTaskID: parentID, Context: arealProxyContext("sess-c", "key-c")}
-	require.NoError(t, svc.Training.DAG.RecordSessionAgentRun(context.Background(), "proj-1", "sess-c", util.UUIDToString(childID), "issue-1"))
-	svc.closeSegmentForTerminal(context.Background(), child, "proj-1", leanSnap())
-
-	require.Len(t, store.segmentSnapshots, 2)
-	childSeg := store.segmentSnapshots[1]
-	assert.Equal(t, "sess-c-9", childSeg.SegmentID)
-	assert.True(t, childSeg.ClosingEvent.Valid)
-	assert.Equal(t, "completion", childSeg.ClosingEvent.String)
-	require.Len(t, store.edges, 1)
-	assert.Equal(t, "sess-p-1", store.edges[0].SrcSegmentID)
-	assert.Equal(t, "sess-c-9", store.edges[0].DstSegmentID)
-	assert.Equal(t, EdgeTypeDelegation, store.edges[0].EdgeType)
-}
-
-// TestLeaf_ClosesSegmentWithEmptyClosingEvent: a root task (no parent) completes
-// -> one segment with closing_event=NULL (leaf). No edge (no parent).
-func TestLeaf_ClosesSegmentWithEmptyClosingEvent(t *testing.T) {
-	store := newFakeInteractionDAGStore()
-	client := &fakeArealSegmentClient{closeSegmentID: 4, exportPayload: json.RawMessage(shardExport)}
-	svc := newSeamTaskService(store, client)
-
-	taskID := testUUID(1)
-	task := db.AgentInboxEvent{WorkspaceID: testUUID(90), ID: taskID, Context: arealProxyContext("sess-1", "key-1")} // no ParentTaskID
-	require.NoError(t, svc.Training.DAG.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", util.UUIDToString(taskID), "issue-1"))
-
-	svc.closeSegmentForTerminal(context.Background(), task, "proj-1", leanSnap())
-
-	require.Len(t, store.segmentSnapshots, 1)
-	assert.False(t, store.segmentSnapshots[0].ClosingEvent.Valid, "leaf closing_event must be NULL")
-	assert.Empty(t, store.edges, "leaf has no parent -> no edge")
-}
-
-// TestOneSegmentPerTask_SkipsSecondClose: a task that already recorded a segment
-// (it delegated earlier) does not record a second on completion.
-func TestOneSegmentPerTask_SkipsSecondClose(t *testing.T) {
-	store := newFakeInteractionDAGStore()
-	client := &fakeArealSegmentClient{closeSegmentID: 2, exportPayload: json.RawMessage(shardExport)}
-	svc := newSeamTaskService(store, client)
-
-	taskID := testUUID(1)
-	task := db.AgentInboxEvent{WorkspaceID: testUUID(90), ID: taskID, Context: arealProxyContext("sess-1", "key-1")}
-	require.NoError(t, svc.Training.DAG.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", util.UUIDToString(taskID), "issue-1"))
-
-	svc.closeSegmentForTerminal(context.Background(), task, "proj-1", leanSnap())
-	require.Len(t, store.segmentSnapshots, 1)
-	// Second close: already has a segment -> skip (one-segment-per-task).
-	svc.closeSegmentForTerminal(context.Background(), task, "proj-1", leanSnap())
-	require.Len(t, store.segmentSnapshots, 1, "second close must be skipped (one-segment-per-task)")
-}
-
-// TestConcurrentFanOut_RecordsDelegationEdges: a parent delegates to N children
-// (parent segment closes once; subsequent delegations skip) and each child
-// completes -> N parent->child delegation edges, in deterministic insert order.
-func TestConcurrentFanOut_RecordsDelegationEdges(t *testing.T) {
-	store := newFakeInteractionDAGStore()
-	client := &fakeArealSegmentClient{exportPayload: json.RawMessage(shardExport)}
-	svc := newSeamTaskService(store, client)
-
-	parentID := testUUID(1)
-	require.NoError(t, svc.Training.DAG.RecordSessionAgentRun(context.Background(), "proj-1", "sess-p", util.UUIDToString(parentID), "issue-1"))
-	client.closeSegmentID = 1
-	parent := db.AgentInboxEvent{WorkspaceID: testUUID(90), ID: parentID, Context: arealProxyContext("sess-p", "key-p")}
-	svc.closeSegmentForDelegation(context.Background(), parent, "proj-1", leanSnap())
-	// A second delegation by the same parent is a no-op (one segment per task).
-	svc.closeSegmentForDelegation(context.Background(), parent, "proj-1", leanSnap())
-	require.Len(t, store.segmentSnapshots, 1, "parent records one segment")
-
-	const n = 3
-	for i := 1; i <= n; i++ {
-		childID := testUUID(byte(i + 1))
-		sess := "sess-c" + strconv.Itoa(i)
-		child := db.AgentInboxEvent{WorkspaceID: testUUID(90), ID: childID, ParentTaskID: parentID, Context: arealProxyContext(sess, "key-c")}
-		require.NoError(t, svc.Training.DAG.RecordSessionAgentRun(context.Background(), "proj-1", sess, util.UUIDToString(childID), "issue-1"))
-		client.closeSegmentID = i
-		svc.closeSegmentForTerminal(context.Background(), child, "proj-1", leanSnap())
+	dagStore := env.dagStore
+	// Make the retained bridge fully operable so its absence after the
+	// cleanup is the only reason no legacy row appears: seed the session
+	// mapping and a valid trajectory export the AReaL path needs.
+	dagStore.mu.Lock()
+	dagStore.sessionRuns["sess-parent"] = db.InteractionDagSessionRun{
+		SessionID: "sess-parent", ProjectID: env.project.ID.String(),
+		AgentRunID: env.parent.ID.String(),
+	}
+	dagStore.mu.Unlock()
+	env.svc.Training.DAG.client = &fakeArealSegmentClient{
+		closeSegmentID: 7,
+		exportPayload:  json.RawMessage(`{"input_ids":{"shard_id":"shard-1","node_addr":"10.0.0.1:8000"}}`),
 	}
 
-	require.Len(t, store.segmentSnapshots, 1+n)
-	require.Len(t, store.edges, n)
-	for i, e := range store.edges {
-		assert.Equal(t, "sess-p-1", e.SrcSegmentID, "edge %d src", i)
-		assert.Equal(t, EdgeTypeDelegation, e.EdgeType, "edge %d type", i)
-		assert.Equal(t, fmt.Sprintf("sess-c%d-%d", i+1, i+1), e.DstSegmentID, "edge %d dst (deterministic order)", i)
+	dagStore.mu.Lock()
+	before := len(dagStore.segmentSnapshots)
+	dagStore.mu.Unlock()
+
+	env.svc.FinalizeTerminalTaskPostCommitSideEffects(context.Background(), env.parent)
+
+	dagStore.mu.Lock()
+	after := len(dagStore.segmentSnapshots)
+	dagStore.mu.Unlock()
+	if after != before {
+		t.Fatalf("terminal side effects wrote %d legacy segment(s); the canonical writer owns the lifecycle", after-before)
 	}
-}
-
-// TestSeams_NoopWhenDisabled: with the DAG disabled, the seams record nothing.
-func TestSeams_NoopWhenDisabled(t *testing.T) {
-	store := newFakeInteractionDAGStore()
-	svc := &TaskService{
-		Training: &TrainingSessionDeps{DAG: NewInteractionDAGService(store, &fakeArealSegmentClient{}, false)},
-	}
-	task := db.AgentInboxEvent{WorkspaceID: testUUID(90), ID: testUUID(1), Context: arealProxyContext("sess-1", "key-1")}
-	svc.closeSegmentForDelegation(context.Background(), task, "proj-1", leanSnap())
-	svc.closeSegmentForTerminal(context.Background(), task, "proj-1", leanSnap())
-	assert.Empty(t, store.segmentSnapshots)
-	assert.Empty(t, store.edges)
-}
-
-// TestSeams_NoopWithoutArealProxy: a task with no areal_proxy context is not a
-// trained run -> the seam skips it (gating to trained rollouts only).
-func TestSeams_NoopWithoutArealProxy(t *testing.T) {
-	store := newFakeInteractionDAGStore()
-	client := &fakeArealSegmentClient{closeSegmentID: 1, exportPayload: json.RawMessage(shardExport)}
-	svc := newSeamTaskService(store, client)
-	task := db.AgentInboxEvent{WorkspaceID: testUUID(90), ID: testUUID(1), Context: nil}
-	svc.closeSegmentForTerminal(context.Background(), task, "proj-1", leanSnap())
-	assert.Empty(t, store.segmentSnapshots, "non-trained task records nothing")
-}
-
-// TestSeams_BestEffortOnCloseError: a bridge close failure is logged and
-// swallowed (no panic, no partial segment/edge) - recording is best-effort.
-func TestSeams_BestEffortOnCloseError(t *testing.T) {
-	store := newFakeInteractionDAGStore()
-	client := &fakeArealSegmentClient{closeSegmentErr: errors.New("bridge down"), exportPayload: json.RawMessage(shardExport)}
-	svc := newSeamTaskService(store, client)
-
-	parentID := testUUID(1)
-	parent := db.AgentInboxEvent{WorkspaceID: testUUID(90), ID: parentID, ParentTaskID: testUUID(9), Context: arealProxyContext("sess-1", "key-1")}
-	require.NoError(t, svc.Training.DAG.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", util.UUIDToString(parentID), "issue-1"))
-
-	svc.closeSegmentForDelegation(context.Background(), parent, "proj-1", leanSnap())
-	assert.Empty(t, store.segmentSnapshots, "close failure must not record a segment")
-	assert.Empty(t, store.edges, "close failure must not record an edge")
-}
-
-// fakeSegmentIngestHook records the exports it receives on a channel so tests
-// can synchronize with the async (goroutine) seam hook.
-type fakeSegmentIngestHook struct {
-	calls chan memorygraph.SegmentExport
-}
-
-func newFakeSegmentIngestHook() *fakeSegmentIngestHook {
-	return &fakeSegmentIngestHook{calls: make(chan memorygraph.SegmentExport, 8)}
-}
-
-func (f *fakeSegmentIngestHook) Ingest(_ context.Context, seg memorygraph.SegmentExport) error {
-	f.calls <- seg
-	return nil
-}
-
-// awaitIngest returns the next recorded export, failing the test if the hook
-// does not fire promptly.
-func awaitIngest(t *testing.T, h *fakeSegmentIngestHook) memorygraph.SegmentExport {
-	t.Helper()
-	select {
-	case seg := <-h.calls:
-		return seg
-	case <-time.After(5 * time.Second):
-		t.Fatal("segment ingest hook did not fire")
-		return memorygraph.SegmentExport{}
-	}
-}
-
-// TestSeamHook_FiresOnDelegationSegmentClose: the delegation seam records the
-// parent segment, then the ingest hook fires with the new segment id.
-func TestSeamHook_FiresOnDelegationSegmentClose(t *testing.T) {
-	store := newFakeInteractionDAGStore()
-	client := &fakeArealSegmentClient{closeSegmentID: 7, exportPayload: json.RawMessage(shardExport)}
-	svc := newSeamTaskService(store, client)
-	hook := newFakeSegmentIngestHook()
-	svc.SetSegmentIngestHook(hook)
-
-	parentID := testUUID(1)
-	parent := db.AgentInboxEvent{WorkspaceID: testUUID(90), ID: parentID, Context: arealProxyContext("sess-1", "key-1")}
-	require.NoError(t, svc.Training.DAG.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", util.UUIDToString(parentID), "issue-1"))
-
-	svc.closeSegmentForDelegation(context.Background(), parent, "proj-1", leanSnap())
-	require.Len(t, store.segmentSnapshots, 1)
-
-	seg := awaitIngest(t, hook)
-	assert.Equal(t, "sess-1-7", seg.SegmentID)
-	assert.Equal(t, util.UUIDToString(parentID), seg.AgentRunID)
-	assert.Equal(t, "delegation", seg.ClosingEvent)
-	assert.Empty(t, seg.Trajectory, "legacy-unverified seam must not forward the exported body")
-}
-
-// TestSeamHook_FiresOnTerminalLeafClose: the terminal seam for a leaf task
-// (no parent) fires the hook with an empty closing event.
-func TestSeamHook_FiresOnTerminalLeafClose(t *testing.T) {
-	store := newFakeInteractionDAGStore()
-	client := &fakeArealSegmentClient{closeSegmentID: 4, exportPayload: json.RawMessage(shardExport)}
-	svc := newSeamTaskService(store, client)
-	hook := newFakeSegmentIngestHook()
-	svc.SetSegmentIngestHook(hook)
-
-	taskID := testUUID(1)
-	task := db.AgentInboxEvent{WorkspaceID: testUUID(90), ID: taskID, Context: arealProxyContext("sess-1", "key-1")}
-	require.NoError(t, svc.Training.DAG.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", util.UUIDToString(taskID), "issue-1"))
-
-	svc.closeSegmentForTerminal(context.Background(), task, "proj-1", leanSnap())
-	require.Len(t, store.segmentSnapshots, 1)
-
-	seg := awaitIngest(t, hook)
-	assert.Equal(t, "sess-1-4", seg.SegmentID)
-	assert.Equal(t, util.UUIDToString(taskID), seg.AgentRunID)
-	assert.Empty(t, seg.ClosingEvent, "leaf closing event stays empty")
-	assert.Empty(t, seg.Trajectory, "legacy-unverified seam must not forward the exported body")
-}
-
-// TestSeamHook_LocalPathDoesNotExposeMessageSnapshot verifies that the retained
-// compatibility seam does not forward a legacy-unverified body to ingestion.
-func TestSeamHook_LocalPathDoesNotExposeMessageSnapshot(t *testing.T) {
-	store := newFakeInteractionDAGStore()
-	client := &fakeArealSegmentClient{}
-	msgs := newFakeMessageStore()
-	checker := &fakeEnvDispatchChecker{hasRun: true}
-	svc := newSeamTaskServiceWithChecker(store, client, msgs, checker)
-	hook := newFakeSegmentIngestHook()
-	svc.SetSegmentIngestHook(hook)
-
-	taskID := testUUID(1)
-	taskIDStr := util.UUIDToString(taskID)
-	task := db.AgentInboxEvent{WorkspaceID: testUUID(90), ID: taskID, Context: nil} // no areal_proxy: local path
-	store.addTestTaskMessage(taskIDStr, 1)
-	store.addTestTaskMessage(taskIDStr, 2)
-	msgs.addTaskMessage(taskIDStr, taskMsg(taskID, 1, "user", "please investigate the cache"))
-	msgs.addTaskMessage(taskIDStr, taskMsg(taskID, 2, "assistant", "found the eviction bug"))
-
-	svc.closeSegmentForTerminal(context.Background(), task, "proj-1", leanSnap())
-	require.Len(t, store.segmentSnapshots, 1)
-
-	seg := awaitIngest(t, hook)
-	assert.Equal(t, "multica:"+taskIDStr, seg.SegmentID)
-	assert.Equal(t, taskIDStr, seg.AgentRunID)
-	assert.Empty(t, seg.Trajectory, "legacy-unverified seam must not forward task-message content")
-	assert.Empty(t, client.closeCalls, "local path makes zero AReaL calls")
-}
-
-// TestSeamHook_NilHookIsNoop: with no hook wired (the default), the seams
-// behave exactly as before.
-func TestSeamHook_NilHookIsNoop(t *testing.T) {
-	store := newFakeInteractionDAGStore()
-	client := &fakeArealSegmentClient{closeSegmentID: 2, exportPayload: json.RawMessage(shardExport)}
-	svc := newSeamTaskService(store, client)
-
-	taskID := testUUID(1)
-	task := db.AgentInboxEvent{WorkspaceID: testUUID(90), ID: taskID, Context: arealProxyContext("sess-1", "key-1")}
-	require.NoError(t, svc.Training.DAG.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", util.UUIDToString(taskID), "issue-1"))
-
-	svc.closeSegmentForTerminal(context.Background(), task, "proj-1", leanSnap())
-	assert.Len(t, store.segmentSnapshots, 1)
-}
-
-// TestSeamHook_NoFireWhenCloseFails: a bridge close failure records no
-// segment and must not fire the ingest hook.
-func TestSeamHook_NoFireWhenCloseFails(t *testing.T) {
-	store := newFakeInteractionDAGStore()
-	client := &fakeArealSegmentClient{closeSegmentErr: errors.New("bridge down"), exportPayload: json.RawMessage(shardExport)}
-	svc := newSeamTaskService(store, client)
-	hook := newFakeSegmentIngestHook()
-	svc.SetSegmentIngestHook(hook)
-
-	parentID := testUUID(1)
-	parent := db.AgentInboxEvent{WorkspaceID: testUUID(90), ID: parentID, Context: arealProxyContext("sess-1", "key-1")}
-	require.NoError(t, svc.Training.DAG.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", util.UUIDToString(parentID), "issue-1"))
-
-	svc.closeSegmentForDelegation(context.Background(), parent, "proj-1", leanSnap())
-	assert.Empty(t, store.segmentSnapshots)
-	select {
-	case seg := <-hook.calls:
-		t.Fatalf("hook must not fire on close failure, got %+v", seg)
-	case <-time.After(200 * time.Millisecond):
-	}
-}
-
-func TestRecordTaskOriginLinkageTxMentionsFirstResponseSegment(t *testing.T) {
-	ctx := context.Background()
-	h := newUniversalDAGBoundaryHarness(t, ctx)
-	defer h.Close()
-	dag := NewUniversalInteractionDAG()
-
-	sourceTask := h.createTask(t, ctx, 1)
-	var sourceMessageID pgtype.UUID
-	require.NoError(t, h.conn.QueryRow(ctx, `SELECT id FROM task_message WHERE task_id=$1 AND seq=1`, sourceTask.ID).Scan(&sourceMessageID))
-	sourceInput := h.boundaryInput(sourceTask, universalDAGBoundaryFixture{
-		kind: DAGBoundaryVisible, closeKind: DAGCloseMessage, endSeq: 1,
-	})
-	sourceInput.ActionID = sourceMessageID
-	sourceInput.ActionKey = "message:" + sourceMessageID.String()
-	sourceResult, err := h.recordBoundary(ctx, sourceInput)
-	require.NoError(t, err)
-
-	targetTask := h.createTask(t, ctx, 1)
-	var targetMessageID pgtype.UUID
-	require.NoError(t, h.conn.QueryRow(ctx, `SELECT id FROM task_message WHERE task_id=$1 AND seq=1`, targetTask.ID).Scan(&targetMessageID))
-	targetInput := h.boundaryInput(targetTask, universalDAGBoundaryFixture{
-		kind: DAGBoundaryVisible, closeKind: DAGCloseMessage, endSeq: 1,
-	})
-	targetInput.ActionID = targetMessageID
-	targetInput.ActionKey = "message:" + targetMessageID.String()
-	targetResult, err := h.recordBoundary(ctx, targetInput)
-	require.NoError(t, err)
-
-	targetTask.TriggerCommentID = sourceMessageID
-	targetTask.Reason = "agent_mentioned"
-	tx, err := h.conn.Begin(ctx)
-	require.NoError(t, err)
-	require.NoError(t, RecordTaskOriginLinkageTx(ctx, dag, db.New(tx), tx, targetTask))
-	require.NoError(t, tx.Commit(ctx))
-
-	var edgeType, triggerID string
-	require.NoError(t, h.conn.QueryRow(ctx, `
-SELECT type, trigger_message_id::text
-FROM interaction_dag_edge
-WHERE src_segment_id=$1 AND dst_segment_id=$2`, sourceResult.SegmentID, targetResult.SegmentID).Scan(&edgeType, &triggerID))
-	assert.Equal(t, EdgeTypeMention, edgeType)
-	assert.Equal(t, sourceMessageID.String(), triggerID)
-}
-
-func TestUniversalDAGQuickCreateActivityUsesCanonicalBoundary(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-	defer cancel()
-	h := newUniversalDAGBoundaryHarness(t, ctx)
-	defer h.Close()
-	task := h.createTask(t, ctx, 0)
-	_, err := h.conn.Exec(ctx, "SET search_path TO "+pgx.Identifier{h.schema}.Sanitize()+", public")
-	require.NoError(t, err)
-	svc := &TaskService{
-		Queries:      db.New(h.conn),
-		TxStarter:    h.conn,
-		UniversalDAG: NewUniversalInteractionDAG(),
-	}
-
-	svc.recordQuickCreateTaskActivity(ctx, task.ID, "synthetic quick-create visible activity")
-
-	var messageCount, segmentCount, outboxCount int
-	require.NoError(t, h.conn.QueryRow(ctx, `SELECT count(*) FROM task_message WHERE task_id=$1`, task.ID).Scan(&messageCount))
-	require.NoError(t, h.conn.QueryRow(ctx, `SELECT count(*) FROM interaction_dag_segment WHERE workspace_id=$1 AND agent_run_id=$2 AND close_action_kind='message'`, h.workspace, task.ID).Scan(&segmentCount))
-	require.NoError(t, h.conn.QueryRow(ctx, `
-		SELECT count(*) FROM interaction_dag_publish_outbox o
-		JOIN interaction_dag_segment s ON s.workspace_id=o.workspace_id AND s.segment_id=o.segment_id
-		WHERE s.workspace_id=$1 AND s.agent_run_id=$2`, h.workspace, task.ID).Scan(&outboxCount))
-	require.Equal(t, 1, messageCount)
-	require.Equal(t, 1, segmentCount)
-	require.Equal(t, 1, outboxCount)
 }

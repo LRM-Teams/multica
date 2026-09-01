@@ -113,12 +113,6 @@ type TaskService struct {
 	// Wired by the handler in env_dispatch.go (newEnvDispatchDepsAdapter).
 	EnvDispatchCheck EnvDispatchRunChecker
 
-	// segmentIngestHook, when non-nil, feeds each recorded interaction-dag
-	// segment into the graph-memory reviewer's staging area. Fired
-	// asynchronously and best-effort from the segment-close seams. Nil =
-	// no-op. Wired via SetSegmentIngestHook.
-	segmentIngestHook SegmentIngestHook
-
 	// EphemeralSandboxCleaner, when non-nil, enables the Phase 5 sandbox
 	// cleanup hook at task terminal. Nil = no-op (sandbox cleanup not
 	// configured). Wired by the handler to the env-sandbox-lifecycle adapter.
@@ -983,13 +977,13 @@ func (s *TaskService) publishMentionTaskQueuedWithInterruptPolicy(ctx context.Co
 	// Training session-open chokepoint (spec §4.3): leader @mention delegation
 	// of a teammate — the trained member's task is typically created here.
 	s.tryOpenTrainingSession(ctx, task, issue.ProjectID, "")
-	// Delegation event seam (D11): the trained parent that posted the trigger
-	// comment delegates to this child. Close the parent's segment and link the
-	// child to its parent so the delegation edge is recorded at the child's
-	// close. No-op when there is no trained parent (plain user mention).
+	// Delegation linkage (D11, canonical): the trained parent that posted
+	// the trigger comment delegates to this child. The parent/child linkage
+	// edge is recorded by the canonical writer through
+	// RecordTaskOriginLinkageTx at the child's durable boundaries; the
+	// retained legacy snapshot bridge was removed in Task 22 (the canonical
+	// Universal writer is the only live segment writer, AC56).
 	if parent, ok := s.discoverDelegationParent(ctx, issue.ID, triggerCommentID, task.ID); ok {
-		projectID := util.UUIDToString(issue.ProjectID)
-		s.closeSegmentForDelegation(ctx, parent, projectID, s.leanEnvSnapshot(ctx, issue.ProjectID))
 		if err := s.Queries.SetTaskParentTaskID(ctx, db.SetTaskParentTaskIDParams{ID: task.ID, ParentTaskID: parent.ID}); err != nil {
 			slog.Warn("interaction_dag: set child parent_task_id failed", "child", util.UUIDToString(task.ID), "err", err)
 		} else {
@@ -2751,24 +2745,9 @@ func (s *TaskService) FinalizeTerminalTaskSideEffects(ctx context.Context, task 
 }
 
 func (s *TaskService) FinalizeTerminalTaskPostCommitSideEffects(ctx context.Context, task db.AgentInboxEvent) {
-	if shouldCloseBusinessDAGSegment(task) {
-		projectID, err := s.terminalTaskProjectID(ctx, task)
-		if err != nil {
-			slog.Warn("interaction_dag: terminal task project lookup failed",
-				"task_id", util.UUIDToString(task.ID), "error", err)
-		}
-		// The retained bridge is a legacy snapshot projection until Task 4;
-		// it is no longer the live lifecycle authority.
-		if projectID.Valid {
-			s.closeSegmentForTerminal(ctx, task, util.UUIDToString(projectID), s.leanEnvSnapshot(ctx, projectID))
-		} else if task.ChannelID.Valid {
-			// LRM-1079: ordinary channel wakes carry no chat session and no
-			// issue, so terminalTaskProjectID resolves nothing. Channel
-			// conversations still close a channel-scoped segment; the seam
-			// routes by channel when the project is empty.
-			s.closeSegmentForTerminal(ctx, task, "", nil)
-		}
-	}
+	// The canonical Universal terminal boundary is recorded in the business
+	// transaction (RecordTerminalTaskBoundaryTx); the retained legacy
+	// snapshot bridge was removed in Task 22 (AC56: no dual-write).
 	s.RouteTerminalTrainingTask(ctx, task)
 	if s.OnTaskTerminal != nil {
 		s.OnTaskTerminal(ctx, task)

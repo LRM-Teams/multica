@@ -22,11 +22,11 @@ import (
 )
 
 // retryWakeup is a TaskWakeupNotifier that appends a "NotifyTaskEnqueued"
-// marker into the shared fakeRLClient.callOrder slice so tests can assert the
-// D9 ordering: the child's StartSession (fresh session open) must happen BEFORE
-// NotifyTaskEnqueued (daemon announce). The existing fakeRLClient already
-// records "StartSession"/"SetReward"; this adapter adds the notify
-// signal to the same ordered log without inventing a parallel harness.
+// marker into the shared fakeRLClient.callOrder slice so tests can assert
+// whether the daemon announce fired (and in what order relative to any
+// session lifecycle calls). The existing fakeRLClient already records
+// "StartSession"/"SetReward"; this adapter adds the notify signal to the
+// same ordered log without inventing a parallel harness.
 type retryWakeup struct {
 	rl *fakeRLClient
 }
@@ -152,7 +152,8 @@ func setupRetryTestDB(t *testing.T, failureReason string) *retryTestEnv {
 	require.NoError(t, err)
 
 	// Parent task: created queued, then flipped to failed with an areal_proxy
-	// context (so RouteTerminalTrainingTask closes S_A), the given
+	// context (a LEGACY shape — under the Task 18 inversion this ordinary
+	// source task must NOT trigger any session lifecycle), the given
 	// failure_reason, and a remaining attempt budget (so retry is eligible for
 	// retryable reasons).
 	parent, err := q.CreateAgentTask(ctx, db.CreateAgentTaskParams{
@@ -301,43 +302,36 @@ func TestMaybeRetryOfflineEphemeralTaskReclaimsFreshResourcesWhenChildInsertFail
 	assert.Equal(t, 1, manager.reclaims)
 }
 
-// TestMaybeRetryFailedTask_ChildOpensFreshSessionBeforeNotify verifies the D9
-// ordering: a trained parent fails with a retryable reason; RouteTerminalTrainingTask
-// closes the parent's session (S_A SetReward) BEFORE MaybeRetryFailedTask opens
-// the child's FRESH session (S_B StartSession), and the child's session open +
-// RecordSessionAgentRun fires BEFORE NotifyTaskEnqueued (open->broadcast->notify).
-func TestMaybeRetryFailedTask_ChildOpensFreshSessionBeforeNotify(t *testing.T) {
+// TestMaybeRetryFailedTask_ChildSpawnsWithoutAReaLSession verifies the Task 18
+// inversion (spec 14.1): an ORDINARY source task never touches AReaL. A
+// retryable failure still spawns the child task (attempt bump + parent link +
+// daemon notify), but no session is opened for it, no session run is recorded,
+// and the parent's terminal routing issues no SetReward — online training
+// exists only behind a manifest-backed training execution.
+func TestMaybeRetryFailedTask_ChildSpawnsWithoutAReaLSession(t *testing.T) {
 	env := setupRetryTestDB(t, "timeout")
 	ctx := context.Background()
 
-	// Parent terminal routing closes S_A (mirrors FailTask:1685).
 	env.svc.RouteTerminalTrainingTask(ctx, env.parent)
-	// Auto-retry spawns the child + opens its fresh session (mirrors FailTask:1690).
 	child, err := env.svc.MaybeRetryFailedTask(ctx, env.parent)
 	require.NoError(t, err)
 	require.NotNil(t, child, "retryable failure must spawn a child task")
 
-	// Parent close (S_A rewarded) BEFORE child StartSession (S_B opened).
-	// SetReward is the close bookend: AReaL v2 has no end_session.
-	closeIdx := callOrderIndex(env.rl, "SetReward")
-	startIdx := callOrderIndex(env.rl, "StartSession")
-	require.NotEqual(t, -1, closeIdx, "parent close must fire")
-	require.NotEqual(t, -1, startIdx, "child StartSession must fire")
-	assert.Less(t, closeIdx, startIdx, "parent close must precede child StartSession")
+	// Ordinary source tasks never open, close, or reward an AReaL session.
+	assert.Equal(t, -1, callOrderIndex(env.rl, "SetReward"),
+		"ordinary parent terminal routing must not reward a session")
+	assert.Equal(t, -1, callOrderIndex(env.rl, "StartSession"),
+		"ordinary child must not open an AReaL session")
 
-	// Child StartSession BEFORE NotifyTaskEnqueued (open->broadcast->notify).
+	// The daemon announce still fires for the spawned child.
 	notifyIdx := callOrderIndex(env.rl, "NotifyTaskEnqueued")
 	require.NotEqual(t, -1, notifyIdx, "NotifyTaskEnqueued must fire for the child")
-	assert.Less(t, startIdx, notifyIdx, "child StartSession must precede NotifyTaskEnqueued")
 
-	// D10: the child's session open records {session_id -> agent_run_id=child.ID}.
+	// No session open means no {session_id -> agent_run_id} record either.
 	env.dagStore.mu.Lock()
-	run, ok := env.dagStore.sessionRuns["sess-child"]
+	_, ok := env.dagStore.sessionRuns["sess-child"]
 	env.dagStore.mu.Unlock()
-	require.True(t, ok, "RecordSessionAgentRun must fire for the child session")
-	assert.Equal(t, util.UUIDToString(child.ID), run.AgentRunID,
-		"agent_run_id must be the child task.ID (D8), not the agent id")
-	assert.Equal(t, util.UUIDToString(env.project.ID), run.ProjectID)
+	assert.False(t, ok, "RecordSessionAgentRun must not fire without a session")
 
 	// The child is a fresh attempt (attempt incremented) carrying the parent link.
 	assert.Equal(t, env.parent.Attempt+1, child.Attempt)
@@ -346,8 +340,9 @@ func TestMaybeRetryFailedTask_ChildOpensFreshSessionBeforeNotify(t *testing.T) {
 }
 
 // TestMaybeRetryFailedTask_NonRetryableIsTerminal verifies that a non-retryable
-// failure reason is terminal: the parent's session is closed, no retry child is
-// created, and no fresh session is opened (no StartSession).
+// failure reason is terminal: no retry child is created, nothing is announced,
+// and (per the Task 18 inversion) no AReaL session lifecycle fires at all for
+// an ordinary source task.
 func TestMaybeRetryFailedTask_NonRetryableIsTerminal(t *testing.T) {
 	// "iteration_limit" is resume-unsafe and NOT in retryableReasons.
 	env := setupRetryTestDB(t, "iteration_limit")
@@ -358,9 +353,8 @@ func TestMaybeRetryFailedTask_NonRetryableIsTerminal(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, child, "non-retryable failure must not spawn a child")
 
-	// Session was closed (terminal), but no fresh session opened for a child.
-	assert.NotEqual(t, -1, callOrderIndex(env.rl, "SetReward"),
-		"parent session must be closed on terminal routing")
+	assert.Equal(t, -1, callOrderIndex(env.rl, "SetReward"),
+		"ordinary parent terminal routing must not reward a session")
 	assert.Equal(t, -1, callOrderIndex(env.rl, "StartSession"),
 		"no child StartSession for a non-retryable failure")
 	assert.Equal(t, -1, callOrderIndex(env.rl, "NotifyTaskEnqueued"),
@@ -379,10 +373,12 @@ func TestMaybeRetryFailedTaskLeavesResearchRecoveryToWorkScheduler(t *testing.T)
 	require.Nil(t, child)
 }
 
-// TestMaybeRetryFailedTask_EnvIDFromProjectEnvID verifies the child's StartSession
-// receives the project's env_id (resolved via issue -> project), NOT the areal
-// session id. This is the D9 resolution path the helper implements.
-func TestMaybeRetryFailedTask_EnvIDFromProjectEnvID(t *testing.T) {
+// TestMaybeRetryFailedTask_OrdinaryChildNeverResolvesEnv verifies that the
+// ordinary retry child consumes no env identity at all: with no AReaL session
+// (Task 18 inversion), no env_id is resolved and no task id is handed to the
+// bridge. Manifest-backed env resolution for training executions is covered
+// in training_test.go (PassesEnvID).
+func TestMaybeRetryFailedTask_OrdinaryChildNeverResolvesEnv(t *testing.T) {
 	env := setupRetryTestDB(t, "timeout")
 	ctx := context.Background()
 
@@ -391,14 +387,10 @@ func TestMaybeRetryFailedTask_EnvIDFromProjectEnvID(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, child)
 
-	require.NotEqual(t, -1, callOrderIndex(env.rl, "StartSession"), "child must open a session")
-	// StartSession env_id must equal project.env_id (the canonical UUID string),
-	// not the areal session id ("sess-child" / "sess-parent").
-	assert.Equal(t, util.UUIDToString(env.project.EnvID), env.rl.lastEnv,
-		"child StartSession env_id must come from project.env_id")
-	assert.NotEqual(t, "sess-child", env.rl.lastEnv)
-	// task id passed to StartSession is the child's, confirming a fresh session.
-	assert.Equal(t, util.UUIDToString(child.ID), env.rl.lastTask)
+	require.Equal(t, -1, callOrderIndex(env.rl, "StartSession"),
+		"ordinary child must not open a session")
+	assert.Equal(t, "", env.rl.lastEnv, "no env_id may be resolved without a session")
+	assert.Equal(t, "", env.rl.lastTask, "no task id may reach the bridge without a session")
 }
 
 // TestExtractEphemeralSandbox verifies the Phase 5 context-marker extraction

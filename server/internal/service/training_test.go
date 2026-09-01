@@ -100,10 +100,36 @@ func newTrainingDeps(lookup *fakeDispatchLookup, store *fakeTaskStore, rl *fakeR
 	}
 }
 
-// (a) training project + agent == train_agent_id + no existing areal_proxy ->
-// StartSession called once with the task id; context.areal_proxy persisted with
-// proxy_key/base_url/session_id.
-func TestMaybeOpenTrainingSession_TrainedTarget_OpensAndPersists(t *testing.T) {
+// fakeTrainingGovernance records AuthorizeTrainingExecutionTask verdicts.
+type fakeTrainingGovernance struct {
+	err          error
+	calls        int
+	lastTask     string
+	lastManifest string
+}
+
+func (f *fakeTrainingGovernance) AuthorizeTrainingExecutionTask(_ context.Context, taskID, manifestID string) error {
+	f.calls++
+	f.lastTask = taskID
+	f.lastManifest = manifestID
+	return f.err
+}
+
+const (
+	testTrainingExecID     = "66666666-6666-6666-6666-666666666666"
+	testTrainingManifestID = "77777777-7777-7777-7777-777777777777"
+)
+
+// trainingExecTaskContext returns the context of a distinct replay/training
+// execution task carrying the immutable training_execution identity.
+func trainingExecTaskContext() []byte {
+	return []byte(`{"training_execution":{"execution_id":"` + testTrainingExecID +
+		`","manifest_id":"` + testTrainingManifestID + `","purpose":"tenant"}}`)
+}
+
+// (a0) Task 18: an ordinary source task — even the project's recorded
+// training target — never opens an AReaL session and consults no dispatch.
+func TestMaybeOpenTrainingSession_OrdinarySourceTask_NeverOpens(t *testing.T) {
 	lookup := &fakeDispatchLookup{dispatch: trainingDispatchRow(testTrainAgentID)}
 	store := &fakeTaskStore{}
 	rl := &fakeRLClient{creds: arealrl.SessionCreds{SessionID: "sess-abc", ProxyKey: "pk-xyz"}}
@@ -116,11 +142,46 @@ func TestMaybeOpenTrainingSession_TrainedTarget_OpensAndPersists(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	if rl.calls != 0 {
+		t.Fatalf("StartSession calls = %d, want 0", rl.calls)
+	}
+	if lookup.calls != 0 {
+		t.Fatalf("dispatch lookups = %d, want 0 (ordinary tasks never consult training dispatch)", lookup.calls)
+	}
+	if len(store.merged) != 0 {
+		t.Fatalf("context should be untouched, got %d merges", len(store.merged))
+	}
+}
+
+// (a) a distinct replay/training execution task with a governance-authorized
+// manifest opens exactly one session keyed by the execution id; the areal_proxy
+// context is persisted with proxy_key/base_url/session_id.
+func TestMaybeOpenTrainingSession_TrainingExecutionTask_OpensAndPersists(t *testing.T) {
+	store := &fakeTaskStore{task: db.AgentInboxEvent{Context: trainingExecTaskContext()}}
+	rl := &fakeRLClient{creds: arealrl.SessionCreds{SessionID: "sess-abc", ProxyKey: "pk-xyz"}}
+	gov := &fakeTrainingGovernance{}
+
+	deps := newTrainingDeps(&fakeDispatchLookup{}, store, rl)
+	deps.Governance = gov
+
+	err := maybeOpenTrainingSession(
+		context.Background(), deps,
+		testTrainingTaskID, testTrainAgentID, testTrainingProjectID, "",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gov.calls != 1 {
+		t.Fatalf("governance authorizations = %d, want 1", gov.calls)
+	}
+	if gov.lastManifest != testTrainingManifestID {
+		t.Fatalf("authorized manifest = %q, want %q", gov.lastManifest, testTrainingManifestID)
+	}
 	if rl.calls != 1 {
 		t.Fatalf("StartSession calls = %d, want 1", rl.calls)
 	}
-	if rl.lastTask != testTrainingTaskID {
-		t.Fatalf("StartSession task id = %q, want %q", rl.lastTask, testTrainingTaskID)
+	if rl.lastTask != testTrainingExecID {
+		t.Fatalf("StartSession session_ref = %q, want execution id %q", rl.lastTask, testTrainingExecID)
 	}
 	if len(store.merged) != 1 {
 		t.Fatalf("MergeTaskArealProxyContext calls = %d, want 1", len(store.merged))
@@ -140,6 +201,44 @@ func TestMaybeOpenTrainingSession_TrainedTarget_OpensAndPersists(t *testing.T) {
 	}
 	if cfg.SessionID != "sess-abc" {
 		t.Fatalf("session_id = %q, want sess-abc", cfg.SessionID)
+	}
+}
+
+// (a2) a governance refusal (switch off / grant revoked / unknown execution)
+// surfaces as an error and never reaches StartSession.
+func TestMaybeOpenTrainingSession_GovernanceRefusal_BlocksOpen(t *testing.T) {
+	store := &fakeTaskStore{task: db.AgentInboxEvent{Context: trainingExecTaskContext()}}
+	rl := &fakeRLClient{}
+	deps := newTrainingDeps(&fakeDispatchLookup{}, store, rl)
+	deps.Governance = &fakeTrainingGovernance{err: ErrTrainingExecutionDisabled}
+
+	err := maybeOpenTrainingSession(
+		context.Background(), deps,
+		testTrainingTaskID, testTrainAgentID, testTrainingProjectID, "",
+	)
+	if err == nil {
+		t.Fatalf("expected the governance refusal to propagate")
+	}
+	if rl.calls != 0 {
+		t.Fatalf("StartSession calls = %d, want 0", rl.calls)
+	}
+}
+
+// (a3) an execution identity without a governance service is a loud error —
+// it must never silently run un-proxied.
+func TestMaybeOpenTrainingSession_ExecutionWithoutGovernance_LoudError(t *testing.T) {
+	store := &fakeTaskStore{task: db.AgentInboxEvent{Context: trainingExecTaskContext()}}
+	rl := &fakeRLClient{}
+	err := maybeOpenTrainingSession(
+		context.Background(),
+		newTrainingDeps(&fakeDispatchLookup{}, store, rl),
+		testTrainingTaskID, testTrainAgentID, testTrainingProjectID, "",
+	)
+	if err == nil {
+		t.Fatalf("expected loud error when governance is unconfigured for an execution task")
+	}
+	if rl.calls != 0 {
+		t.Fatalf("StartSession calls = %d, want 0", rl.calls)
 	}
 }
 
@@ -189,17 +288,19 @@ func TestMaybeOpenTrainingSession_NonTargetAgent_NoOp(t *testing.T) {
 
 // (d) task already has areal_proxy -> skipped (idempotent).
 func TestMaybeOpenTrainingSession_AlreadyOpen_Idempotent(t *testing.T) {
-	lookup := &fakeDispatchLookup{dispatch: trainingDispatchRow(testTrainAgentID)}
 	store := &fakeTaskStore{
 		task: db.AgentInboxEvent{
-			Context: []byte(`{"areal_proxy":{"provider":"areal","session_id":"sess-old"}}`),
+			Context: []byte(`{"training_execution":{"execution_id":"` + testTrainingExecID + `","manifest_id":"` + testTrainingManifestID + `"},"areal_proxy":{"provider":"areal","session_id":"sess-old"}}`),
 		},
 	}
 	rl := &fakeRLClient{}
 
+	deps := newTrainingDeps(&fakeDispatchLookup{}, store, rl)
+	deps.Governance = &fakeTrainingGovernance{}
+
 	err := maybeOpenTrainingSession(
 		context.Background(),
-		newTrainingDeps(lookup, store, rl),
+		deps,
 		testTrainingTaskID, testTrainAgentID, testTrainingProjectID, "",
 	)
 	if err != nil {
@@ -213,22 +314,24 @@ func TestMaybeOpenTrainingSession_AlreadyOpen_Idempotent(t *testing.T) {
 	}
 }
 
-// (e) D10: a trained-target session open records the {session_id -> agent_run_id,
-// issue_id} mapping via the interaction DAG exactly once. agent_run_id is task.ID
-// (D8); a re-open that finds an already-proxied session does not re-record.
+// (e) D10: a training-execution session open records the {session_id ->
+// agent_run_id, issue_id} mapping via the interaction DAG exactly once.
+// agent_run_id is task.ID (D8); a re-open that finds an already-proxied
+// session does not re-record.
 func TestMaybeOpenTrainingSession_RecordsSessionAgentRun(t *testing.T) {
-	lookup := &fakeDispatchLookup{dispatch: trainingDispatchRow(testTrainAgentID)}
 	store := &fakeTaskStore{
 		task: db.AgentInboxEvent{
 			IssueID: util.MustParseUUID(testTrainingProjectID),
+			Context: trainingExecTaskContext(),
 		},
 	}
 	rl := &fakeRLClient{creds: arealrl.SessionCreds{SessionID: "sess-d10", ProxyKey: "pk-d10"}}
 	dagStore := newFakeInteractionDAGStore()
 	dag := NewInteractionDAGService(dagStore, &fakeArealSegmentClient{}, true)
 
-	deps := newTrainingDeps(lookup, store, rl)
+	deps := newTrainingDeps(&fakeDispatchLookup{}, store, rl)
 	deps.DAG = dag
+	deps.Governance = &fakeTrainingGovernance{}
 
 	if err := maybeOpenTrainingSession(
 		context.Background(),
@@ -258,7 +361,7 @@ func TestMaybeOpenTrainingSession_RecordsSessionAgentRun(t *testing.T) {
 	// Idempotent: a re-open that finds an already-proxied session must not
 	// re-record. The fake store does not mirror the persisted areal_proxy back
 	// into task.Context, so simulate the post-open state explicitly.
-	store.task.Context = []byte(`{"areal_proxy":{"provider":"areal","session_id":"sess-d10"}}`)
+	store.task.Context = []byte(`{"training_execution":{"execution_id":"` + testTrainingExecID + `","manifest_id":"` + testTrainingManifestID + `"},"areal_proxy":{"provider":"areal","session_id":"sess-d10"}}`)
 	if err := maybeOpenTrainingSession(
 		context.Background(),
 		deps,
@@ -284,11 +387,10 @@ func TestMaybeOpenTrainingSession_NilDeps_NoOp(t *testing.T) {
 	}
 }
 
-// training target but RL bridge unconfigured -> loud error (do not run un-proxied).
+// training execution but RL bridge unconfigured -> loud error (do not run un-proxied).
 func TestMaybeOpenTrainingSession_TargetButMissingBridge_LoudError(t *testing.T) {
-	lookup := &fakeDispatchLookup{dispatch: trainingDispatchRow(testTrainAgentID)}
-	store := &fakeTaskStore{}
-	deps := &TrainingSessionDeps{Lookup: lookup, Store: store, RL: nil, ProxyURL: ""}
+	store := &fakeTaskStore{task: db.AgentInboxEvent{Context: trainingExecTaskContext()}}
+	deps := &TrainingSessionDeps{Store: store, RL: nil, ProxyURL: "", Governance: &fakeTrainingGovernance{}}
 
 	err := maybeOpenTrainingSession(
 		context.Background(), deps,
@@ -301,14 +403,16 @@ func TestMaybeOpenTrainingSession_TargetButMissingBridge_LoudError(t *testing.T)
 
 // env_id is passed through to StartSession when provided.
 func TestMaybeOpenTrainingSession_PassesEnvID(t *testing.T) {
-	lookup := &fakeDispatchLookup{dispatch: trainingDispatchRow(testTrainAgentID)}
-	store := &fakeTaskStore{}
+	store := &fakeTaskStore{task: db.AgentInboxEvent{Context: trainingExecTaskContext()}}
 	rl := &fakeRLClient{creds: arealrl.SessionCreds{SessionID: "sess-abc", ProxyKey: "pk-xyz"}}
 	testEnvID := "env-12345"
 
+	deps := newTrainingDeps(&fakeDispatchLookup{}, store, rl)
+	deps.Governance = &fakeTrainingGovernance{}
+
 	err := maybeOpenTrainingSession(
 		context.Background(),
-		newTrainingDeps(lookup, store, rl),
+		deps,
 		testTrainingTaskID, testTrainAgentID, testTrainingProjectID, testEnvID,
 	)
 	if err != nil {
@@ -317,8 +421,8 @@ func TestMaybeOpenTrainingSession_PassesEnvID(t *testing.T) {
 	if rl.calls != 1 {
 		t.Fatalf("StartSession calls = %d, want 1", rl.calls)
 	}
-	if rl.lastTask != testTrainingTaskID {
-		t.Fatalf("StartSession task id = %q, want %q", rl.lastTask, testTrainingTaskID)
+	if rl.lastTask != testTrainingExecID {
+		t.Fatalf("StartSession session_ref = %q, want execution id %q", rl.lastTask, testTrainingExecID)
 	}
 	if rl.lastEnv != testEnvID {
 		t.Fatalf("StartSession env id = %q, want %q", rl.lastEnv, testEnvID)
@@ -327,13 +431,15 @@ func TestMaybeOpenTrainingSession_PassesEnvID(t *testing.T) {
 
 // empty env_id is passed through when no env_id is available (e.g., non-env-dispatch paths).
 func TestMaybeOpenTrainingSession_EmptyEnvID_WhenUnavailable(t *testing.T) {
-	lookup := &fakeDispatchLookup{dispatch: trainingDispatchRow(testTrainAgentID)}
-	store := &fakeTaskStore{}
+	store := &fakeTaskStore{task: db.AgentInboxEvent{Context: trainingExecTaskContext()}}
 	rl := &fakeRLClient{creds: arealrl.SessionCreds{SessionID: "sess-abc", ProxyKey: "pk-xyz"}}
+
+	deps := newTrainingDeps(&fakeDispatchLookup{}, store, rl)
+	deps.Governance = &fakeTrainingGovernance{}
 
 	err := maybeOpenTrainingSession(
 		context.Background(),
-		newTrainingDeps(lookup, store, rl),
+		deps,
 		testTrainingTaskID, testTrainAgentID, testTrainingProjectID, "",
 	)
 	if err != nil {

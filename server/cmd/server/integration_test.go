@@ -198,13 +198,26 @@ func setupIntegrationTestFixture(ctx context.Context, pool *pgxpool.Pool) (strin
 }
 
 func cleanupIntegrationTestFixture(ctx context.Context, pool *pgxpool.Pool) error {
-	if _, err := pool.Exec(ctx, `DELETE FROM workspace WHERE slug = $1`, integrationTestWorkspaceSlug); err != nil {
+	// The universal DAG Segment ledger references tasks and workspaces with
+	// RESTRICT FKs behind an append-only guard trigger, so re-running the
+	// fixture against a used database requires suspending trigger and FK
+	// enforcement for the cleanup transaction only (session_replication_role
+	// = replica). Production paths never hard-delete workspaces.
+	tx, err := pool.Begin(ctx)
+	if err != nil {
 		return err
 	}
-	if _, err := pool.Exec(ctx, `DELETE FROM "user" WHERE email = $1`, integrationTestEmail); err != nil {
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
 		return err
 	}
-	return nil
+	if _, err := tx.Exec(ctx, `DELETE FROM workspace WHERE slug = $1`, integrationTestWorkspaceSlug); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM "user" WHERE email = $1`, integrationTestEmail); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // Helper to make authenticated requests

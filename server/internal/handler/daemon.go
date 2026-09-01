@@ -365,6 +365,15 @@ WHERE computer_workspace_bindings.user_id = EXCLUDED.user_id`, req.DaemonID, own
 		return
 	}
 	capabilities := normalizeDaemonCapabilities(req.Capabilities)
+	// Task 12 bidirectional capability negotiation: the daemon advertises
+	// memory_explore_v2; the server answers generation 2 only while this
+	// workspace's explore phase gate is green. The negotiated generation is
+	// persisted on the computer's runtime rows (memoryExploreGeneration) so
+	// the gateway resolves run-level protocol from durable state, and the
+	// capability is echoed in server_capabilities so the daemon knows which
+	// of its two tool contracts to teach. A capability alone never
+	// authorizes a disabled server path.
+	exploreGeneration := service.ResolveGraphMemoryAgentProtocol(r.Context(), capabilities, registrationHandler.DB, wsUUID)
 	if err := registrationHandler.registerDaemonUpdateObservation(r.Context(), wsUUID, req.DaemonID, req.UpdateObservation); err != nil {
 		if errors.Is(err, errDaemonUpdateObservationConflict) {
 			writeError(w, http.StatusConflict, "auto_update revision conflicts with stored payload")
@@ -431,6 +440,10 @@ ON CONFLICT (id) DO UPDATE SET
 			"cli_version":  req.CLIVersion,
 			"launched_by":  req.LaunchedBy,
 			"capabilities": capabilities,
+			// camelCase negotiated protocol field (plan Task 12 Step 2):
+			// 2 only while the workspace explore gate stayed green at this
+			// registration, 1 otherwise.
+			"memoryExploreGeneration": exploreGeneration,
 		}
 		// Persist the structured device_name the daemon already sends so the
 		// API can expose it without re-parsing the glued device_info string.
@@ -567,12 +580,16 @@ ON CONFLICT (id) DO UPDATE SET
 		"runtimes": resp,
 	})
 
+	negotiated := negotiatedDaemonCapabilities(capabilities)
+	if exploreGeneration == 2 {
+		negotiated = append(negotiated, protocol.DaemonCapabilityMemoryExploreV2)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"runtimes":                resp,
 		"settings":                json.RawMessage(ws.Settings),
 		"daemon_token":            daemonToken.raw,
 		"daemon_token_expires_at": daemonToken.expiresAt.UTC().Format(time.RFC3339Nano),
-		"server_capabilities":     negotiatedDaemonCapabilities(capabilities),
+		"server_capabilities":     negotiated,
 	})
 }
 
@@ -611,6 +628,19 @@ func (h *Handler) completeRuntimeUpdateOnTargetRegister(r *http.Request, rt db.A
 	if err := h.UpdateStore.Complete(r.Context(), update.ID, "Daemon registered updated CLI "+version); err != nil {
 		slog.Warn("failed to complete runtime update during register", "error", err, "runtime_id", runtimeID, "update_id", update.ID)
 	}
+}
+
+// memoryExploreGenerationFromRuntime reads the camelCase negotiated protocol
+// field persisted at registration (1 when absent — pre-rollout runtimes).
+func memoryExploreGenerationFromRuntime(metadata any) int {
+	fields, ok := metadata.(map[string]any)
+	if !ok {
+		return 1
+	}
+	if value, ok := fields["memoryExploreGeneration"].(float64); ok && value == 2 {
+		return 2
+	}
+	return 1
 }
 
 func normalizeDaemonCapabilities(capabilities []string) []string {

@@ -74,10 +74,10 @@ func graphMemoryRunSegmentTestPool(t *testing.T) *pgxpool.Pool {
 	if dbURL == "" {
 		t.Skip("integration test requires Postgres at DATABASE_URL")
 	}
-	pool, err := pgxpool.New(context.Background(), dbURL)
-	require.NoError(t, err)
-	t.Cleanup(pool.Close)
-	return pool
+	// The recorder writes canonical migration 454 rows, so the pool must
+	// resolve the current 454 revision: the dev database's public schema can
+	// carry an older 454 shape, and it stays off-limits to test writers.
+	return bootstrapUniversalDAGProjectionSchema(t)
 }
 
 type graphMemoryRunFixture struct {

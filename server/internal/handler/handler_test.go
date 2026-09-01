@@ -151,7 +151,7 @@ func ensureAgentInboxTestFixtureDefaults(ctx context.Context, pool *pgxpool.Pool
 		    'mention', 'dm', 'ambient', 'thread_reply', 'channel_message',
 		    'collaboration_turn', 'collaboration_manager_fallback',
 		    'channel_onboarding', 'issue', 'quick_create', 'autopilot',
-		    'agent_radar', 'training', 'environment_dispatch',
+		    'agent_radar', 'training', 'training_replay', 'environment_dispatch',
 		    'memory_curation', 'reminder', 'channel_role_changed',
 		    'chat_session', 'voice_call', 'issue_thread_backflow',
 		    'goal_graph_delta', 'goal_controller', 'note_worker'
@@ -177,7 +177,7 @@ func ensureAgentInboxTestFixtureDefaults(ctx context.Context, pool *pgxpool.Pool
 		    'mention', 'dm', 'ambient', 'thread_reply', 'channel_message',
 		    'collaboration_turn', 'collaboration_manager_fallback',
 		    'channel_onboarding', 'issue', 'quick_create', 'autopilot',
-		    'agent_radar', 'training', 'environment_dispatch',
+		    'agent_radar', 'training', 'training_replay', 'environment_dispatch',
 		    'memory_curation', 'reminder', 'channel_role_changed',
 		    'chat_session', 'voice_call', 'issue_thread_backflow',
 		    'goal_graph_delta', 'goal_controller', 'note_worker'

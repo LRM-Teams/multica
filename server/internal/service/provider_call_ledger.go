@@ -444,6 +444,9 @@ func (l *ProviderCallLedger) InsertMessageConsumption(ctx context.Context, input
 	return messageConsumptionRecord(row), err
 }
 
+// InsertSegment is a repository-level probe for the migration 315 invariant
+// tests. Production paths never write frozen rows through it: the canonical
+// Universal DAG frozen projector is the only production writer.
 func (l *ProviderCallLedger) InsertSegment(ctx context.Context, input SegmentInput) (SegmentRecord, error) {
 	if input.SegmentID == "" || input.SegmentOrdinal <= 0 {
 		return SegmentRecord{}, errors.New("segment ID and a positive ordinal are required")
@@ -478,6 +481,9 @@ func (l *ProviderCallLedger) InsertSegment(ctx context.Context, input SegmentInp
 	return segmentRecord(row), err
 }
 
+// AssociateProviderCall is a repository-level probe for the migration 315
+// invariant tests; production association writes flow through the frozen
+// projector's idempotent mirroring instead.
 func (l *ProviderCallLedger) AssociateProviderCall(ctx context.Context, input SegmentCallAssociationInput) error {
 	if input.AssociationKind != "owned" && input.AssociationKind != "shared_producer" && input.AssociationKind != "audit" {
 		return fmt.Errorf("invalid association kind %q", input.AssociationKind)
@@ -495,14 +501,25 @@ func (l *ProviderCallLedger) AssociateProviderCall(ctx context.Context, input Se
 	return nil
 }
 
+// InsertCausalEdge is a repository-level probe for the migration 315
+// invariant tests; production edges are derived through the frozen
+// projector's canonical resolution instead.
 func (l *ProviderCallLedger) InsertCausalEdge(ctx context.Context, input CausalEdgeInput) (CausalEdgeRecord, error) {
-	row, err := l.queries.InsertMixedRLCausalEdge(ctx, db.InsertMixedRLCausalEdgeParams{
+	inserted, err := l.queries.InsertMixedRLCausalEdge(ctx, db.InsertMixedRLCausalEdgeParams{
 		EdgeID: input.EdgeID, SnapshotID: input.SnapshotID, RunID: input.RunID,
 		SrcSegmentID: input.SourceSegmentID, DstSegmentID: input.DestinationSegmentID,
 		Type: input.Type, TriggerMessageID: input.TriggerMessageID,
 		DstCallID: input.DestinationCallID, EdgeOrdinal: input.EdgeOrdinal,
 	})
-	return causalEdgeRecord(row), err
+	if err != nil {
+		return CausalEdgeRecord{}, err
+	}
+	return causalEdgeRecord(db.ListMixedRLCausalEdgesCanonicalRow{
+		EdgeID: inserted.EdgeID, SnapshotID: inserted.SnapshotID, RunID: inserted.RunID,
+		SrcSegmentID: inserted.SrcSegmentID, DstSegmentID: inserted.DstSegmentID,
+		Type: inserted.Type, TriggerMessageID: inserted.TriggerMessageID,
+		DstCallID: inserted.DstCallID, EdgeOrdinal: inserted.EdgeOrdinal,
+	}), nil
 }
 
 func (l *ProviderCallLedger) FreezeAndComplete(ctx context.Context, input FrozenSnapshotInput) (FrozenSnapshotRecord, EnvDispatchRunRecord, error) {
@@ -774,7 +791,7 @@ func messageConsumptionRecord(row db.PiMessageConsumption) MessageConsumptionRec
 	}
 }
 
-func segmentRecord(row db.InteractionDagRunSegment) SegmentRecord {
+func segmentRecord(row db.InsertMixedRLRunSegmentRow) SegmentRecord {
 	return SegmentRecord{
 		SegmentID: row.SegmentID, SnapshotID: mixedRLTextValue(row.SnapshotID), RunID: row.RunID,
 		RunAgentID: row.RunAgentID, Kind: row.Kind, CanonicalActionID: row.CanonicalActionID,
@@ -784,7 +801,7 @@ func segmentRecord(row db.InteractionDagRunSegment) SegmentRecord {
 	}
 }
 
-func causalEdgeRecord(row db.InteractionDagCausalEdge) CausalEdgeRecord {
+func causalEdgeRecord(row db.ListMixedRLCausalEdgesCanonicalRow) CausalEdgeRecord {
 	return CausalEdgeRecord{
 		EdgeID: row.EdgeID, SnapshotID: mixedRLTextValue(row.SnapshotID), RunID: row.RunID,
 		SourceSegmentID: row.SrcSegmentID, DestinationSegmentID: row.DstSegmentID,
@@ -810,6 +827,13 @@ func (l *ProviderCallLedger) GetFrozenDAG(ctx context.Context, runID pgtype.UUID
 	}
 	if mixedRLTextValue(runRow.FrozenSnapshotID) != snapshotID {
 		return FrozenDAGRecord{}, fmt.Errorf("snapshot %q does not belong to the terminal run", snapshotID)
+	}
+
+	// Task 8A read gate: a frozen run whose recorded task outputs were
+	// retracted never resolves its body — the frozen snapshot is a memory
+	// read, not an exempt audit artifact (spec §9).
+	if gateErr := AuthorizeRunSources(ctx, l.queries, runRow.WorkspaceID, runID); gateErr != nil {
+		return FrozenDAGRecord{}, gateErr
 	}
 
 	snapshotRow, err := l.queries.GetMixedRLFrozenSnapshot(ctx, runID)

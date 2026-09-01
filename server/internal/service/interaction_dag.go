@@ -436,31 +436,20 @@ type localTrajectoryEntry struct {
 // and output are included; provider keys and runtime configuration are excluded
 // by construction (they are not task_message columns).
 func serializeLocalTrajectory(msgs []db.TaskMessage) []byte {
+	policy := DefaultSanitizerPolicy()
 	entries := make([]localTrajectoryEntry, 0, len(msgs))
 	for _, m := range msgs {
-		tool := ""
-		if m.Tool.Valid {
-			tool = m.Tool.String
-		}
-		content := ""
-		if m.Content.Valid {
-			content = m.Content.String
-		}
-		output := ""
-		if m.Output.Valid {
-			output = m.Output.String
-		}
-		input := ""
-		if len(m.Input) > 0 {
-			input = string(m.Input)
-		}
+		// Compatibility rows pass through the same per-field gates as the
+		// canonical pipeline — redaction, binary rejection, size cap — so no
+		// unredacted pipeline payload is persisted anywhere (spec AC 8).
+		sanitized, _ := sanitizeTaskMessageFields(m, policy)
 		entries = append(entries, localTrajectoryEntry{
-			Seq:     m.Seq,
-			Type:    m.Type,
-			Tool:    tool,
-			Content: content,
-			Input:   input,
-			Output:  output,
+			Seq:     sanitized.Sequence,
+			Type:    sanitized.Type,
+			Tool:    sanitized.Tool,
+			Content: sanitized.Content,
+			Input:   sanitized.Input,
+			Output:  sanitized.Output,
 		})
 	}
 	if len(entries) == 0 {

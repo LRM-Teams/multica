@@ -38,6 +38,34 @@ func (q *Queries) AbortMixedRLUnfinishedProviderCalls(ctx context.Context, arg A
 	return result.RowsAffected(), nil
 }
 
+const ackTenantTrainingGrant = `-- name: AckTenantTrainingGrant :execrows
+UPDATE interaction_dag_training_grant SET
+  tenant_status = 'active',
+  tenant_policy_version = tenant_policy_version + 1,
+  tenant_granted_by = $1,
+  tenant_granted_at = now(),
+  updated_at = now()
+WHERE workspace_id = $2
+  AND tenant_status IN ('pending_owner_ack', 'revoked')
+  AND tenant_policy_version = $3
+`
+
+type AckTenantTrainingGrantParams struct {
+	Actor           pgtype.Text `json:"actor"`
+	WorkspaceID     pgtype.UUID `json:"workspace_id"`
+	ExpectedVersion int64       `json:"expected_version"`
+}
+
+// CAS owner/admin acknowledgement: pending_owner_ack or revoked -> active,
+// bumping the policy version. A stale expected version affects zero rows.
+func (q *Queries) AckTenantTrainingGrant(ctx context.Context, arg AckTenantTrainingGrantParams) (int64, error) {
+	result, err := q.db.Exec(ctx, ackTenantTrainingGrant, arg.Actor, arg.WorkspaceID, arg.ExpectedVersion)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const advanceInteractionDAGDiagnosisSegmentFetch = `-- name: AdvanceInteractionDAGDiagnosisSegmentFetch :execrows
 UPDATE interaction_dag_diagnosis_segment
 SET next_cursor = $4, fetched_message_count = $5, updated_at = now()
@@ -143,6 +171,232 @@ func (q *Queries) AssociateMixedRLProviderCall(ctx context.Context, arg Associat
 	return result.RowsAffected(), nil
 }
 
+const associateMixedRLProviderCallIdempotent = `-- name: AssociateMixedRLProviderCallIdempotent :execrows
+INSERT INTO interaction_dag_segment_provider_call (
+  segment_id, provider_call_id, run_id, run_agent_id,
+  call_ordinal, association_kind
+)
+SELECT $1, $2, segment.run_id,
+       segment.run_agent_id, $3, $4
+FROM interaction_dag_run_segment segment
+JOIN pi_provider_call call
+  ON call.call_id = $2
+ AND call.run_id = segment.run_id
+ AND call.run_agent_id = segment.run_agent_id
+ AND call.call_ordinal = $3
+WHERE segment.segment_id = $1
+  AND (
+    $4::text <> 'shared_producer'
+    OR EXISTS (
+      SELECT 1
+      FROM interaction_dag_segment_provider_call owner
+      WHERE owner.provider_call_id = call.call_id
+        AND owner.run_id = segment.run_id
+        AND owner.association_kind = 'owned'
+    )
+  )
+ON CONFLICT (segment_id, provider_call_id) DO UPDATE SET
+  call_ordinal = interaction_dag_segment_provider_call.call_ordinal
+WHERE interaction_dag_segment_provider_call.call_ordinal = EXCLUDED.call_ordinal
+  AND interaction_dag_segment_provider_call.association_kind = EXCLUDED.association_kind
+  AND interaction_dag_segment_provider_call.run_id = EXCLUDED.run_id
+  AND interaction_dag_segment_provider_call.run_agent_id = EXCLUDED.run_agent_id
+`
+
+type AssociateMixedRLProviderCallIdempotentParams struct {
+	SegmentID       string `json:"segment_id"`
+	ProviderCallID  string `json:"provider_call_id"`
+	CallOrdinal     int64  `json:"call_ordinal"`
+	AssociationKind string `json:"association_kind"`
+}
+
+// Projects one canonical provider-call association into the frozen snapshot.
+// An identical re-run is a no-op; any drift from the stored association
+// affects zero rows and the projector fails closed on the mismatch.
+func (q *Queries) AssociateMixedRLProviderCallIdempotent(ctx context.Context, arg AssociateMixedRLProviderCallIdempotentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, associateMixedRLProviderCallIdempotent,
+		arg.SegmentID,
+		arg.ProviderCallID,
+		arg.CallOrdinal,
+		arg.AssociationKind,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const cASConsumeTrainingExecution = `-- name: CASConsumeTrainingExecution :execrows
+UPDATE interaction_dag_training_execution SET
+  status = 'consumed', consumed_at = now()
+WHERE manifest_id = $1
+  AND status = 'started'
+`
+
+func (q *Queries) CASConsumeTrainingExecution(ctx context.Context, manifestID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, cASConsumeTrainingExecution, manifestID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const cASTrainingManifestState = `-- name: CASTrainingManifestState :execrows
+UPDATE interaction_dag_training_manifest SET
+  status = $1, updated_at = now()
+WHERE manifest_id = $2
+  AND status = $3
+`
+
+type CASTrainingManifestStateParams struct {
+	ToStatus   string      `json:"to_status"`
+	ManifestID pgtype.UUID `json:"manifest_id"`
+	FromStatus string      `json:"from_status"`
+}
+
+func (q *Queries) CASTrainingManifestState(ctx context.Context, arg CASTrainingManifestStateParams) (int64, error) {
+	result, err := q.db.Exec(ctx, cASTrainingManifestState, arg.ToStatus, arg.ManifestID, arg.FromStatus)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const cASTrainingSamplesStateMany = `-- name: CASTrainingSamplesStateMany :execrows
+UPDATE interaction_dag_training_sample SET
+  status = $1,
+  manifest_id = $2,
+  updated_at = now()
+WHERE sample_kind = $3
+  AND sample_key = ANY ($4::text[])
+  AND status = $5
+`
+
+type CASTrainingSamplesStateManyParams struct {
+	ToStatus   string      `json:"to_status"`
+	ManifestID pgtype.UUID `json:"manifest_id"`
+	SampleKind string      `json:"sample_kind"`
+	SampleKeys []string    `json:"sample_keys"`
+	FromStatus string      `json:"from_status"`
+}
+
+// Exactly-once per-sample transition; rows not in the expected source state
+// affect zero rows, which the caller treats as a conflict.
+func (q *Queries) CASTrainingSamplesStateMany(ctx context.Context, arg CASTrainingSamplesStateManyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, cASTrainingSamplesStateMany,
+		arg.ToStatus,
+		arg.ManifestID,
+		arg.SampleKind,
+		arg.SampleKeys,
+		arg.FromStatus,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const claimUniversalDAGPublishOutbox = `-- name: ClaimUniversalDAGPublishOutbox :many
+WITH claimable AS (
+  SELECT workspace_id, segment_id
+  FROM interaction_dag_publish_outbox
+  WHERE status = 'pending'
+     OR (status = 'retry' AND next_attempt_at <= now())
+     OR (status = 'processing' AND lease_expires_at < now())
+  ORDER BY updated_at, segment_id
+  LIMIT $1
+  FOR UPDATE SKIP LOCKED
+), leased AS (
+  UPDATE interaction_dag_publish_outbox AS outbox
+  SET status = 'processing',
+      lease_owner = $2,
+      lease_expires_at = $3,
+      next_attempt_at = NULL,
+      updated_at = now()
+  FROM claimable
+  WHERE outbox.workspace_id = claimable.workspace_id
+    AND outbox.segment_id = claimable.segment_id
+  RETURNING outbox.workspace_id, outbox.segment_id, outbox.request_hash, outbox.attempts
+)
+SELECT leased.workspace_id, leased.segment_id, leased.request_hash, leased.attempts,
+       segment.agent_run_id, segment.generation, segment.start_seq, segment.end_seq,
+       segment.close_action_kind, segment.memory_type_at_event,
+       segment.graph_projection_eligible_at_event, segment.derivative, segment.trainable_eligible,
+       segment.channel_id_at_event, segment.project_id_at_event, segment.route_generation_at_event
+FROM leased
+JOIN interaction_dag_segment AS segment
+  ON segment.workspace_id = leased.workspace_id
+ AND segment.segment_id = leased.segment_id
+ORDER BY leased.segment_id
+`
+
+type ClaimUniversalDAGPublishOutboxParams struct {
+	MaxRows        int32              `json:"max_rows"`
+	LeaseOwner     pgtype.Text        `json:"lease_owner"`
+	LeaseExpiresAt pgtype.Timestamptz `json:"lease_expires_at"`
+}
+
+type ClaimUniversalDAGPublishOutboxRow struct {
+	WorkspaceID                    pgtype.UUID `json:"workspace_id"`
+	SegmentID                      string      `json:"segment_id"`
+	RequestHash                    string      `json:"request_hash"`
+	Attempts                       int32       `json:"attempts"`
+	AgentRunID                     pgtype.UUID `json:"agent_run_id"`
+	Generation                     int64       `json:"generation"`
+	StartSeq                       int32       `json:"start_seq"`
+	EndSeq                         int32       `json:"end_seq"`
+	CloseActionKind                pgtype.Text `json:"close_action_kind"`
+	MemoryTypeAtEvent              string      `json:"memory_type_at_event"`
+	GraphProjectionEligibleAtEvent bool        `json:"graph_projection_eligible_at_event"`
+	Derivative                     bool        `json:"derivative"`
+	TrainableEligible              bool        `json:"trainable_eligible"`
+	ChannelIDAtEvent               pgtype.UUID `json:"channel_id_at_event"`
+	ProjectIDAtEvent               pgtype.UUID `json:"project_id_at_event"`
+	RouteGenerationAtEvent         pgtype.Int8 `json:"route_generation_at_event"`
+}
+
+// Atomically leases claimable publish work: pending rows, retry rows whose
+// backoff elapsed, and processing rows whose lease expired. Rows leased by a
+// live worker are skipped, so concurrent publishers claim disjoint sets. The
+// Segment publish lifecycle moves to processing in the same transaction via
+// MarkUniversalDAGSegmentPublishProcessing.
+func (q *Queries) ClaimUniversalDAGPublishOutbox(ctx context.Context, arg ClaimUniversalDAGPublishOutboxParams) ([]ClaimUniversalDAGPublishOutboxRow, error) {
+	rows, err := q.db.Query(ctx, claimUniversalDAGPublishOutbox, arg.MaxRows, arg.LeaseOwner, arg.LeaseExpiresAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ClaimUniversalDAGPublishOutboxRow{}
+	for rows.Next() {
+		var i ClaimUniversalDAGPublishOutboxRow
+		if err := rows.Scan(
+			&i.WorkspaceID,
+			&i.SegmentID,
+			&i.RequestHash,
+			&i.Attempts,
+			&i.AgentRunID,
+			&i.Generation,
+			&i.StartSeq,
+			&i.EndSeq,
+			&i.CloseActionKind,
+			&i.MemoryTypeAtEvent,
+			&i.GraphProjectionEligibleAtEvent,
+			&i.Derivative,
+			&i.TrainableEligible,
+			&i.ChannelIDAtEvent,
+			&i.ProjectIDAtEvent,
+			&i.RouteGenerationAtEvent,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const completeInteractionDAGDiagnosisRun = `-- name: CompleteInteractionDAGDiagnosisRun :execrows
 UPDATE interaction_dag_diagnosis_run run
 SET status = 'completed', completed_at = now(), updated_at = now()
@@ -222,6 +476,41 @@ func (q *Queries) CountMixedRLSegments(ctx context.Context, runID pgtype.UUID) (
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const countRealtimeDAGPublishBacklog = `-- name: CountRealtimeDAGPublishBacklog :one
+SELECT count(*)::bigint
+FROM interaction_dag_publish_outbox o
+JOIN interaction_dag_segment s
+  ON s.workspace_id = o.workspace_id AND s.segment_id = o.segment_id
+WHERE o.workspace_id = $1
+  AND o.status IN ('pending', 'processing')
+  AND COALESCE(s.boundary_quality, 'exact') <> 'approximate'
+`
+
+// Realtime publish work outstanding for one workspace: pending or in-flight
+// outbox rows whose segment is a canonical (exact) boundary. The Task 22
+// legacy backfill defers entirely while any realtime work exists, so the
+// approximate channel can never consume the realtime quota (AC54).
+func (q *Queries) CountRealtimeDAGPublishBacklog(ctx context.Context, workspaceID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countRealtimeDAGPublishBacklog, workspaceID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const countTrainingDeletionLedgerPending = `-- name: CountTrainingDeletionLedgerPending :one
+SELECT count(*) AS pending
+FROM interaction_dag_training_deletion_ledger
+WHERE workspace_id = $1
+  AND processed_at IS NULL
+`
+
+func (q *Queries) CountTrainingDeletionLedgerPending(ctx context.Context, workspaceID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countTrainingDeletionLedgerPending, workspaceID)
+	var pending int64
+	err := row.Scan(&pending)
+	return pending, err
 }
 
 const createInteractionDAGDiagnosisRun = `-- name: CreateInteractionDAGDiagnosisRun :exec
@@ -322,6 +611,92 @@ func (q *Queries) CreateMixedRLFrozenSnapshot(ctx context.Context, arg CreateMix
 	return i, err
 }
 
+const createTrainingReplayTask = `-- name: CreateTrainingReplayTask :one
+INSERT INTO agent_inbox_event (
+  workspace_id, agent_session_id, agent_id, runtime_id, execution_config,
+  issue_id, reason, requires_wake, status, priority, context
+)
+SELECT
+  a.workspace_id, ensure_agent_wake_session(a.id), a.id, a.runtime_id,
+  $1, $2, 'training_replay', true, 'pending',
+  $3, $1
+FROM agent a
+WHERE a.id = $4
+RETURNING id, workspace_id, agent_id, reason, status, context
+`
+
+type CreateTrainingReplayTaskParams struct {
+	Context  []byte      `json:"context"`
+	IssueID  pgtype.UUID `json:"issue_id"`
+	Priority int32       `json:"priority"`
+	AgentID  pgtype.UUID `json:"agent_id"`
+}
+
+type CreateTrainingReplayTaskRow struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	AgentID     pgtype.UUID `json:"agent_id"`
+	Reason      string      `json:"reason"`
+	Status      string      `json:"status"`
+	Context     []byte      `json:"context"`
+}
+
+// The distinct replay/training task (spec 14.1): a peer agent task carrying
+// the immutable training_execution identity in its context. Only this task
+// shape may open an AReaL session.
+func (q *Queries) CreateTrainingReplayTask(ctx context.Context, arg CreateTrainingReplayTaskParams) (CreateTrainingReplayTaskRow, error) {
+	row := q.db.QueryRow(ctx, createTrainingReplayTask,
+		arg.Context,
+		arg.IssueID,
+		arg.Priority,
+		arg.AgentID,
+	)
+	var i CreateTrainingReplayTaskRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.AgentID,
+		&i.Reason,
+		&i.Status,
+		&i.Context,
+	)
+	return i, err
+}
+
+const enqueueTrainingDeletionLedgerRows = `-- name: EnqueueTrainingDeletionLedgerRows :execrows
+INSERT INTO interaction_dag_training_deletion_ledger (
+  workspace_id, sample_kind, sample_key, manifest_id, purpose, reason, requested_by
+)
+SELECT s.workspace_id, s.sample_kind, s.sample_key, s.manifest_id,
+       $1, $2, $3
+FROM interaction_dag_training_sample s
+WHERE s.manifest_id = ANY ($4::uuid[])
+  AND s.status = 'consumed'
+ON CONFLICT (sample_kind, sample_key, reason) DO NOTHING
+`
+
+type EnqueueTrainingDeletionLedgerRowsParams struct {
+	Purpose     pgtype.Text   `json:"purpose"`
+	Reason      string        `json:"reason"`
+	RequestedBy string        `json:"requested_by"`
+	ManifestIds []pgtype.UUID `json:"manifest_ids"`
+}
+
+// Already-consumed samples of the revoked purpose enter the deletion /
+// unlearning ledger and are excluded from later training.
+func (q *Queries) EnqueueTrainingDeletionLedgerRows(ctx context.Context, arg EnqueueTrainingDeletionLedgerRowsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, enqueueTrainingDeletionLedgerRows,
+		arg.Purpose,
+		arg.Reason,
+		arg.RequestedBy,
+		arg.ManifestIds,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const ensureUniversalDAGTaskCursor = `-- name: EnsureUniversalDAGTaskCursor :exec
 INSERT INTO interaction_dag_task_cursor (
   workspace_id, agent_run_id, next_generation, last_closed_seq
@@ -362,6 +737,68 @@ func (q *Queries) FailInteractionDAGDiagnosisRun(ctx context.Context, arg FailIn
 	return result.RowsAffected(), nil
 }
 
+const failUniversalDAGPublishOutbox = `-- name: FailUniversalDAGPublishOutbox :execrows
+UPDATE interaction_dag_publish_outbox
+SET status = $1::text,
+    lease_owner = NULL, lease_expires_at = NULL, next_attempt_at = NULL,
+    completed_at = now(), last_error = $2, updated_at = now()
+WHERE workspace_id = $3
+  AND segment_id = $4
+  AND status = 'processing'
+`
+
+type FailUniversalDAGPublishOutboxParams struct {
+	TerminalStatus string      `json:"terminal_status"`
+	LastError      pgtype.Text `json:"last_error"`
+	WorkspaceID    pgtype.UUID `json:"workspace_id"`
+	SegmentID      string      `json:"segment_id"`
+}
+
+// Moves a claimed row straight to a terminal failure state. Legal values are
+// redaction_failed, rejected_scope, and dead_letter; the lifecycle trigger
+// rejects anything unreachable from processing.
+func (q *Queries) FailUniversalDAGPublishOutbox(ctx context.Context, arg FailUniversalDAGPublishOutboxParams) (int64, error) {
+	result, err := q.db.Exec(ctx, failUniversalDAGPublishOutbox,
+		arg.TerminalStatus,
+		arg.LastError,
+		arg.WorkspaceID,
+		arg.SegmentID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const failUniversalDAGSegment = `-- name: FailUniversalDAGSegment :execrows
+UPDATE interaction_dag_segment
+SET publish_status = $1::text,
+    content_status = CASE
+      WHEN content_status = 'pending' THEN $1::text
+      ELSE content_status
+    END,
+    updated_at = now()
+WHERE workspace_id = $2
+  AND segment_id = $3
+  AND publish_status = 'processing'
+`
+
+type FailUniversalDAGSegmentParams struct {
+	TerminalStatus string      `json:"terminal_status"`
+	WorkspaceID    pgtype.UUID `json:"workspace_id"`
+	SegmentID      string      `json:"segment_id"`
+}
+
+// Mirrors a terminal publish outcome. Metadata-only Segments keep their
+// empty content status; only pending content takes the terminal value.
+func (q *Queries) FailUniversalDAGSegment(ctx context.Context, arg FailUniversalDAGSegmentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, failUniversalDAGSegment, arg.TerminalStatus, arg.WorkspaceID, arg.SegmentID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const finalizeUniversalDAGProviderCapture = `-- name: FinalizeUniversalDAGProviderCapture :one
 UPDATE interaction_dag_segment
 SET provider_capture_status = 'finalized',
@@ -382,7 +819,7 @@ WHERE workspace_id = $3
       AND provider_capture_version = $2::bigint
     )
   )
-RETURNING segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, created_at, start_seq, end_seq, trajectory_source, trainable, trajectory, workspace_id, generation, project_id_at_event, channel_id_at_event, route_generation_at_event, memory_type_at_event, graph_projection_eligible_at_event, close_action_kind, canonical_action_id, visible_action_key, derivative, trainable_eligible, publish_status, content_status, publish_seq, sanitizer_version, policy_version, provider_capture_status, provider_capture_id, provider_capture_version, provider_capture_correlation_key, run_id, run_agent_id, published_at, retracted_at, updated_at
+RETURNING segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, created_at, start_seq, end_seq, trajectory_source, trainable, trajectory, workspace_id, generation, project_id_at_event, channel_id_at_event, route_generation_at_event, memory_type_at_event, graph_projection_eligible_at_event, close_action_kind, canonical_action_id, visible_action_key, derivative, trainable_eligible, publish_status, content_status, publish_seq, sanitizer_version, policy_version, provider_capture_status, provider_capture_id, provider_capture_version, provider_capture_correlation_key, run_id, run_agent_id, published_at, retracted_at, updated_at, boundary_quality
 `
 
 type FinalizeUniversalDAGProviderCaptureParams struct {
@@ -445,8 +882,46 @@ func (q *Queries) FinalizeUniversalDAGProviderCapture(ctx context.Context, arg F
 		&i.PublishedAt,
 		&i.RetractedAt,
 		&i.UpdatedAt,
+		&i.BoundaryQuality,
 	)
 	return i, err
+}
+
+const findUniversalDAGEdgesByTriggerAndDestination = `-- name: FindUniversalDAGEdgesByTriggerAndDestination :many
+SELECT id
+FROM interaction_dag_edge
+WHERE workspace_id = $1
+  AND trigger_message_id = $2
+  AND dst_segment_id = $3
+ORDER BY id
+`
+
+type FindUniversalDAGEdgesByTriggerAndDestinationParams struct {
+	WorkspaceID      pgtype.UUID `json:"workspace_id"`
+	TriggerMessageID pgtype.UUID `json:"trigger_message_id"`
+	DstSegmentID     string      `json:"dst_segment_id"`
+}
+
+// Resolves the canonical Edge candidates that share a frozen causal edge's
+// trigger message and destination endpoint for deterministic edge mapping.
+func (q *Queries) FindUniversalDAGEdgesByTriggerAndDestination(ctx context.Context, arg FindUniversalDAGEdgesByTriggerAndDestinationParams) ([]int64, error) {
+	rows, err := q.db.Query(ctx, findUniversalDAGEdgesByTriggerAndDestination, arg.WorkspaceID, arg.TriggerMessageID, arg.DstSegmentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []int64{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const freezeMixedRLEdges = `-- name: FreezeMixedRLEdges :execrows
@@ -522,7 +997,7 @@ func (q *Queries) GetChannelMessageReactionMessageID(ctx context.Context, reacti
 }
 
 const getFirstUniversalDAGSegmentByTask = `-- name: GetFirstUniversalDAGSegmentByTask :one
-SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, created_at, start_seq, end_seq, trajectory_source, trainable, trajectory, workspace_id, generation, project_id_at_event, channel_id_at_event, route_generation_at_event, memory_type_at_event, graph_projection_eligible_at_event, close_action_kind, canonical_action_id, visible_action_key, derivative, trainable_eligible, publish_status, content_status, publish_seq, sanitizer_version, policy_version, provider_capture_status, provider_capture_id, provider_capture_version, provider_capture_correlation_key, run_id, run_agent_id, published_at, retracted_at, updated_at
+SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, created_at, start_seq, end_seq, trajectory_source, trainable, trajectory, workspace_id, generation, project_id_at_event, channel_id_at_event, route_generation_at_event, memory_type_at_event, graph_projection_eligible_at_event, close_action_kind, canonical_action_id, visible_action_key, derivative, trainable_eligible, publish_status, content_status, publish_seq, sanitizer_version, policy_version, provider_capture_status, provider_capture_id, provider_capture_version, provider_capture_correlation_key, run_id, run_agent_id, published_at, retracted_at, updated_at, boundary_quality
 FROM interaction_dag_segment
 WHERE workspace_id = $1
   AND agent_run_id = $2
@@ -581,6 +1056,7 @@ func (q *Queries) GetFirstUniversalDAGSegmentByTask(ctx context.Context, arg Get
 		&i.PublishedAt,
 		&i.RetractedAt,
 		&i.UpdatedAt,
+		&i.BoundaryQuality,
 	)
 	return i, err
 }
@@ -1007,6 +1483,129 @@ func (q *Queries) GetResumableInteractionDAGDiagnosisRun(ctx context.Context, ar
 	return i, err
 }
 
+const getTrainingExecutionByManifest = `-- name: GetTrainingExecutionByManifest :one
+SELECT execution_id, manifest_id, training_task_id, status, started_at, consumed_at, created_at FROM interaction_dag_training_execution
+WHERE manifest_id = $1
+`
+
+func (q *Queries) GetTrainingExecutionByManifest(ctx context.Context, manifestID pgtype.UUID) (InteractionDagTrainingExecution, error) {
+	row := q.db.QueryRow(ctx, getTrainingExecutionByManifest, manifestID)
+	var i InteractionDagTrainingExecution
+	err := row.Scan(
+		&i.ExecutionID,
+		&i.ManifestID,
+		&i.TrainingTaskID,
+		&i.Status,
+		&i.StartedAt,
+		&i.ConsumedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getTrainingExecutionByTask = `-- name: GetTrainingExecutionByTask :one
+SELECT execution_id, manifest_id, training_task_id, status, started_at, consumed_at, created_at FROM interaction_dag_training_execution
+WHERE training_task_id = $1
+`
+
+func (q *Queries) GetTrainingExecutionByTask(ctx context.Context, trainingTaskID pgtype.UUID) (InteractionDagTrainingExecution, error) {
+	row := q.db.QueryRow(ctx, getTrainingExecutionByTask, trainingTaskID)
+	var i InteractionDagTrainingExecution
+	err := row.Scan(
+		&i.ExecutionID,
+		&i.ManifestID,
+		&i.TrainingTaskID,
+		&i.Status,
+		&i.StartedAt,
+		&i.ConsumedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getTrainingGovernancePolicy = `-- name: GetTrainingGovernancePolicy :one
+
+SELECT id, selection_enabled, execution_enabled, reward_policy_version,
+       per_agent_sample_cap, per_channel_sample_cap, per_workspace_sample_cap,
+       updated_by, updated_at
+FROM interaction_dag_training_policy
+WHERE id = 1
+`
+
+// ---------------------------------------------------------------------------
+// Training governance (spec 14.1, migration 472). Grants, the global
+// shadow/calibration switches, selection manifests, per-sample CAS states,
+// execution identity and the deletion/unlearning ledger.
+// ---------------------------------------------------------------------------
+func (q *Queries) GetTrainingGovernancePolicy(ctx context.Context) (InteractionDagTrainingPolicy, error) {
+	row := q.db.QueryRow(ctx, getTrainingGovernancePolicy)
+	var i InteractionDagTrainingPolicy
+	err := row.Scan(
+		&i.ID,
+		&i.SelectionEnabled,
+		&i.ExecutionEnabled,
+		&i.RewardPolicyVersion,
+		&i.PerAgentSampleCap,
+		&i.PerChannelSampleCap,
+		&i.PerWorkspaceSampleCap,
+		&i.UpdatedBy,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getTrainingGrantByWorkspace = `-- name: GetTrainingGrantByWorkspace :one
+SELECT grant_id, workspace_id, tenant_status, tenant_policy_version, tenant_granted_by, tenant_granted_at, pooled_status, pooled_policy_version, pooled_granted_by, pooled_granted_at, created_at, updated_at FROM interaction_dag_training_grant
+WHERE workspace_id = $1
+`
+
+func (q *Queries) GetTrainingGrantByWorkspace(ctx context.Context, workspaceID pgtype.UUID) (InteractionDagTrainingGrant, error) {
+	row := q.db.QueryRow(ctx, getTrainingGrantByWorkspace, workspaceID)
+	var i InteractionDagTrainingGrant
+	err := row.Scan(
+		&i.GrantID,
+		&i.WorkspaceID,
+		&i.TenantStatus,
+		&i.TenantPolicyVersion,
+		&i.TenantGrantedBy,
+		&i.TenantGrantedAt,
+		&i.PooledStatus,
+		&i.PooledPolicyVersion,
+		&i.PooledGrantedBy,
+		&i.PooledGrantedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getTrainingManifest = `-- name: GetTrainingManifest :one
+SELECT manifest_id, workspace_id, purpose, grant_id, grant_policy_version, grant_actor, granted_at, workspace_config, reward_policy_version, item_count, content_hash, status, created_at, updated_at FROM interaction_dag_training_manifest
+WHERE manifest_id = $1
+`
+
+func (q *Queries) GetTrainingManifest(ctx context.Context, manifestID pgtype.UUID) (InteractionDagTrainingManifest, error) {
+	row := q.db.QueryRow(ctx, getTrainingManifest, manifestID)
+	var i InteractionDagTrainingManifest
+	err := row.Scan(
+		&i.ManifestID,
+		&i.WorkspaceID,
+		&i.Purpose,
+		&i.GrantID,
+		&i.GrantPolicyVersion,
+		&i.GrantActor,
+		&i.GrantedAt,
+		&i.WorkspaceConfig,
+		&i.RewardPolicyVersion,
+		&i.ItemCount,
+		&i.ContentHash,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getUniversalDAGEdgeByIdentity = `-- name: GetUniversalDAGEdgeByIdentity :one
 SELECT id, project_id, src_segment_id, dst_segment_id, type, created_at, workspace_id, edge_seq, trigger_message_id
 FROM interaction_dag_edge
@@ -1090,8 +1689,60 @@ func (q *Queries) GetUniversalDAGProjectWorkspace(ctx context.Context, projectID
 	return workspace_id, err
 }
 
+const getUniversalDAGPublishOutboxForUpdate = `-- name: GetUniversalDAGPublishOutboxForUpdate :one
+SELECT workspace_id, segment_id, request_hash, status, attempts, next_attempt_at, lease_owner, lease_expires_at, last_error, created_at, updated_at, completed_at FROM interaction_dag_publish_outbox
+WHERE workspace_id = $1
+  AND segment_id = $2
+FOR UPDATE
+`
+
+type GetUniversalDAGPublishOutboxForUpdateParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	SegmentID   string      `json:"segment_id"`
+}
+
+// Locks one outbox row for the outcome transaction so lease ownership can be
+// re-verified before any lifecycle transition is applied.
+func (q *Queries) GetUniversalDAGPublishOutboxForUpdate(ctx context.Context, arg GetUniversalDAGPublishOutboxForUpdateParams) (InteractionDagPublishOutbox, error) {
+	row := q.db.QueryRow(ctx, getUniversalDAGPublishOutboxForUpdate, arg.WorkspaceID, arg.SegmentID)
+	var i InteractionDagPublishOutbox
+	err := row.Scan(
+		&i.WorkspaceID,
+		&i.SegmentID,
+		&i.RequestHash,
+		&i.Status,
+		&i.Attempts,
+		&i.NextAttemptAt,
+		&i.LeaseOwner,
+		&i.LeaseExpiresAt,
+		&i.LastError,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CompletedAt,
+	)
+	return i, err
+}
+
+const getUniversalDAGPublishOutboxStatus = `-- name: GetUniversalDAGPublishOutboxStatus :one
+SELECT status FROM interaction_dag_publish_outbox
+WHERE workspace_id = $1
+  AND segment_id = $2
+`
+
+type GetUniversalDAGPublishOutboxStatusParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	SegmentID   string      `json:"segment_id"`
+}
+
+func (q *Queries) GetUniversalDAGPublishOutboxStatus(ctx context.Context, arg GetUniversalDAGPublishOutboxStatusParams) (string, error) {
+	row := q.db.QueryRow(ctx, getUniversalDAGPublishOutboxStatus, arg.WorkspaceID, arg.SegmentID)
+	var status string
+	err := row.Scan(&status)
+	return status, err
+}
+
 const getUniversalDAGSegment = `-- name: GetUniversalDAGSegment :one
-SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, created_at, start_seq, end_seq, trajectory_source, trainable, trajectory, workspace_id, generation, project_id_at_event, channel_id_at_event, route_generation_at_event, memory_type_at_event, graph_projection_eligible_at_event, close_action_kind, canonical_action_id, visible_action_key, derivative, trainable_eligible, publish_status, content_status, publish_seq, sanitizer_version, policy_version, provider_capture_status, provider_capture_id, provider_capture_version, provider_capture_correlation_key, run_id, run_agent_id, published_at, retracted_at, updated_at
+SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, created_at, start_seq, end_seq, trajectory_source, trainable, trajectory, workspace_id, generation, project_id_at_event, channel_id_at_event, route_generation_at_event, memory_type_at_event, graph_projection_eligible_at_event, close_action_kind, canonical_action_id, visible_action_key, derivative, trainable_eligible, publish_status, content_status, publish_seq, sanitizer_version, policy_version, provider_capture_status, provider_capture_id, provider_capture_version, provider_capture_correlation_key, run_id, run_agent_id, published_at, retracted_at, updated_at, boundary_quality
 FROM interaction_dag_segment
 WHERE workspace_id = $1
   AND segment_id = $2
@@ -1149,12 +1800,13 @@ func (q *Queries) GetUniversalDAGSegment(ctx context.Context, arg GetUniversalDA
 		&i.PublishedAt,
 		&i.RetractedAt,
 		&i.UpdatedAt,
+		&i.BoundaryQuality,
 	)
 	return i, err
 }
 
 const getUniversalDAGSegmentByTaskGeneration = `-- name: GetUniversalDAGSegmentByTaskGeneration :one
-SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, created_at, start_seq, end_seq, trajectory_source, trainable, trajectory, workspace_id, generation, project_id_at_event, channel_id_at_event, route_generation_at_event, memory_type_at_event, graph_projection_eligible_at_event, close_action_kind, canonical_action_id, visible_action_key, derivative, trainable_eligible, publish_status, content_status, publish_seq, sanitizer_version, policy_version, provider_capture_status, provider_capture_id, provider_capture_version, provider_capture_correlation_key, run_id, run_agent_id, published_at, retracted_at, updated_at
+SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, created_at, start_seq, end_seq, trajectory_source, trainable, trajectory, workspace_id, generation, project_id_at_event, channel_id_at_event, route_generation_at_event, memory_type_at_event, graph_projection_eligible_at_event, close_action_kind, canonical_action_id, visible_action_key, derivative, trainable_eligible, publish_status, content_status, publish_seq, sanitizer_version, policy_version, provider_capture_status, provider_capture_id, provider_capture_version, provider_capture_correlation_key, run_id, run_agent_id, published_at, retracted_at, updated_at, boundary_quality
 FROM interaction_dag_segment
 WHERE workspace_id = $1
   AND agent_run_id = $2
@@ -1213,12 +1865,13 @@ func (q *Queries) GetUniversalDAGSegmentByTaskGeneration(ctx context.Context, ar
 		&i.PublishedAt,
 		&i.RetractedAt,
 		&i.UpdatedAt,
+		&i.BoundaryQuality,
 	)
 	return i, err
 }
 
 const getUniversalDAGSegmentByVisibleAction = `-- name: GetUniversalDAGSegmentByVisibleAction :one
-SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, created_at, start_seq, end_seq, trajectory_source, trainable, trajectory, workspace_id, generation, project_id_at_event, channel_id_at_event, route_generation_at_event, memory_type_at_event, graph_projection_eligible_at_event, close_action_kind, canonical_action_id, visible_action_key, derivative, trainable_eligible, publish_status, content_status, publish_seq, sanitizer_version, policy_version, provider_capture_status, provider_capture_id, provider_capture_version, provider_capture_correlation_key, run_id, run_agent_id, published_at, retracted_at, updated_at
+SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, created_at, start_seq, end_seq, trajectory_source, trainable, trajectory, workspace_id, generation, project_id_at_event, channel_id_at_event, route_generation_at_event, memory_type_at_event, graph_projection_eligible_at_event, close_action_kind, canonical_action_id, visible_action_key, derivative, trainable_eligible, publish_status, content_status, publish_seq, sanitizer_version, policy_version, provider_capture_status, provider_capture_id, provider_capture_version, provider_capture_correlation_key, run_id, run_agent_id, published_at, retracted_at, updated_at, boundary_quality
 FROM interaction_dag_segment
 WHERE workspace_id = $1
   AND visible_action_key = $2
@@ -1276,6 +1929,64 @@ func (q *Queries) GetUniversalDAGSegmentByVisibleAction(ctx context.Context, arg
 		&i.PublishedAt,
 		&i.RetractedAt,
 		&i.UpdatedAt,
+		&i.BoundaryQuality,
+	)
+	return i, err
+}
+
+const getUniversalDAGSegmentProjectionFacts = `-- name: GetUniversalDAGSegmentProjectionFacts :one
+SELECT segment_id, workspace_id, agent_run_id, publish_status, publish_seq,
+       start_seq, end_seq, close_action_kind, memory_type_at_event,
+       graph_projection_eligible_at_event, derivative,
+       channel_id_at_event, project_id_at_event, route_generation_at_event
+FROM interaction_dag_segment
+WHERE workspace_id = $1
+  AND segment_id = $2
+`
+
+type GetUniversalDAGSegmentProjectionFactsParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	SegmentID   string      `json:"segment_id"`
+}
+
+type GetUniversalDAGSegmentProjectionFactsRow struct {
+	SegmentID                      string      `json:"segment_id"`
+	WorkspaceID                    pgtype.UUID `json:"workspace_id"`
+	AgentRunID                     pgtype.UUID `json:"agent_run_id"`
+	PublishStatus                  pgtype.Text `json:"publish_status"`
+	PublishSeq                     pgtype.Int8 `json:"publish_seq"`
+	StartSeq                       int32       `json:"start_seq"`
+	EndSeq                         int32       `json:"end_seq"`
+	CloseActionKind                pgtype.Text `json:"close_action_kind"`
+	MemoryTypeAtEvent              string      `json:"memory_type_at_event"`
+	GraphProjectionEligibleAtEvent bool        `json:"graph_projection_eligible_at_event"`
+	Derivative                     bool        `json:"derivative"`
+	ChannelIDAtEvent               pgtype.UUID `json:"channel_id_at_event"`
+	ProjectIDAtEvent               pgtype.UUID `json:"project_id_at_event"`
+	RouteGenerationAtEvent         pgtype.Int8 `json:"route_generation_at_event"`
+}
+
+// Event-time facts for graph projection: everything the projector may read.
+// Current workspace/channel state is deliberately absent (Task 8: event-time
+// values only).
+func (q *Queries) GetUniversalDAGSegmentProjectionFacts(ctx context.Context, arg GetUniversalDAGSegmentProjectionFactsParams) (GetUniversalDAGSegmentProjectionFactsRow, error) {
+	row := q.db.QueryRow(ctx, getUniversalDAGSegmentProjectionFacts, arg.WorkspaceID, arg.SegmentID)
+	var i GetUniversalDAGSegmentProjectionFactsRow
+	err := row.Scan(
+		&i.SegmentID,
+		&i.WorkspaceID,
+		&i.AgentRunID,
+		&i.PublishStatus,
+		&i.PublishSeq,
+		&i.StartSeq,
+		&i.EndSeq,
+		&i.CloseActionKind,
+		&i.MemoryTypeAtEvent,
+		&i.GraphProjectionEligibleAtEvent,
+		&i.Derivative,
+		&i.ChannelIDAtEvent,
+		&i.ProjectIDAtEvent,
+		&i.RouteGenerationAtEvent,
 	)
 	return i, err
 }
@@ -1430,7 +2141,8 @@ INSERT INTO interaction_dag_causal_edge (
   $7, NULLIF($8, ''),
   $9
 )
-RETURNING edge_id, snapshot_id, run_id, src_segment_id, dst_segment_id, type, trigger_message_id, dst_call_id, edge_ordinal
+RETURNING edge_id, snapshot_id, run_id, src_segment_id, dst_segment_id, type,
+          trigger_message_id, dst_call_id, edge_ordinal
 `
 
 type InsertMixedRLCausalEdgeParams struct {
@@ -1445,7 +2157,23 @@ type InsertMixedRLCausalEdgeParams struct {
 	EdgeOrdinal      int64       `json:"edge_ordinal"`
 }
 
-func (q *Queries) InsertMixedRLCausalEdge(ctx context.Context, arg InsertMixedRLCausalEdgeParams) (InteractionDagCausalEdge, error) {
+type InsertMixedRLCausalEdgeRow struct {
+	EdgeID           pgtype.UUID `json:"edge_id"`
+	SnapshotID       pgtype.Text `json:"snapshot_id"`
+	RunID            pgtype.UUID `json:"run_id"`
+	SrcSegmentID     string      `json:"src_segment_id"`
+	DstSegmentID     string      `json:"dst_segment_id"`
+	Type             string      `json:"type"`
+	TriggerMessageID pgtype.UUID `json:"trigger_message_id"`
+	DstCallID        pgtype.Text `json:"dst_call_id"`
+	EdgeOrdinal      int64       `json:"edge_ordinal"`
+}
+
+// The column list and RETURNING stay on the migration 315 surface so
+// repository fixtures built from migrations 313..315 keep working; the
+// canonical mapping is written only through
+// InsertMixedRLCausalEdgeWithUniversal.
+func (q *Queries) InsertMixedRLCausalEdge(ctx context.Context, arg InsertMixedRLCausalEdgeParams) (InsertMixedRLCausalEdgeRow, error) {
 	row := q.db.QueryRow(ctx, insertMixedRLCausalEdge,
 		arg.EdgeID,
 		arg.SnapshotID,
@@ -1456,6 +2184,63 @@ func (q *Queries) InsertMixedRLCausalEdge(ctx context.Context, arg InsertMixedRL
 		arg.TriggerMessageID,
 		arg.DstCallID,
 		arg.EdgeOrdinal,
+	)
+	var i InsertMixedRLCausalEdgeRow
+	err := row.Scan(
+		&i.EdgeID,
+		&i.SnapshotID,
+		&i.RunID,
+		&i.SrcSegmentID,
+		&i.DstSegmentID,
+		&i.Type,
+		&i.TriggerMessageID,
+		&i.DstCallID,
+		&i.EdgeOrdinal,
+	)
+	return i, err
+}
+
+const insertMixedRLCausalEdgeWithUniversal = `-- name: InsertMixedRLCausalEdgeWithUniversal :one
+INSERT INTO interaction_dag_causal_edge (
+  edge_id, snapshot_id, run_id, src_segment_id, dst_segment_id, type,
+  trigger_message_id, dst_call_id, edge_ordinal, universal_edge_id
+) VALUES (
+  $1, NULLIF($2, ''), $3,
+  $4, $5, $6,
+  $7, NULLIF($8, ''),
+  $9, $10
+)
+RETURNING edge_id, snapshot_id, run_id, src_segment_id, dst_segment_id, type,
+          trigger_message_id, dst_call_id, edge_ordinal, universal_edge_id
+`
+
+type InsertMixedRLCausalEdgeWithUniversalParams struct {
+	EdgeID           pgtype.UUID `json:"edge_id"`
+	SnapshotID       interface{} `json:"snapshot_id"`
+	RunID            pgtype.UUID `json:"run_id"`
+	SrcSegmentID     string      `json:"src_segment_id"`
+	DstSegmentID     string      `json:"dst_segment_id"`
+	Type             string      `json:"type"`
+	TriggerMessageID pgtype.UUID `json:"trigger_message_id"`
+	DstCallID        interface{} `json:"dst_call_id"`
+	EdgeOrdinal      int64       `json:"edge_ordinal"`
+	UniversalEdgeID  pgtype.Int8 `json:"universal_edge_id"`
+}
+
+// Projects one causal edge together with its canonical mapping. Only valid on
+// schemas that carry migration 465.
+func (q *Queries) InsertMixedRLCausalEdgeWithUniversal(ctx context.Context, arg InsertMixedRLCausalEdgeWithUniversalParams) (InteractionDagCausalEdge, error) {
+	row := q.db.QueryRow(ctx, insertMixedRLCausalEdgeWithUniversal,
+		arg.EdgeID,
+		arg.SnapshotID,
+		arg.RunID,
+		arg.SrcSegmentID,
+		arg.DstSegmentID,
+		arg.Type,
+		arg.TriggerMessageID,
+		arg.DstCallID,
+		arg.EdgeOrdinal,
+		arg.UniversalEdgeID,
 	)
 	var i InteractionDagCausalEdge
 	err := row.Scan(
@@ -1468,6 +2253,7 @@ func (q *Queries) InsertMixedRLCausalEdge(ctx context.Context, arg InsertMixedRL
 		&i.TriggerMessageID,
 		&i.DstCallID,
 		&i.EdgeOrdinal,
+		&i.UniversalEdgeID,
 	)
 	return i, err
 }
@@ -1655,7 +2441,9 @@ INSERT INTO interaction_dag_run_segment (
   NULLIF($9, ''), $10,
   $11
 )
-RETURNING segment_id, snapshot_id, run_id, run_agent_id, kind, canonical_action_id, segment_ordinal, reward, reward_source, provisional_at, finalized_at
+RETURNING segment_id, snapshot_id, run_id, run_agent_id, kind,
+          canonical_action_id, segment_ordinal, reward, reward_source,
+          provisional_at, finalized_at
 `
 
 type InsertMixedRLRunSegmentParams struct {
@@ -1672,7 +2460,25 @@ type InsertMixedRLRunSegmentParams struct {
 	FinalizedAt       pgtype.Timestamptz `json:"finalized_at"`
 }
 
-func (q *Queries) InsertMixedRLRunSegment(ctx context.Context, arg InsertMixedRLRunSegmentParams) (InteractionDagRunSegment, error) {
+type InsertMixedRLRunSegmentRow struct {
+	SegmentID         string             `json:"segment_id"`
+	SnapshotID        pgtype.Text        `json:"snapshot_id"`
+	RunID             pgtype.UUID        `json:"run_id"`
+	RunAgentID        pgtype.UUID        `json:"run_agent_id"`
+	Kind              string             `json:"kind"`
+	CanonicalActionID pgtype.UUID        `json:"canonical_action_id"`
+	SegmentOrdinal    int64              `json:"segment_ordinal"`
+	Reward            pgtype.Float8      `json:"reward"`
+	RewardSource      pgtype.Text        `json:"reward_source"`
+	ProvisionalAt     pgtype.Timestamptz `json:"provisional_at"`
+	FinalizedAt       pgtype.Timestamptz `json:"finalized_at"`
+}
+
+// Projects one frozen run-segment row. The column list and RETURNING stay on
+// the migration 315 surface so repository fixtures built from migrations
+// 313..315 keep working; the canonical mapping is written only through
+// UpsertMixedRLRunSegmentWithMapping and SetMixedRLRunSegmentUniversalMapping.
+func (q *Queries) InsertMixedRLRunSegment(ctx context.Context, arg InsertMixedRLRunSegmentParams) (InsertMixedRLRunSegmentRow, error) {
 	row := q.db.QueryRow(ctx, insertMixedRLRunSegment,
 		arg.SegmentID,
 		arg.SnapshotID,
@@ -1686,7 +2492,7 @@ func (q *Queries) InsertMixedRLRunSegment(ctx context.Context, arg InsertMixedRL
 		arg.ProvisionalAt,
 		arg.FinalizedAt,
 	)
-	var i InteractionDagRunSegment
+	var i InsertMixedRLRunSegmentRow
 	err := row.Scan(
 		&i.SegmentID,
 		&i.SnapshotID,
@@ -1756,6 +2562,207 @@ func (q *Queries) InsertMixedRLVisibleAction(ctx context.Context, arg InsertMixe
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const insertTrainingExecution = `-- name: InsertTrainingExecution :one
+INSERT INTO interaction_dag_training_execution (manifest_id, training_task_id)
+VALUES ($1, NULLIF($2, '')::uuid)
+RETURNING execution_id, manifest_id, training_task_id, status, started_at, consumed_at, created_at
+`
+
+type InsertTrainingExecutionParams struct {
+	ManifestID     pgtype.UUID `json:"manifest_id"`
+	TrainingTaskID interface{} `json:"training_task_id"`
+}
+
+func (q *Queries) InsertTrainingExecution(ctx context.Context, arg InsertTrainingExecutionParams) (InteractionDagTrainingExecution, error) {
+	row := q.db.QueryRow(ctx, insertTrainingExecution, arg.ManifestID, arg.TrainingTaskID)
+	var i InteractionDagTrainingExecution
+	err := row.Scan(
+		&i.ExecutionID,
+		&i.ManifestID,
+		&i.TrainingTaskID,
+		&i.Status,
+		&i.StartedAt,
+		&i.ConsumedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const insertTrainingGrant = `-- name: InsertTrainingGrant :one
+INSERT INTO interaction_dag_training_grant (
+  workspace_id, tenant_status, tenant_policy_version, tenant_granted_by, tenant_granted_at
+) VALUES (
+  $1, $2, $3,
+  NULLIF($4, ''), $5
+)
+RETURNING grant_id, workspace_id, tenant_status, tenant_policy_version, tenant_granted_by, tenant_granted_at, pooled_status, pooled_policy_version, pooled_granted_by, pooled_granted_at, created_at, updated_at
+`
+
+type InsertTrainingGrantParams struct {
+	WorkspaceID         pgtype.UUID        `json:"workspace_id"`
+	TenantStatus        string             `json:"tenant_status"`
+	TenantPolicyVersion int64              `json:"tenant_policy_version"`
+	TenantGrantedBy     interface{}        `json:"tenant_granted_by"`
+	TenantGrantedAt     pgtype.Timestamptz `json:"tenant_granted_at"`
+}
+
+// New-workspace bootstrap: the row is created with the product default the
+// caller resolved explicitly (pending_owner_ack or active), never a silent
+// database-side activation of a historical workspace.
+func (q *Queries) InsertTrainingGrant(ctx context.Context, arg InsertTrainingGrantParams) (InteractionDagTrainingGrant, error) {
+	row := q.db.QueryRow(ctx, insertTrainingGrant,
+		arg.WorkspaceID,
+		arg.TenantStatus,
+		arg.TenantPolicyVersion,
+		arg.TenantGrantedBy,
+		arg.TenantGrantedAt,
+	)
+	var i InteractionDagTrainingGrant
+	err := row.Scan(
+		&i.GrantID,
+		&i.WorkspaceID,
+		&i.TenantStatus,
+		&i.TenantPolicyVersion,
+		&i.TenantGrantedBy,
+		&i.TenantGrantedAt,
+		&i.PooledStatus,
+		&i.PooledPolicyVersion,
+		&i.PooledGrantedBy,
+		&i.PooledGrantedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const insertTrainingManifest = `-- name: InsertTrainingManifest :one
+INSERT INTO interaction_dag_training_manifest (
+  workspace_id, purpose, grant_id, grant_policy_version, grant_actor, granted_at,
+  workspace_config, reward_policy_version, item_count, content_hash, status
+) VALUES (
+  $1, $2, $3,
+  $4, $5, $6,
+  $7, $8,
+  $9, $10, 'selected'
+)
+RETURNING manifest_id, workspace_id, purpose, grant_id, grant_policy_version, grant_actor, granted_at, workspace_config, reward_policy_version, item_count, content_hash, status, created_at, updated_at
+`
+
+type InsertTrainingManifestParams struct {
+	WorkspaceID         pgtype.UUID        `json:"workspace_id"`
+	Purpose             string             `json:"purpose"`
+	GrantID             pgtype.UUID        `json:"grant_id"`
+	GrantPolicyVersion  int64              `json:"grant_policy_version"`
+	GrantActor          string             `json:"grant_actor"`
+	GrantedAt           pgtype.Timestamptz `json:"granted_at"`
+	WorkspaceConfig     []byte             `json:"workspace_config"`
+	RewardPolicyVersion int64              `json:"reward_policy_version"`
+	ItemCount           int32              `json:"item_count"`
+	ContentHash         string             `json:"content_hash"`
+}
+
+func (q *Queries) InsertTrainingManifest(ctx context.Context, arg InsertTrainingManifestParams) (InteractionDagTrainingManifest, error) {
+	row := q.db.QueryRow(ctx, insertTrainingManifest,
+		arg.WorkspaceID,
+		arg.Purpose,
+		arg.GrantID,
+		arg.GrantPolicyVersion,
+		arg.GrantActor,
+		arg.GrantedAt,
+		arg.WorkspaceConfig,
+		arg.RewardPolicyVersion,
+		arg.ItemCount,
+		arg.ContentHash,
+	)
+	var i InteractionDagTrainingManifest
+	err := row.Scan(
+		&i.ManifestID,
+		&i.WorkspaceID,
+		&i.Purpose,
+		&i.GrantID,
+		&i.GrantPolicyVersion,
+		&i.GrantActor,
+		&i.GrantedAt,
+		&i.WorkspaceConfig,
+		&i.RewardPolicyVersion,
+		&i.ItemCount,
+		&i.ContentHash,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const insertTrainingManifestItem = `-- name: InsertTrainingManifestItem :exec
+INSERT INTO interaction_dag_training_manifest_item (
+  manifest_id, item_kind, item_key, item_hash, sanitizer_version, policy_version,
+  scope, reward_status, reward_revision
+) VALUES (
+  $1, $2, $3, $4,
+  NULLIF($5, ''), NULLIF($6, ''),
+  $7, $8, $9
+)
+`
+
+type InsertTrainingManifestItemParams struct {
+	ManifestID       pgtype.UUID `json:"manifest_id"`
+	ItemKind         string      `json:"item_kind"`
+	ItemKey          string      `json:"item_key"`
+	ItemHash         string      `json:"item_hash"`
+	SanitizerVersion interface{} `json:"sanitizer_version"`
+	PolicyVersion    interface{} `json:"policy_version"`
+	Scope            []byte      `json:"scope"`
+	RewardStatus     string      `json:"reward_status"`
+	RewardRevision   int64       `json:"reward_revision"`
+}
+
+func (q *Queries) InsertTrainingManifestItem(ctx context.Context, arg InsertTrainingManifestItemParams) error {
+	_, err := q.db.Exec(ctx, insertTrainingManifestItem,
+		arg.ManifestID,
+		arg.ItemKind,
+		arg.ItemKey,
+		arg.ItemHash,
+		arg.SanitizerVersion,
+		arg.PolicyVersion,
+		arg.Scope,
+		arg.RewardStatus,
+		arg.RewardRevision,
+	)
+	return err
+}
+
+const insertTrainingSamplesEligible = `-- name: InsertTrainingSamplesEligible :execrows
+INSERT INTO interaction_dag_training_sample (
+  sample_kind, sample_key, workspace_id, status, manifest_id
+)
+SELECT $1, e.key, $2, 'eligible', $3
+FROM unnest($4::text[]) AS e(key)
+ON CONFLICT (sample_kind, sample_key) DO NOTHING
+`
+
+type InsertTrainingSamplesEligibleParams struct {
+	SampleKind  string      `json:"sample_kind"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ManifestID  pgtype.UUID `json:"manifest_id"`
+	SampleKeys  []string    `json:"sample_keys"`
+}
+
+// First observation of a candidate records the eligible state; an existing
+// row of any status is left untouched (ON CONFLICT DO NOTHING).
+func (q *Queries) InsertTrainingSamplesEligible(ctx context.Context, arg InsertTrainingSamplesEligibleParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertTrainingSamplesEligible,
+		arg.SampleKind,
+		arg.WorkspaceID,
+		arg.ManifestID,
+		arg.SampleKeys,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const insertUniversalDAGEdge = `-- name: InsertUniversalDAGEdge :one
@@ -1993,7 +3000,7 @@ INSERT INTO interaction_dag_segment (
   close_action_kind, canonical_action_id, visible_action_key,
   derivative, trainable_eligible, publish_status, content_status,
   sanitizer_version, policy_version, provider_capture_status,
-  provider_capture_correlation_key, run_id, run_agent_id
+  provider_capture_correlation_key, run_id, run_agent_id, boundary_quality
 ) VALUES (
   $1, $2, $3,
   $4, NULLIF($5::text, ''),
@@ -2013,9 +3020,9 @@ INSERT INTO interaction_dag_segment (
     ELSE 'pending'
   END,
   NULLIF($20::text, ''), $21,
-  $22
+  $22, NULLIF($23::text, '')
 )
-RETURNING segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, created_at, start_seq, end_seq, trajectory_source, trainable, trajectory, workspace_id, generation, project_id_at_event, channel_id_at_event, route_generation_at_event, memory_type_at_event, graph_projection_eligible_at_event, close_action_kind, canonical_action_id, visible_action_key, derivative, trainable_eligible, publish_status, content_status, publish_seq, sanitizer_version, policy_version, provider_capture_status, provider_capture_id, provider_capture_version, provider_capture_correlation_key, run_id, run_agent_id, published_at, retracted_at, updated_at
+RETURNING segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, created_at, start_seq, end_seq, trajectory_source, trainable, trajectory, workspace_id, generation, project_id_at_event, channel_id_at_event, route_generation_at_event, memory_type_at_event, graph_projection_eligible_at_event, close_action_kind, canonical_action_id, visible_action_key, derivative, trainable_eligible, publish_status, content_status, publish_seq, sanitizer_version, policy_version, provider_capture_status, provider_capture_id, provider_capture_version, provider_capture_correlation_key, run_id, run_agent_id, published_at, retracted_at, updated_at, boundary_quality
 `
 
 type InsertUniversalDAGSegmentParams struct {
@@ -2041,6 +3048,7 @@ type InsertUniversalDAGSegmentParams struct {
 	ProviderCaptureCorrelationKey  string      `json:"provider_capture_correlation_key"`
 	RunID                          pgtype.UUID `json:"run_id"`
 	RunAgentID                     pgtype.UUID `json:"run_agent_id"`
+	BoundaryQuality                string      `json:"boundary_quality"`
 }
 
 // Inserts canonical workspace-scoped Segment metadata backed by task_messages.
@@ -2068,6 +3076,7 @@ func (q *Queries) InsertUniversalDAGSegment(ctx context.Context, arg InsertUnive
 		arg.ProviderCaptureCorrelationKey,
 		arg.RunID,
 		arg.RunAgentID,
+		arg.BoundaryQuality,
 	)
 	var i InteractionDagSegment
 	err := row.Scan(
@@ -2112,8 +3121,32 @@ func (q *Queries) InsertUniversalDAGSegment(ctx context.Context, arg InsertUnive
 		&i.PublishedAt,
 		&i.RetractedAt,
 		&i.UpdatedAt,
+		&i.BoundaryQuality,
 	)
 	return i, err
+}
+
+const invalidateTrainingManifestsOnRevoke = `-- name: InvalidateTrainingManifestsOnRevoke :execrows
+UPDATE interaction_dag_training_manifest SET
+  status = 'invalidated', updated_at = now()
+WHERE workspace_id = $1
+  AND purpose = $2
+  AND status IN ('selected', 'exported', 'execution_started')
+`
+
+type InvalidateTrainingManifestsOnRevokeParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	Purpose     string      `json:"purpose"`
+}
+
+// A revoked grant invalidates every manifest of that purpose that has not
+// been consumed yet.
+func (q *Queries) InvalidateTrainingManifestsOnRevoke(ctx context.Context, arg InvalidateTrainingManifestsOnRevokeParams) (int64, error) {
+	result, err := q.db.Exec(ctx, invalidateTrainingManifestsOnRevoke, arg.WorkspaceID, arg.Purpose)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const listInteractionDAGDiagnosisSegments = `-- name: ListInteractionDAGDiagnosisSegments :many
@@ -2474,21 +3507,95 @@ func (q *Queries) ListLatestCompletedInteractionDAGDiagnosisTargetsForProject(ct
 	return items, nil
 }
 
+const listLegacyBackfillCandidateTasks = `-- name: ListLegacyBackfillCandidateTasks :many
+SELECT t.id, t.workspace_id, t.issue_id, t.channel_id,
+       COALESCE((SELECT MAX(m.seq) FROM task_message m WHERE m.task_id = t.id), 0)::integer AS max_seq
+FROM agent_inbox_event t
+WHERE t.workspace_id = $1
+  AND t.status = 'acked'
+  AND t.acked_at IS NOT NULL
+  AND t.acked_at >= $2
+  AND NOT EXISTS (
+    SELECT 1 FROM interaction_dag_segment s
+    WHERE s.workspace_id = t.workspace_id AND s.agent_run_id = t.id
+  )
+ORDER BY t.acked_at, t.id
+LIMIT $3
+`
+
+type ListLegacyBackfillCandidateTasksParams struct {
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	WindowStart pgtype.Timestamptz `json:"window_start"`
+	LimitCount  int32              `json:"limit_count"`
+}
+
+type ListLegacyBackfillCandidateTasksRow struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	IssueID     pgtype.UUID `json:"issue_id"`
+	ChannelID   pgtype.UUID `json:"channel_id"`
+	MaxSeq      int32       `json:"max_seq"`
+}
+
+// Terminal-completed Tasks inside the backfill window that carry no Segment
+// of any kind yet. "No Segment yet" is simultaneously the existing-live-
+// Segment skip and the replay guard: once a Task has one Segment row (live
+// or backfilled) it never re-enters the candidate set.
+func (q *Queries) ListLegacyBackfillCandidateTasks(ctx context.Context, arg ListLegacyBackfillCandidateTasksParams) ([]ListLegacyBackfillCandidateTasksRow, error) {
+	rows, err := q.db.Query(ctx, listLegacyBackfillCandidateTasks, arg.WorkspaceID, arg.WindowStart, arg.LimitCount)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListLegacyBackfillCandidateTasksRow{}
+	for rows.Next() {
+		var i ListLegacyBackfillCandidateTasksRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.IssueID,
+			&i.ChannelID,
+			&i.MaxSeq,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listMixedRLCausalEdgesCanonical = `-- name: ListMixedRLCausalEdgesCanonical :many
-SELECT edge_id, snapshot_id, run_id, src_segment_id, dst_segment_id, type, trigger_message_id, dst_call_id, edge_ordinal FROM interaction_dag_causal_edge
+SELECT edge_id, snapshot_id, run_id, src_segment_id, dst_segment_id, type,
+       trigger_message_id, dst_call_id, edge_ordinal
+FROM interaction_dag_causal_edge
 WHERE run_id = $1
 ORDER BY edge_ordinal, edge_id
 `
 
-func (q *Queries) ListMixedRLCausalEdgesCanonical(ctx context.Context, runID pgtype.UUID) ([]InteractionDagCausalEdge, error) {
+type ListMixedRLCausalEdgesCanonicalRow struct {
+	EdgeID           pgtype.UUID `json:"edge_id"`
+	SnapshotID       pgtype.Text `json:"snapshot_id"`
+	RunID            pgtype.UUID `json:"run_id"`
+	SrcSegmentID     string      `json:"src_segment_id"`
+	DstSegmentID     string      `json:"dst_segment_id"`
+	Type             string      `json:"type"`
+	TriggerMessageID pgtype.UUID `json:"trigger_message_id"`
+	DstCallID        pgtype.Text `json:"dst_call_id"`
+	EdgeOrdinal      int64       `json:"edge_ordinal"`
+}
+
+func (q *Queries) ListMixedRLCausalEdgesCanonical(ctx context.Context, runID pgtype.UUID) ([]ListMixedRLCausalEdgesCanonicalRow, error) {
 	rows, err := q.db.Query(ctx, listMixedRLCausalEdgesCanonical, runID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []InteractionDagCausalEdge{}
+	items := []ListMixedRLCausalEdgesCanonicalRow{}
 	for rows.Next() {
-		var i InteractionDagCausalEdge
+		var i ListMixedRLCausalEdgesCanonicalRow
 		if err := rows.Scan(
 			&i.EdgeID,
 			&i.SnapshotID,
@@ -2599,15 +3706,79 @@ func (q *Queries) ListMixedRLProviderCallsCanonical(ctx context.Context, runID p
 }
 
 const listMixedRLRunSegmentsCanonical = `-- name: ListMixedRLRunSegmentsCanonical :many
-SELECT segment_id, snapshot_id, run_id, run_agent_id, kind, canonical_action_id, segment_ordinal, reward, reward_source, provisional_at, finalized_at FROM interaction_dag_run_segment
+SELECT segment_id, snapshot_id, run_id, run_agent_id, kind,
+       canonical_action_id, segment_ordinal, reward, reward_source,
+       provisional_at, finalized_at
+FROM interaction_dag_run_segment
 WHERE run_id = $1
 ORDER BY segment_ordinal, segment_id
 `
 
+type ListMixedRLRunSegmentsCanonicalRow struct {
+	SegmentID         string             `json:"segment_id"`
+	SnapshotID        pgtype.Text        `json:"snapshot_id"`
+	RunID             pgtype.UUID        `json:"run_id"`
+	RunAgentID        pgtype.UUID        `json:"run_agent_id"`
+	Kind              string             `json:"kind"`
+	CanonicalActionID pgtype.UUID        `json:"canonical_action_id"`
+	SegmentOrdinal    int64              `json:"segment_ordinal"`
+	Reward            pgtype.Float8      `json:"reward"`
+	RewardSource      pgtype.Text        `json:"reward_source"`
+	ProvisionalAt     pgtype.Timestamptz `json:"provisional_at"`
+	FinalizedAt       pgtype.Timestamptz `json:"finalized_at"`
+}
+
 // Provisional plus terminal segments in the deterministic order used by the
-// freeze manifest, before snapshot_id is assigned.
-func (q *Queries) ListMixedRLRunSegmentsCanonical(ctx context.Context, runID pgtype.UUID) ([]InteractionDagRunSegment, error) {
+// freeze manifest, before snapshot_id is assigned. The column list stays on
+// the migration 315 surface for repository fixtures.
+func (q *Queries) ListMixedRLRunSegmentsCanonical(ctx context.Context, runID pgtype.UUID) ([]ListMixedRLRunSegmentsCanonicalRow, error) {
 	rows, err := q.db.Query(ctx, listMixedRLRunSegmentsCanonical, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListMixedRLRunSegmentsCanonicalRow{}
+	for rows.Next() {
+		var i ListMixedRLRunSegmentsCanonicalRow
+		if err := rows.Scan(
+			&i.SegmentID,
+			&i.SnapshotID,
+			&i.RunID,
+			&i.RunAgentID,
+			&i.Kind,
+			&i.CanonicalActionID,
+			&i.SegmentOrdinal,
+			&i.Reward,
+			&i.RewardSource,
+			&i.ProvisionalAt,
+			&i.FinalizedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMixedRLRunSegmentsWithMapping = `-- name: ListMixedRLRunSegmentsWithMapping :many
+SELECT segment.segment_id, segment.snapshot_id, segment.run_id,
+       segment.run_agent_id, segment.kind, segment.canonical_action_id,
+       segment.segment_ordinal, segment.reward, segment.reward_source,
+       segment.provisional_at, segment.finalized_at,
+       segment.universal_segment_id
+FROM interaction_dag_run_segment AS segment
+WHERE segment.run_id = $1
+ORDER BY segment.segment_ordinal, segment.segment_id
+`
+
+// Same ordering as ListMixedRLRunSegmentsCanonical, plus the canonical
+// mapping column for the frozen projector. Only valid on schemas that carry
+// migration 465.
+func (q *Queries) ListMixedRLRunSegmentsWithMapping(ctx context.Context, runID pgtype.UUID) ([]InteractionDagRunSegment, error) {
+	rows, err := q.db.Query(ctx, listMixedRLRunSegmentsWithMapping, runID)
 	if err != nil {
 		return nil, err
 	}
@@ -2627,6 +3798,7 @@ func (q *Queries) ListMixedRLRunSegmentsCanonical(ctx context.Context, runID pgt
 			&i.RewardSource,
 			&i.ProvisionalAt,
 			&i.FinalizedAt,
+			&i.UniversalSegmentID,
 		); err != nil {
 			return nil, err
 		}
@@ -2677,20 +3849,37 @@ func (q *Queries) ListMixedRLSegmentCallsCanonical(ctx context.Context, runID pg
 }
 
 const listMixedRLSnapshotSegmentsCanonical = `-- name: ListMixedRLSnapshotSegmentsCanonical :many
-SELECT segment_id, snapshot_id, run_id, run_agent_id, kind, canonical_action_id, segment_ordinal, reward, reward_source, provisional_at, finalized_at FROM interaction_dag_run_segment
+SELECT segment_id, snapshot_id, run_id, run_agent_id, kind,
+       canonical_action_id, segment_ordinal, reward, reward_source,
+       provisional_at, finalized_at
+FROM interaction_dag_run_segment
 WHERE snapshot_id = $1
 ORDER BY segment_ordinal, segment_id
 `
 
-func (q *Queries) ListMixedRLSnapshotSegmentsCanonical(ctx context.Context, snapshotID pgtype.Text) ([]InteractionDagRunSegment, error) {
+type ListMixedRLSnapshotSegmentsCanonicalRow struct {
+	SegmentID         string             `json:"segment_id"`
+	SnapshotID        pgtype.Text        `json:"snapshot_id"`
+	RunID             pgtype.UUID        `json:"run_id"`
+	RunAgentID        pgtype.UUID        `json:"run_agent_id"`
+	Kind              string             `json:"kind"`
+	CanonicalActionID pgtype.UUID        `json:"canonical_action_id"`
+	SegmentOrdinal    int64              `json:"segment_ordinal"`
+	Reward            pgtype.Float8      `json:"reward"`
+	RewardSource      pgtype.Text        `json:"reward_source"`
+	ProvisionalAt     pgtype.Timestamptz `json:"provisional_at"`
+	FinalizedAt       pgtype.Timestamptz `json:"finalized_at"`
+}
+
+func (q *Queries) ListMixedRLSnapshotSegmentsCanonical(ctx context.Context, snapshotID pgtype.Text) ([]ListMixedRLSnapshotSegmentsCanonicalRow, error) {
 	rows, err := q.db.Query(ctx, listMixedRLSnapshotSegmentsCanonical, snapshotID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []InteractionDagRunSegment{}
+	items := []ListMixedRLSnapshotSegmentsCanonicalRow{}
 	for rows.Next() {
-		var i InteractionDagRunSegment
+		var i ListMixedRLSnapshotSegmentsCanonicalRow
 		if err := rows.Scan(
 			&i.SegmentID,
 			&i.SnapshotID,
@@ -2751,6 +3940,523 @@ func (q *Queries) ListMixedRLVisibleActionsCanonical(ctx context.Context, runID 
 	return items, nil
 }
 
+const listSegmentTaskSources = `-- name: ListSegmentTaskSources :many
+SELECT segment.segment_id, segment.agent_run_id::text AS agent_run_id
+FROM interaction_dag_segment segment
+WHERE segment.workspace_id = $1
+  AND segment.segment_id = ANY ($2::text[])
+ORDER BY segment.segment_id
+`
+
+type ListSegmentTaskSourcesParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	SegmentIds  []string    `json:"segment_ids"`
+}
+
+type ListSegmentTaskSourcesRow struct {
+	SegmentID  string `json:"segment_id"`
+	AgentRunID string `json:"agent_run_id"`
+}
+
+// Task 14 publication sources: the canonical task_output source of each
+// covered segment, in deterministic order for the FOR KEY SHARE lock.
+func (q *Queries) ListSegmentTaskSources(ctx context.Context, arg ListSegmentTaskSourcesParams) ([]ListSegmentTaskSourcesRow, error) {
+	rows, err := q.db.Query(ctx, listSegmentTaskSources, arg.WorkspaceID, arg.SegmentIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSegmentTaskSourcesRow{}
+	for rows.Next() {
+		var i ListSegmentTaskSourcesRow
+		if err := rows.Scan(&i.SegmentID, &i.AgentRunID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTrainingDeletionLedgerRows = `-- name: ListTrainingDeletionLedgerRows :many
+SELECT ledger_id, workspace_id, sample_kind, sample_key, manifest_id, purpose, reason, requested_by, requested_at, processed_at FROM interaction_dag_training_deletion_ledger
+WHERE workspace_id = $1
+ORDER BY requested_at DESC
+LIMIT $2
+`
+
+type ListTrainingDeletionLedgerRowsParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	LimitCount  int32       `json:"limit_count"`
+}
+
+func (q *Queries) ListTrainingDeletionLedgerRows(ctx context.Context, arg ListTrainingDeletionLedgerRowsParams) ([]InteractionDagTrainingDeletionLedger, error) {
+	rows, err := q.db.Query(ctx, listTrainingDeletionLedgerRows, arg.WorkspaceID, arg.LimitCount)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []InteractionDagTrainingDeletionLedger{}
+	for rows.Next() {
+		var i InteractionDagTrainingDeletionLedger
+		if err := rows.Scan(
+			&i.LedgerID,
+			&i.WorkspaceID,
+			&i.SampleKind,
+			&i.SampleKey,
+			&i.ManifestID,
+			&i.Purpose,
+			&i.Reason,
+			&i.RequestedBy,
+			&i.RequestedAt,
+			&i.ProcessedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTrainingGrantWorkspaceBackfill = `-- name: ListTrainingGrantWorkspaceBackfill :many
+SELECT w.id AS workspace_id
+FROM workspace w
+WHERE NOT EXISTS (
+  SELECT 1 FROM interaction_dag_training_grant g WHERE g.workspace_id = w.id
+)
+`
+
+// Migration 472 backfill probe: workspaces without a grant row.
+func (q *Queries) ListTrainingGrantWorkspaceBackfill(ctx context.Context) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listTrainingGrantWorkspaceBackfill)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var workspace_id pgtype.UUID
+		if err := rows.Scan(&workspace_id); err != nil {
+			return nil, err
+		}
+		items = append(items, workspace_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTrainingGraphTrajectoryCandidates = `-- name: ListTrainingGraphTrajectoryCandidates :many
+SELECT t.id::text AS item_key,
+       t.workspace_id,
+       t.recall_id,
+       r.graph_kind,
+       r.graph_owner_id,
+       t.seed_index,
+       encode(sha256(convert_to(
+         concat_ws(':', t.id::text, t.recall_id::text, t.seed_index::text,
+                   t.rounds::text, COALESCE(t.reward::text, '')),
+         'UTF8')), 'hex') AS item_hash
+FROM graph_memory_trajectory t
+JOIN graph_memory_recall r ON r.id = t.recall_id
+JOIN graph_memory_dive_job j ON j.recall_id = r.id
+WHERE t.workspace_id = $1
+  AND r.training_mode = 'offline_rl'
+  AND t.dive_status = 'graded'
+  AND j.status = 'completed'
+  AND t.reward IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM memory_source_guard g
+    WHERE g.workspace_id = t.workspace_id
+      AND g.retracted_at IS NOT NULL
+      AND g.source_kind = r.graph_kind
+      AND g.source_id = r.graph_owner_id::text
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM interaction_dag_training_sample s
+    WHERE s.sample_kind = 'graph_trajectory'
+      AND s.sample_key = t.id::text
+      AND s.status IN ('selected', 'exported', 'execution_started', 'consumed')
+  )
+ORDER BY r.created_at, t.seed_index
+LIMIT $2
+`
+
+type ListTrainingGraphTrajectoryCandidatesParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	LimitCount  int32       `json:"limit_count"`
+}
+
+type ListTrainingGraphTrajectoryCandidatesRow struct {
+	ItemKey      string      `json:"item_key"`
+	WorkspaceID  pgtype.UUID `json:"workspace_id"`
+	RecallID     pgtype.UUID `json:"recall_id"`
+	GraphKind    string      `json:"graph_kind"`
+	GraphOwnerID pgtype.UUID `json:"graph_owner_id"`
+	SeedIndex    int32       `json:"seed_index"`
+	ItemHash     string      `json:"item_hash"`
+}
+
+// Graph-memory explore trajectories for offline_rl recalls that are fully
+// graded and unfenced (Task 8A owner fence via memory_source_guard).
+func (q *Queries) ListTrainingGraphTrajectoryCandidates(ctx context.Context, arg ListTrainingGraphTrajectoryCandidatesParams) ([]ListTrainingGraphTrajectoryCandidatesRow, error) {
+	rows, err := q.db.Query(ctx, listTrainingGraphTrajectoryCandidates, arg.WorkspaceID, arg.LimitCount)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListTrainingGraphTrajectoryCandidatesRow{}
+	for rows.Next() {
+		var i ListTrainingGraphTrajectoryCandidatesRow
+		if err := rows.Scan(
+			&i.ItemKey,
+			&i.WorkspaceID,
+			&i.RecallID,
+			&i.GraphKind,
+			&i.GraphOwnerID,
+			&i.SeedIndex,
+			&i.ItemHash,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTrainingGraphTrajectoryFenceAudit = `-- name: ListTrainingGraphTrajectoryFenceAudit :many
+SELECT t.id::text AS item_key,
+       (t.reward IS NOT NULL) AS reward_available,
+       NOT EXISTS (
+         SELECT 1 FROM memory_source_guard g
+         WHERE g.workspace_id = t.workspace_id
+           AND g.retracted_at IS NOT NULL
+           AND g.source_kind = r.graph_kind
+           AND g.source_id = r.graph_owner_id::text
+       ) AS unfenced
+FROM graph_memory_trajectory t
+JOIN graph_memory_recall r ON r.id = t.recall_id
+WHERE t.workspace_id = $1
+  AND t.id::text = ANY ($2::text[])
+`
+
+type ListTrainingGraphTrajectoryFenceAuditParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ItemKeys    []string    `json:"item_keys"`
+}
+
+type ListTrainingGraphTrajectoryFenceAuditRow struct {
+	ItemKey         string      `json:"item_key"`
+	RewardAvailable interface{} `json:"reward_available"`
+	Unfenced        bool        `json:"unfenced"`
+}
+
+// Recheck-only view of previously selected graph trajectories: reward and
+// owner fence verdicts WITHOUT the already-sampled exclusion (the samples
+// are selected by design at this point).
+func (q *Queries) ListTrainingGraphTrajectoryFenceAudit(ctx context.Context, arg ListTrainingGraphTrajectoryFenceAuditParams) ([]ListTrainingGraphTrajectoryFenceAuditRow, error) {
+	rows, err := q.db.Query(ctx, listTrainingGraphTrajectoryFenceAudit, arg.WorkspaceID, arg.ItemKeys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListTrainingGraphTrajectoryFenceAuditRow{}
+	for rows.Next() {
+		var i ListTrainingGraphTrajectoryFenceAuditRow
+		if err := rows.Scan(&i.ItemKey, &i.RewardAvailable, &i.Unfenced); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTrainingManifestIDsForPurpose = `-- name: ListTrainingManifestIDsForPurpose :many
+SELECT manifest_id
+FROM interaction_dag_training_manifest
+WHERE workspace_id = $1
+  AND purpose = $2
+`
+
+type ListTrainingManifestIDsForPurposeParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	Purpose     string      `json:"purpose"`
+}
+
+func (q *Queries) ListTrainingManifestIDsForPurpose(ctx context.Context, arg ListTrainingManifestIDsForPurposeParams) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listTrainingManifestIDsForPurpose, arg.WorkspaceID, arg.Purpose)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var manifest_id pgtype.UUID
+		if err := rows.Scan(&manifest_id); err != nil {
+			return nil, err
+		}
+		items = append(items, manifest_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTrainingManifestItems = `-- name: ListTrainingManifestItems :many
+SELECT manifest_id, item_kind, item_key, item_hash, sanitizer_version, policy_version, scope, reward_status, reward_revision FROM interaction_dag_training_manifest_item
+WHERE manifest_id = $1
+ORDER BY item_kind, item_key
+`
+
+func (q *Queries) ListTrainingManifestItems(ctx context.Context, manifestID pgtype.UUID) ([]InteractionDagTrainingManifestItem, error) {
+	rows, err := q.db.Query(ctx, listTrainingManifestItems, manifestID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []InteractionDagTrainingManifestItem{}
+	for rows.Next() {
+		var i InteractionDagTrainingManifestItem
+		if err := rows.Scan(
+			&i.ManifestID,
+			&i.ItemKind,
+			&i.ItemKey,
+			&i.ItemHash,
+			&i.SanitizerVersion,
+			&i.PolicyVersion,
+			&i.Scope,
+			&i.RewardStatus,
+			&i.RewardRevision,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTrainingManifests = `-- name: ListTrainingManifests :many
+SELECT manifest_id, workspace_id, purpose, grant_id, grant_policy_version, grant_actor, granted_at, workspace_config, reward_policy_version, item_count, content_hash, status, created_at, updated_at FROM interaction_dag_training_manifest
+WHERE workspace_id = $1
+  AND ($2::text = '' OR purpose = $2)
+ORDER BY created_at DESC
+LIMIT $3
+`
+
+type ListTrainingManifestsParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	Purpose     string      `json:"purpose"`
+	LimitCount  int32       `json:"limit_count"`
+}
+
+func (q *Queries) ListTrainingManifests(ctx context.Context, arg ListTrainingManifestsParams) ([]InteractionDagTrainingManifest, error) {
+	rows, err := q.db.Query(ctx, listTrainingManifests, arg.WorkspaceID, arg.Purpose, arg.LimitCount)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []InteractionDagTrainingManifest{}
+	for rows.Next() {
+		var i InteractionDagTrainingManifest
+		if err := rows.Scan(
+			&i.ManifestID,
+			&i.WorkspaceID,
+			&i.Purpose,
+			&i.GrantID,
+			&i.GrantPolicyVersion,
+			&i.GrantActor,
+			&i.GrantedAt,
+			&i.WorkspaceConfig,
+			&i.RewardPolicyVersion,
+			&i.ItemCount,
+			&i.ContentHash,
+			&i.Status,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTrainingSegmentCandidates = `-- name: ListTrainingSegmentCandidates :many
+SELECT s.segment_id AS item_key,
+       s.workspace_id,
+       COALESCE(s.sanitizer_version, '') AS sanitizer_version,
+       COALESCE(s.policy_version, '') AS policy_version,
+       s.project_id_at_event,
+       s.channel_id_at_event,
+       s.run_agent_id,
+       COALESCE(s.task_id, '') AS task_id,
+       s.run_id,
+       encode(sha256(convert_to(s.trajectory::text, 'UTF8')), 'hex') AS item_hash,
+       (SELECT count(*) FROM interaction_dag_step_reward sr
+         WHERE sr.segment_id = s.segment_id) AS reward_revision
+FROM interaction_dag_segment s
+WHERE s.workspace_id = $1
+  AND s.publish_status = 'published'
+  AND s.content_status = 'published'
+  AND s.trainable_eligible
+  AND NOT s.derivative
+  AND s.retracted_at IS NULL
+  AND COALESCE(s.boundary_quality, 'exact') <> 'approximate'
+  AND EXISTS (
+    SELECT 1 FROM interaction_dag_step_reward sr
+    WHERE sr.segment_id = s.segment_id
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM interaction_dag_training_sample t
+    WHERE t.sample_kind = 'segment'
+      AND t.sample_key = s.segment_id
+      AND t.status IN ('selected', 'exported', 'execution_started', 'consumed')
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM interaction_dag_training_manifest_item i
+    WHERE i.item_kind = 'segment'
+      AND i.item_hash = encode(sha256(convert_to(s.trajectory::text, 'UTF8')), 'hex')
+  )
+ORDER BY s.published_at, s.segment_id
+LIMIT $2
+`
+
+type ListTrainingSegmentCandidatesParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	LimitCount  int32       `json:"limit_count"`
+}
+
+type ListTrainingSegmentCandidatesRow struct {
+	ItemKey          string      `json:"item_key"`
+	WorkspaceID      pgtype.UUID `json:"workspace_id"`
+	SanitizerVersion string      `json:"sanitizer_version"`
+	PolicyVersion    string      `json:"policy_version"`
+	ProjectIDAtEvent pgtype.UUID `json:"project_id_at_event"`
+	ChannelIDAtEvent pgtype.UUID `json:"channel_id_at_event"`
+	RunAgentID       pgtype.UUID `json:"run_agent_id"`
+	TaskID           string      `json:"task_id"`
+	RunID            pgtype.UUID `json:"run_id"`
+	ItemHash         string      `json:"item_hash"`
+	RewardRevision   int64       `json:"reward_revision"`
+}
+
+// Published, sanitized, non-derivative segments with an available reward,
+// excluding already-sampled segments and near-duplicate content hashes.
+// sha256/convert_to are PostgreSQL builtins, so the hash needs no extension.
+func (q *Queries) ListTrainingSegmentCandidates(ctx context.Context, arg ListTrainingSegmentCandidatesParams) ([]ListTrainingSegmentCandidatesRow, error) {
+	rows, err := q.db.Query(ctx, listTrainingSegmentCandidates, arg.WorkspaceID, arg.LimitCount)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListTrainingSegmentCandidatesRow{}
+	for rows.Next() {
+		var i ListTrainingSegmentCandidatesRow
+		if err := rows.Scan(
+			&i.ItemKey,
+			&i.WorkspaceID,
+			&i.SanitizerVersion,
+			&i.PolicyVersion,
+			&i.ProjectIDAtEvent,
+			&i.ChannelIDAtEvent,
+			&i.RunAgentID,
+			&i.TaskID,
+			&i.RunID,
+			&i.ItemHash,
+			&i.RewardRevision,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTrainingSegmentSelectionAudit = `-- name: ListTrainingSegmentSelectionAudit :many
+SELECT segment_id, derivative, publish_status, content_status, trainable_eligible,
+       (retracted_at IS NOT NULL) AS retracted,
+       COALESCE(boundary_quality, 'exact') AS boundary_quality,
+       EXISTS (
+         SELECT 1 FROM interaction_dag_step_reward sr
+         WHERE sr.segment_id = interaction_dag_segment.segment_id
+       ) AS reward_available,
+       EXISTS (
+         SELECT 1 FROM interaction_dag_training_sample t
+         WHERE t.sample_kind = 'segment'
+           AND t.sample_key = interaction_dag_segment.segment_id
+           AND t.status IN ('selected', 'exported', 'execution_started', 'consumed')
+       ) AS already_sampled
+FROM interaction_dag_segment
+WHERE interaction_dag_segment.workspace_id = $1
+ORDER BY segment_id
+`
+
+type ListTrainingSegmentSelectionAuditRow struct {
+	SegmentID         string      `json:"segment_id"`
+	Derivative        bool        `json:"derivative"`
+	PublishStatus     pgtype.Text `json:"publish_status"`
+	ContentStatus     string      `json:"content_status"`
+	TrainableEligible bool        `json:"trainable_eligible"`
+	Retracted         interface{} `json:"retracted"`
+	BoundaryQuality   string      `json:"boundary_quality"`
+	RewardAvailable   bool        `json:"reward_available"`
+	AlreadySampled    bool        `json:"already_sampled"`
+}
+
+// Every workspace segment with its exclusion classification inputs so the
+// selection report can state WHY a segment was not selected.
+func (q *Queries) ListTrainingSegmentSelectionAudit(ctx context.Context, workspaceID pgtype.UUID) ([]ListTrainingSegmentSelectionAuditRow, error) {
+	rows, err := q.db.Query(ctx, listTrainingSegmentSelectionAudit, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListTrainingSegmentSelectionAuditRow{}
+	for rows.Next() {
+		var i ListTrainingSegmentSelectionAuditRow
+		if err := rows.Scan(
+			&i.SegmentID,
+			&i.Derivative,
+			&i.PublishStatus,
+			&i.ContentStatus,
+			&i.TrainableEligible,
+			&i.Retracted,
+			&i.BoundaryQuality,
+			&i.RewardAvailable,
+			&i.AlreadySampled,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUniversalDAGEdgesAtWatermark = `-- name: ListUniversalDAGEdgesAtWatermark :many
 SELECT id, project_id, src_segment_id, dst_segment_id, type, created_at, workspace_id, edge_seq, trigger_message_id
 FROM interaction_dag_edge
@@ -2795,8 +4501,90 @@ func (q *Queries) ListUniversalDAGEdgesAtWatermark(ctx context.Context, arg List
 	return items, nil
 }
 
+const listUniversalDAGIssueSourceKeys = `-- name: ListUniversalDAGIssueSourceKeys :one
+SELECT COALESCE(array_agg(DISTINCT key), ARRAY[]::text[])::text[] AS keys
+FROM (
+    SELECT 'issue:' || $1::uuid::text AS key
+    UNION
+    SELECT 'task_output:' || event.id::text
+    FROM agent_inbox_event event
+    WHERE event.issue_id = $1
+      AND event.workspace_id = $2
+    UNION
+    SELECT 'comment:' || c.id::text
+    FROM comment c
+    WHERE c.issue_id = $1
+      AND c.workspace_id = $2
+    UNION
+    SELECT 'attachment:' || a.id::text
+    FROM attachment a
+    WHERE a.issue_id = $1
+      AND a.workspace_id = $2
+    UNION
+    SELECT 'attachment:' || a.id::text
+    FROM attachment a
+    JOIN comment c ON c.id = a.comment_id
+    WHERE c.issue_id = $1
+      AND c.workspace_id = $2
+) AS sources(key)
+`
+
+type ListUniversalDAGIssueSourceKeysParams struct {
+	IssueID     pgtype.UUID `json:"issue_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+// Task 8A issue-delete closure: every canonical memory source the issue's
+// cascade owns — the issue itself, its tasks (task_output), its comments,
+// and its attachments (issue-level and comment-level) — as "kind:id" keys
+// ready for the retraction fence.
+func (q *Queries) ListUniversalDAGIssueSourceKeys(ctx context.Context, arg ListUniversalDAGIssueSourceKeysParams) ([]string, error) {
+	row := q.db.QueryRow(ctx, listUniversalDAGIssueSourceKeys, arg.IssueID, arg.WorkspaceID)
+	var keys []string
+	err := row.Scan(&keys)
+	return keys, err
+}
+
+const listUniversalDAGProviderCallLinksByRun = `-- name: ListUniversalDAGProviderCallLinksByRun :many
+SELECT segment_id, provider_call_id, role, ordinal, run_id, run_agent_id, capture_id, created_at
+FROM interaction_dag_universal_provider_call
+WHERE run_id = $1
+ORDER BY run_agent_id, ordinal, provider_call_id
+`
+
+// Lists every canonical provider-call association of one dispatch run in a
+// deterministic order for frozen-projection mirroring.
+func (q *Queries) ListUniversalDAGProviderCallLinksByRun(ctx context.Context, runID pgtype.UUID) ([]InteractionDagUniversalProviderCall, error) {
+	rows, err := q.db.Query(ctx, listUniversalDAGProviderCallLinksByRun, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []InteractionDagUniversalProviderCall{}
+	for rows.Next() {
+		var i InteractionDagUniversalProviderCall
+		if err := rows.Scan(
+			&i.SegmentID,
+			&i.ProviderCallID,
+			&i.Role,
+			&i.Ordinal,
+			&i.RunID,
+			&i.RunAgentID,
+			&i.CaptureID,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUniversalDAGSegmentsByRun = `-- name: ListUniversalDAGSegmentsByRun :many
-SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, created_at, start_seq, end_seq, trajectory_source, trainable, trajectory, workspace_id, generation, project_id_at_event, channel_id_at_event, route_generation_at_event, memory_type_at_event, graph_projection_eligible_at_event, close_action_kind, canonical_action_id, visible_action_key, derivative, trainable_eligible, publish_status, content_status, publish_seq, sanitizer_version, policy_version, provider_capture_status, provider_capture_id, provider_capture_version, provider_capture_correlation_key, run_id, run_agent_id, published_at, retracted_at, updated_at
+SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, created_at, start_seq, end_seq, trajectory_source, trainable, trajectory, workspace_id, generation, project_id_at_event, channel_id_at_event, route_generation_at_event, memory_type_at_event, graph_projection_eligible_at_event, close_action_kind, canonical_action_id, visible_action_key, derivative, trainable_eligible, publish_status, content_status, publish_seq, sanitizer_version, policy_version, provider_capture_status, provider_capture_id, provider_capture_version, provider_capture_correlation_key, run_id, run_agent_id, published_at, retracted_at, updated_at, boundary_quality
 FROM interaction_dag_segment
 WHERE workspace_id = $1
   AND run_id = $2
@@ -2861,6 +4649,7 @@ func (q *Queries) ListUniversalDAGSegmentsByRun(ctx context.Context, arg ListUni
 			&i.PublishedAt,
 			&i.RetractedAt,
 			&i.UpdatedAt,
+			&i.BoundaryQuality,
 		); err != nil {
 			return nil, err
 		}
@@ -2873,7 +4662,7 @@ func (q *Queries) ListUniversalDAGSegmentsByRun(ctx context.Context, arg ListUni
 }
 
 const listUniversalDAGSegmentsByTask = `-- name: ListUniversalDAGSegmentsByTask :many
-SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, created_at, start_seq, end_seq, trajectory_source, trainable, trajectory, workspace_id, generation, project_id_at_event, channel_id_at_event, route_generation_at_event, memory_type_at_event, graph_projection_eligible_at_event, close_action_kind, canonical_action_id, visible_action_key, derivative, trainable_eligible, publish_status, content_status, publish_seq, sanitizer_version, policy_version, provider_capture_status, provider_capture_id, provider_capture_version, provider_capture_correlation_key, run_id, run_agent_id, published_at, retracted_at, updated_at
+SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, created_at, start_seq, end_seq, trajectory_source, trainable, trajectory, workspace_id, generation, project_id_at_event, channel_id_at_event, route_generation_at_event, memory_type_at_event, graph_projection_eligible_at_event, close_action_kind, canonical_action_id, visible_action_key, derivative, trainable_eligible, publish_status, content_status, publish_seq, sanitizer_version, policy_version, provider_capture_status, provider_capture_id, provider_capture_version, provider_capture_correlation_key, run_id, run_agent_id, published_at, retracted_at, updated_at, boundary_quality
 FROM interaction_dag_segment
 WHERE workspace_id = $1
   AND agent_run_id = $2
@@ -2937,10 +4726,45 @@ func (q *Queries) ListUniversalDAGSegmentsByTask(ctx context.Context, arg ListUn
 			&i.PublishedAt,
 			&i.RetractedAt,
 			&i.UpdatedAt,
+			&i.BoundaryQuality,
 		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUniversalDAGTaskSourcesForRun = `-- name: ListUniversalDAGTaskSourcesForRun :many
+SELECT DISTINCT agent_run_id
+FROM interaction_dag_segment
+WHERE workspace_id = $1
+  AND run_id = $2
+`
+
+type ListUniversalDAGTaskSourcesForRunParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	RunID       pgtype.UUID `json:"run_id"`
+}
+
+// Canonical task_output sources that fed one Mixed-RL run (run_id linkage
+// from the Task 3B canonical adapter): the read fence for offline resolve.
+func (q *Queries) ListUniversalDAGTaskSourcesForRun(ctx context.Context, arg ListUniversalDAGTaskSourcesForRunParams) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listUniversalDAGTaskSourcesForRun, arg.WorkspaceID, arg.RunID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var agent_run_id pgtype.UUID
+		if err := rows.Scan(&agent_run_id); err != nil {
+			return nil, err
+		}
+		items = append(items, agent_run_id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -3002,8 +4826,21 @@ func (q *Queries) LockUniversalDAGEdgeIdentity(ctx context.Context, arg LockUniv
 	return err
 }
 
+const lockUniversalDAGPublishSequence = `-- name: LockUniversalDAGPublishSequence :exec
+SELECT pg_advisory_xact_lock(
+  hashtext('universal-dag-publish-seq:' || $1)
+)
+`
+
+// Serializes per-workspace publish_seq allocation inside the outcome
+// transaction without a dedicated allocator table.
+func (q *Queries) LockUniversalDAGPublishSequence(ctx context.Context, workspaceKey pgtype.Text) error {
+	_, err := q.db.Exec(ctx, lockUniversalDAGPublishSequence, workspaceKey)
+	return err
+}
+
 const lockUniversalDAGSegmentForProviderCapture = `-- name: LockUniversalDAGSegmentForProviderCapture :one
-SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, created_at, start_seq, end_seq, trajectory_source, trainable, trajectory, workspace_id, generation, project_id_at_event, channel_id_at_event, route_generation_at_event, memory_type_at_event, graph_projection_eligible_at_event, close_action_kind, canonical_action_id, visible_action_key, derivative, trainable_eligible, publish_status, content_status, publish_seq, sanitizer_version, policy_version, provider_capture_status, provider_capture_id, provider_capture_version, provider_capture_correlation_key, run_id, run_agent_id, published_at, retracted_at, updated_at
+SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, created_at, start_seq, end_seq, trajectory_source, trainable, trajectory, workspace_id, generation, project_id_at_event, channel_id_at_event, route_generation_at_event, memory_type_at_event, graph_projection_eligible_at_event, close_action_kind, canonical_action_id, visible_action_key, derivative, trainable_eligible, publish_status, content_status, publish_seq, sanitizer_version, policy_version, provider_capture_status, provider_capture_id, provider_capture_version, provider_capture_correlation_key, run_id, run_agent_id, published_at, retracted_at, updated_at, boundary_quality
 FROM interaction_dag_segment
 WHERE segment_id = $1
   AND content_status <> 'legacy_unverified'
@@ -3056,6 +4893,7 @@ func (q *Queries) LockUniversalDAGSegmentForProviderCapture(ctx context.Context,
 		&i.PublishedAt,
 		&i.RetractedAt,
 		&i.UpdatedAt,
+		&i.BoundaryQuality,
 	)
 	return i, err
 }
@@ -3127,6 +4965,137 @@ func (q *Queries) MarkUniversalDAGProviderCaptureConflict(ctx context.Context, a
 	return err
 }
 
+const markUniversalDAGSegmentPublishProcessing = `-- name: MarkUniversalDAGSegmentPublishProcessing :execrows
+UPDATE interaction_dag_segment
+SET publish_status = 'processing', updated_at = now()
+WHERE workspace_id = $1
+  AND segment_id = $2
+  AND publish_status IN ('pending', 'retry')
+`
+
+type MarkUniversalDAGSegmentPublishProcessingParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	SegmentID   string      `json:"segment_id"`
+}
+
+// Mirrors an outbox claim onto the Segment publish lifecycle. Rows already
+// processing (stale-lease steal) legitimately affect zero rows.
+func (q *Queries) MarkUniversalDAGSegmentPublishProcessing(ctx context.Context, arg MarkUniversalDAGSegmentPublishProcessingParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markUniversalDAGSegmentPublishProcessing, arg.WorkspaceID, arg.SegmentID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const nextUniversalDAGPublishSeq = `-- name: NextUniversalDAGPublishSeq :one
+SELECT COALESCE(MAX(publish_seq), 0) + 1 AS next_publish_seq
+FROM interaction_dag_segment
+WHERE workspace_id = $1
+`
+
+func (q *Queries) NextUniversalDAGPublishSeq(ctx context.Context, workspaceID pgtype.UUID) (int32, error) {
+	row := q.db.QueryRow(ctx, nextUniversalDAGPublishSeq, workspaceID)
+	var next_publish_seq int32
+	err := row.Scan(&next_publish_seq)
+	return next_publish_seq, err
+}
+
+const optInPooledTrainingGrant = `-- name: OptInPooledTrainingGrant :execrows
+UPDATE interaction_dag_training_grant SET
+  pooled_status = 'active',
+  pooled_policy_version = pooled_policy_version + 1,
+  pooled_granted_by = $1,
+  pooled_granted_at = now(),
+  updated_at = now()
+WHERE workspace_id = $2
+  AND pooled_status IN ('disabled', 'revoked')
+  AND pooled_policy_version = $3
+`
+
+type OptInPooledTrainingGrantParams struct {
+	Actor           pgtype.Text `json:"actor"`
+	WorkspaceID     pgtype.UUID `json:"workspace_id"`
+	ExpectedVersion int64       `json:"expected_version"`
+}
+
+// Pooled training is always explicit opt-in (disabled or revoked -> active).
+func (q *Queries) OptInPooledTrainingGrant(ctx context.Context, arg OptInPooledTrainingGrantParams) (int64, error) {
+	result, err := q.db.Exec(ctx, optInPooledTrainingGrant, arg.Actor, arg.WorkspaceID, arg.ExpectedVersion)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const publishUniversalDAGPublishOutbox = `-- name: PublishUniversalDAGPublishOutbox :execrows
+UPDATE interaction_dag_publish_outbox
+SET status = 'published', lease_owner = NULL, lease_expires_at = NULL,
+    next_attempt_at = NULL, completed_at = now(), updated_at = now()
+WHERE workspace_id = $1
+  AND segment_id = $2
+  AND status = 'processing'
+`
+
+type PublishUniversalDAGPublishOutboxParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	SegmentID   string      `json:"segment_id"`
+}
+
+func (q *Queries) PublishUniversalDAGPublishOutbox(ctx context.Context, arg PublishUniversalDAGPublishOutboxParams) (int64, error) {
+	result, err := q.db.Exec(ctx, publishUniversalDAGPublishOutbox, arg.WorkspaceID, arg.SegmentID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const publishUniversalDAGSegment = `-- name: PublishUniversalDAGSegment :execrows
+UPDATE interaction_dag_segment
+SET publish_status = 'published',
+    publish_seq = $1,
+    published_at = now(),
+    trajectory = $2::jsonb,
+    sanitizer_version = NULLIF($3::text, ''),
+    policy_version = NULLIF($4::text, ''),
+    content_status = CASE
+      WHEN content_status = 'pending' THEN 'published'
+      ELSE content_status
+    END,
+    updated_at = now()
+WHERE workspace_id = $5
+  AND segment_id = $6
+  AND publish_status = 'processing'
+`
+
+type PublishUniversalDAGSegmentParams struct {
+	PublishSeq       pgtype.Int8 `json:"publish_seq"`
+	Trajectory       []byte      `json:"trajectory"`
+	SanitizerVersion string      `json:"sanitizer_version"`
+	PolicyVersion    string      `json:"policy_version"`
+	WorkspaceID      pgtype.UUID `json:"workspace_id"`
+	SegmentID        string      `json:"segment_id"`
+}
+
+// Completes the publish transaction: the sequence is allocated only here,
+// after the payload sink succeeded, together with the sanitized trajectory
+// document and its sanitizer/policy identity. Metadata-only Segments stay
+// empty ('[]'); a redaction failure never reaches this statement.
+func (q *Queries) PublishUniversalDAGSegment(ctx context.Context, arg PublishUniversalDAGSegmentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, publishUniversalDAGSegment,
+		arg.PublishSeq,
+		arg.Trajectory,
+		arg.SanitizerVersion,
+		arg.PolicyVersion,
+		arg.WorkspaceID,
+		arg.SegmentID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const recordMixedRLLateEvent = `-- name: RecordMixedRLLateEvent :exec
 INSERT INTO env_dispatch_run_audit_event (
   event_id, run_id, run_agent_id, turn_id, kind, reason, summary, snapshot_id
@@ -3158,6 +5127,131 @@ func (q *Queries) RecordMixedRLLateEvent(ctx context.Context, arg RecordMixedRLL
 		arg.SnapshotID,
 	)
 	return err
+}
+
+const requeueUniversalDAGPublishOutbox = `-- name: RequeueUniversalDAGPublishOutbox :execrows
+UPDATE interaction_dag_publish_outbox
+SET next_attempt_at = now(), updated_at = now()
+WHERE workspace_id = $1
+  AND segment_id = $2
+  AND status = 'retry'
+`
+
+type RequeueUniversalDAGPublishOutboxParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	SegmentID   string      `json:"segment_id"`
+}
+
+// DLQ replay for recoverable rows: pulls a retrying row's next attempt to now
+// without touching its attempt ledger.
+func (q *Queries) RequeueUniversalDAGPublishOutbox(ctx context.Context, arg RequeueUniversalDAGPublishOutboxParams) (int64, error) {
+	result, err := q.db.Exec(ctx, requeueUniversalDAGPublishOutbox, arg.WorkspaceID, arg.SegmentID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const retryUniversalDAGPublishOutbox = `-- name: RetryUniversalDAGPublishOutbox :execrows
+UPDATE interaction_dag_publish_outbox
+SET status = 'retry', attempts = attempts + 1,
+    lease_owner = NULL, lease_expires_at = NULL,
+    next_attempt_at = $1,
+    last_error = $2, updated_at = now()
+WHERE workspace_id = $3
+  AND segment_id = $4
+  AND status = 'processing'
+  AND attempts = $5
+`
+
+type RetryUniversalDAGPublishOutboxParams struct {
+	NextAttemptAt   pgtype.Timestamptz `json:"next_attempt_at"`
+	LastError       pgtype.Text        `json:"last_error"`
+	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
+	SegmentID       string             `json:"segment_id"`
+	CurrentAttempts int32              `json:"current_attempts"`
+}
+
+// Records one transient failure: attempts must advance by exactly one and the
+// lease is released. The attempts guard makes the increment a compare-and-swap
+// against concurrent lease stealers.
+func (q *Queries) RetryUniversalDAGPublishOutbox(ctx context.Context, arg RetryUniversalDAGPublishOutboxParams) (int64, error) {
+	result, err := q.db.Exec(ctx, retryUniversalDAGPublishOutbox,
+		arg.NextAttemptAt,
+		arg.LastError,
+		arg.WorkspaceID,
+		arg.SegmentID,
+		arg.CurrentAttempts,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const retryUniversalDAGSegment = `-- name: RetryUniversalDAGSegment :execrows
+UPDATE interaction_dag_segment
+SET publish_status = 'retry', updated_at = now()
+WHERE workspace_id = $1
+  AND segment_id = $2
+  AND publish_status = 'processing'
+`
+
+type RetryUniversalDAGSegmentParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	SegmentID   string      `json:"segment_id"`
+}
+
+func (q *Queries) RetryUniversalDAGSegment(ctx context.Context, arg RetryUniversalDAGSegmentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, retryUniversalDAGSegment, arg.WorkspaceID, arg.SegmentID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const revokePooledTrainingGrant = `-- name: RevokePooledTrainingGrant :execrows
+UPDATE interaction_dag_training_grant SET
+  pooled_status = 'revoked', updated_at = now()
+WHERE workspace_id = $1 AND pooled_status = 'active'
+`
+
+func (q *Queries) RevokePooledTrainingGrant(ctx context.Context, workspaceID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, revokePooledTrainingGrant, workspaceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const revokeTenantTrainingGrant = `-- name: RevokeTenantTrainingGrant :execrows
+UPDATE interaction_dag_training_grant SET
+  tenant_status = 'revoked', updated_at = now()
+WHERE workspace_id = $1 AND tenant_status = 'active'
+`
+
+func (q *Queries) RevokeTenantTrainingGrant(ctx context.Context, workspaceID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeTenantTrainingGrant, workspaceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const revokeTrainingSamplesForManifests = `-- name: RevokeTrainingSamplesForManifests :execrows
+UPDATE interaction_dag_training_sample SET
+  status = 'revoked', updated_at = now()
+WHERE manifest_id = ANY ($1::uuid[])
+  AND status IN ('eligible', 'selected', 'exported', 'execution_started')
+`
+
+// Unconsumed samples of the revoked purpose flip to revoked.
+func (q *Queries) RevokeTrainingSamplesForManifests(ctx context.Context, manifestIds []pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeTrainingSamplesForManifests, manifestIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const setInteractionDAGDiagnosisRunSandbox = `-- name: SetInteractionDAGDiagnosisRunSandbox :exec
@@ -3231,6 +5325,51 @@ func (q *Queries) SetInteractionDAGDiagnosisSegmentRewardCount(ctx context.Conte
 	return result.RowsAffected(), nil
 }
 
+const setMixedRLRunSegmentUniversalMapping = `-- name: SetMixedRLRunSegmentUniversalMapping :execrows
+UPDATE interaction_dag_run_segment
+SET universal_segment_id = $1
+WHERE run_id = $2
+  AND segment_id = $3
+  AND universal_segment_id IS NULL
+`
+
+type SetMixedRLRunSegmentUniversalMappingParams struct {
+	UniversalSegmentID pgtype.Text `json:"universal_segment_id"`
+	RunID              pgtype.UUID `json:"run_id"`
+	SegmentID          string      `json:"segment_id"`
+}
+
+// Adopts one legacy unmapped frozen row onto its canonical Segment. The
+// mapping is write-once: an already-mapped row is never rewritten.
+func (q *Queries) SetMixedRLRunSegmentUniversalMapping(ctx context.Context, arg SetMixedRLRunSegmentUniversalMappingParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setMixedRLRunSegmentUniversalMapping, arg.UniversalSegmentID, arg.RunID, arg.SegmentID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const stampTrainingReplayTaskExecution = `-- name: StampTrainingReplayTaskExecution :execrows
+UPDATE agent_inbox_event
+SET context = jsonb_set(context, '{training_execution,execution_id}', to_jsonb($1::text))
+WHERE id = $2
+`
+
+type StampTrainingReplayTaskExecutionParams struct {
+	ExecutionID string      `json:"execution_id"`
+	ID          pgtype.UUID `json:"id"`
+}
+
+// Writes the durable execution id into the replay task's context so the
+// session-open hook can authorize against the recorded identity.
+func (q *Queries) StampTrainingReplayTaskExecution(ctx context.Context, arg StampTrainingReplayTaskExecutionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, stampTrainingReplayTaskExecution, arg.ExecutionID, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const startInteractionDAGDiagnosisSegment = `-- name: StartInteractionDAGDiagnosisSegment :execrows
 UPDATE interaction_dag_diagnosis_segment
 SET status = 'in_progress', expected_message_count = $3, expected_reward_count = $4,
@@ -3263,6 +5402,149 @@ func (q *Queries) StartInteractionDAGDiagnosisSegment(ctx context.Context, arg S
 	return result.RowsAffected(), nil
 }
 
+const universalDAGPublishHealth = `-- name: UniversalDAGPublishHealth :one
+SELECT
+  count(*) FILTER (WHERE status = 'pending') AS pending_count,
+  count(*) FILTER (WHERE status = 'processing' AND lease_expires_at > now()) AS leased_count,
+  count(*) FILTER (WHERE status = 'processing' AND lease_expires_at <= now()) AS stale_leased_count,
+  count(*) FILTER (WHERE status = 'retry') AS retry_count,
+  count(*) FILTER (WHERE status = 'published') AS published_count,
+  count(*) FILTER (WHERE status = 'redaction_failed') AS redaction_failed_count,
+  count(*) FILTER (WHERE status = 'rejected_scope') AS rejected_scope_count,
+  count(*) FILTER (WHERE status = 'dead_letter') AS dead_letter_count,
+  count(*) FILTER (WHERE status = 'retracted') AS retracted_count
+FROM interaction_dag_publish_outbox
+`
+
+type UniversalDAGPublishHealthRow struct {
+	PendingCount         int64 `json:"pending_count"`
+	LeasedCount          int64 `json:"leased_count"`
+	StaleLeasedCount     int64 `json:"stale_leased_count"`
+	RetryCount           int64 `json:"retry_count"`
+	PublishedCount       int64 `json:"published_count"`
+	RedactionFailedCount int64 `json:"redaction_failed_count"`
+	RejectedScopeCount   int64 `json:"rejected_scope_count"`
+	DeadLetterCount      int64 `json:"dead_letter_count"`
+	RetractedCount       int64 `json:"retracted_count"`
+}
+
+// Aggregate outbox counters backing Workspace health reporting.
+func (q *Queries) UniversalDAGPublishHealth(ctx context.Context) (UniversalDAGPublishHealthRow, error) {
+	row := q.db.QueryRow(ctx, universalDAGPublishHealth)
+	var i UniversalDAGPublishHealthRow
+	err := row.Scan(
+		&i.PendingCount,
+		&i.LeasedCount,
+		&i.StaleLeasedCount,
+		&i.RetryCount,
+		&i.PublishedCount,
+		&i.RedactionFailedCount,
+		&i.RejectedScopeCount,
+		&i.DeadLetterCount,
+		&i.RetractedCount,
+	)
+	return i, err
+}
+
+const universalDAGSegmentTablePresent = `-- name: UniversalDAGSegmentTablePresent :one
+SELECT EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_name = 'interaction_dag_segment'
+      AND table_schema = ANY (current_schemas(false))
+) AS present
+`
+
+// Read-gate probe (Task 8A): reports whether the canonical segment table
+// resolves on the current search path. to_regclass returns NULL instead of
+// erroring, so the probe is safe inside an open transaction on schemas that
+// predate migration 454.
+func (q *Queries) UniversalDAGSegmentTablePresent(ctx context.Context) (bool, error) {
+	row := q.db.QueryRow(ctx, universalDAGSegmentTablePresent)
+	var present bool
+	err := row.Scan(&present)
+	return present, err
+}
+
+const universalDAGStorePresent = `-- name: UniversalDAGStorePresent :one
+SELECT EXISTS (
+  SELECT 1
+  FROM pg_catalog.pg_attribute AS attribute
+  JOIN pg_catalog.pg_class AS class ON class.oid = attribute.attrelid
+  JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
+  WHERE class.relname = 'interaction_dag_run_segment'
+    AND attribute.attname = 'universal_segment_id'
+    AND NOT attribute.attisdropped
+    AND namespace.nspname = ANY (string_to_array(current_setting('search_path'), ','))
+) AS store_present
+`
+
+// Reports whether the fully-projected canonical Universal DAG store exists in
+// this database. The migration 465 mapping column is the discriminator: the
+// legacy interaction_dag_segment table pre-dates 454 and still exists in
+// migrations-313..315 repository fixtures, whose frozen snapshots keep running
+// the legacy semantics instead of failing on a missing canonical source of
+// truth.
+func (q *Queries) UniversalDAGStorePresent(ctx context.Context) (bool, error) {
+	row := q.db.QueryRow(ctx, universalDAGStorePresent)
+	var store_present bool
+	err := row.Scan(&store_present)
+	return store_present, err
+}
+
+const updateTrainingGovernancePolicy = `-- name: UpdateTrainingGovernancePolicy :one
+UPDATE interaction_dag_training_policy SET
+  selection_enabled = COALESCE($1, selection_enabled),
+  execution_enabled = COALESCE($2, execution_enabled),
+  reward_policy_version = GREATEST(reward_policy_version,
+      COALESCE($3, reward_policy_version)),
+  per_agent_sample_cap = COALESCE($4, per_agent_sample_cap),
+  per_channel_sample_cap = COALESCE($5, per_channel_sample_cap),
+  per_workspace_sample_cap = COALESCE($6, per_workspace_sample_cap),
+  updated_by = $7,
+  updated_at = now()
+WHERE id = 1
+RETURNING id, selection_enabled, execution_enabled, reward_policy_version,
+          per_agent_sample_cap, per_channel_sample_cap, per_workspace_sample_cap,
+          updated_by, updated_at
+`
+
+type UpdateTrainingGovernancePolicyParams struct {
+	SelectionEnabled      pgtype.Bool `json:"selection_enabled"`
+	ExecutionEnabled      pgtype.Bool `json:"execution_enabled"`
+	RewardPolicyVersion   pgtype.Int8 `json:"reward_policy_version"`
+	PerAgentSampleCap     pgtype.Int4 `json:"per_agent_sample_cap"`
+	PerChannelSampleCap   pgtype.Int4 `json:"per_channel_sample_cap"`
+	PerWorkspaceSampleCap pgtype.Int4 `json:"per_workspace_sample_cap"`
+	UpdatedBy             pgtype.Text `json:"updated_by"`
+}
+
+// Partial update of the global switches/caps; NULL fields keep their value
+// and the reward policy version is monotonic (it can only move forward).
+func (q *Queries) UpdateTrainingGovernancePolicy(ctx context.Context, arg UpdateTrainingGovernancePolicyParams) (InteractionDagTrainingPolicy, error) {
+	row := q.db.QueryRow(ctx, updateTrainingGovernancePolicy,
+		arg.SelectionEnabled,
+		arg.ExecutionEnabled,
+		arg.RewardPolicyVersion,
+		arg.PerAgentSampleCap,
+		arg.PerChannelSampleCap,
+		arg.PerWorkspaceSampleCap,
+		arg.UpdatedBy,
+	)
+	var i InteractionDagTrainingPolicy
+	err := row.Scan(
+		&i.ID,
+		&i.SelectionEnabled,
+		&i.ExecutionEnabled,
+		&i.RewardPolicyVersion,
+		&i.PerAgentSampleCap,
+		&i.PerChannelSampleCap,
+		&i.PerWorkspaceSampleCap,
+		&i.UpdatedBy,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const upsertInteractionDAGSessionRun = `-- name: UpsertInteractionDAGSessionRun :exec
 INSERT INTO interaction_dag_session_run (session_id, project_id, agent_run_id, issue_id)
 VALUES ($1, $2, $3, $4)
@@ -3289,6 +5571,120 @@ func (q *Queries) UpsertInteractionDAGSessionRun(ctx context.Context, arg Upsert
 		arg.AgentRunID,
 		arg.IssueID,
 	)
+	return err
+}
+
+const upsertMixedRLRunSegmentWithMapping = `-- name: UpsertMixedRLRunSegmentWithMapping :one
+INSERT INTO interaction_dag_run_segment (
+  segment_id, snapshot_id, run_id, run_agent_id, kind,
+  canonical_action_id, segment_ordinal, reward, reward_source,
+  provisional_at, finalized_at, universal_segment_id
+) VALUES (
+  $1, NULLIF($2, ''), $3,
+  $4, $5, $6,
+  $7, $8,
+  NULLIF($9, ''), $10,
+  $11, $12
+)
+ON CONFLICT (run_id, segment_id) DO UPDATE SET
+  universal_segment_id = COALESCE(
+    interaction_dag_run_segment.universal_segment_id,
+    EXCLUDED.universal_segment_id
+  )
+RETURNING segment_id, snapshot_id, run_id, run_agent_id, kind,
+          canonical_action_id, segment_ordinal, reward, reward_source,
+          provisional_at, finalized_at, universal_segment_id
+`
+
+type UpsertMixedRLRunSegmentWithMappingParams struct {
+	SegmentID          string             `json:"segment_id"`
+	SnapshotID         interface{}        `json:"snapshot_id"`
+	RunID              pgtype.UUID        `json:"run_id"`
+	RunAgentID         pgtype.UUID        `json:"run_agent_id"`
+	Kind               string             `json:"kind"`
+	CanonicalActionID  pgtype.UUID        `json:"canonical_action_id"`
+	SegmentOrdinal     int64              `json:"segment_ordinal"`
+	Reward             pgtype.Float8      `json:"reward"`
+	RewardSource       interface{}        `json:"reward_source"`
+	ProvisionalAt      pgtype.Timestamptz `json:"provisional_at"`
+	FinalizedAt        pgtype.Timestamptz `json:"finalized_at"`
+	UniversalSegmentID pgtype.Text        `json:"universal_segment_id"`
+}
+
+// Projects one frozen run-segment row in its canonical form. Re-projecting
+// the same identity is an idempotent no-op; the canonical mapping column is
+// write-once. Only valid on schemas that carry migration 465.
+func (q *Queries) UpsertMixedRLRunSegmentWithMapping(ctx context.Context, arg UpsertMixedRLRunSegmentWithMappingParams) (InteractionDagRunSegment, error) {
+	row := q.db.QueryRow(ctx, upsertMixedRLRunSegmentWithMapping,
+		arg.SegmentID,
+		arg.SnapshotID,
+		arg.RunID,
+		arg.RunAgentID,
+		arg.Kind,
+		arg.CanonicalActionID,
+		arg.SegmentOrdinal,
+		arg.Reward,
+		arg.RewardSource,
+		arg.ProvisionalAt,
+		arg.FinalizedAt,
+		arg.UniversalSegmentID,
+	)
+	var i InteractionDagRunSegment
+	err := row.Scan(
+		&i.SegmentID,
+		&i.SnapshotID,
+		&i.RunID,
+		&i.RunAgentID,
+		&i.Kind,
+		&i.CanonicalActionID,
+		&i.SegmentOrdinal,
+		&i.Reward,
+		&i.RewardSource,
+		&i.ProvisionalAt,
+		&i.FinalizedAt,
+		&i.UniversalSegmentID,
+	)
+	return i, err
+}
+
+const upsertUniversalDAGAtomProvenance = `-- name: UpsertUniversalDAGAtomProvenance :execrows
+INSERT INTO memory_source_provenance (workspace_id, source_kind, source_id, consumer_kind, consumer_id)
+SELECT $1, 'task_output', $2, 'graph_memory_atom', t.atom_id
+FROM unnest($3::text[]) AS t(atom_id)
+ON CONFLICT DO NOTHING
+`
+
+type UpsertUniversalDAGAtomProvenanceParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	SourceID    string      `json:"source_id"`
+	AtomIds     []string    `json:"atom_ids"`
+}
+
+// The publish transaction records the reverse provenance from the source to
+// every atom it produced, so retraction can quarantine the exact closure.
+func (q *Queries) UpsertUniversalDAGAtomProvenance(ctx context.Context, arg UpsertUniversalDAGAtomProvenanceParams) (int64, error) {
+	result, err := q.db.Exec(ctx, upsertUniversalDAGAtomProvenance, arg.WorkspaceID, arg.SourceID, arg.AtomIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const upsertUniversalDAGSourceGuard = `-- name: UpsertUniversalDAGSourceGuard :exec
+INSERT INTO memory_source_guard (workspace_id, source_kind, source_id)
+VALUES ($1, 'task_output', $2)
+ON CONFLICT (workspace_id, source_kind, source_id) DO NOTHING
+`
+
+type UpsertUniversalDAGSourceGuardParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	SourceID    string      `json:"source_id"`
+}
+
+// The publish transaction upserts a guard row for the segment's canonical
+// task_output source (Task 8A: future publishes maintain the fence set).
+func (q *Queries) UpsertUniversalDAGSourceGuard(ctx context.Context, arg UpsertUniversalDAGSourceGuardParams) error {
+	_, err := q.db.Exec(ctx, upsertUniversalDAGSourceGuard, arg.WorkspaceID, arg.SourceID)
 	return err
 }
 

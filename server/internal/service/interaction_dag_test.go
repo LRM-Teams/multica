@@ -1073,6 +1073,7 @@ func newCanonicalInteractionDAGQueries(t *testing.T) (context.Context, *db.Queri
 		t.Fatalf("create pre-454 schema: %v", err)
 	}
 	applyUniversalDAGMigrationIfPresent(t, ctx, conn)
+	applyUniversalDAGLegacyBackfillMarker(t, ctx, conn)
 	seedUniversalDAGCanonicalOwners(t, ctx, conn)
 	return ctx, db.New(conn)
 }

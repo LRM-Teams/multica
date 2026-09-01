@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/multica-ai/multica/server/internal/util"
@@ -88,6 +89,22 @@ func ResolveChannelRoute(ctx context.Context, pool *pgxpool.Pool, workspaceID, c
 	}
 	boundProjectID := util.UUIDToString(binding) // "" when the binding is NULL
 
+	resolution, err := resolveChannelRouteLocked(ctx, q, wsUUID, chUUID, boundProjectID)
+	if err != nil {
+		return GraphRouteResolution{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return GraphRouteResolution{}, err
+	}
+	return resolution, nil
+}
+
+// resolveChannelRouteLocked applies the spec §4 transition for the binding
+// the caller supplies and persists route + lineage. The caller owns the
+// transaction and must already hold the channel row lock; the binding
+// service reuses this to switch the write owner in the same transaction as
+// the channel.project_id update (Task 16).
+func resolveChannelRouteLocked(ctx context.Context, q *db.Queries, wsUUID, chUUID pgtype.UUID, boundProjectID string) (GraphRouteResolution, error) {
 	cur := graphRouteState{}
 	route, err := q.GetGraphMemoryChannelRouteForUpdate(ctx, db.GetGraphMemoryChannelRouteForUpdateParams{ChannelID: chUUID, WorkspaceID: wsUUID})
 	switch {
@@ -104,7 +121,7 @@ func ResolveChannelRoute(ctx context.Context, pool *pgxpool.Pool, workspaceID, c
 		return GraphRouteResolution{}, err
 	}
 
-	next, closeCurrent, appendLineage := resolveChannelRouteTransition(cur, channelID, boundProjectID)
+	next, closeCurrent, appendLineage := resolveChannelRouteTransition(cur, chUUID.String(), boundProjectID)
 	if closeCurrent {
 		if err := q.CloseGraphMemoryChannelLineage(ctx, db.CloseGraphMemoryChannelLineageParams{ChannelID: chUUID, Generation: cur.generation}); err != nil {
 			return GraphRouteResolution{}, fmt.Errorf("graph_lineage_conflict: close generation: %w", err)
@@ -137,9 +154,6 @@ func ResolveChannelRoute(ctx context.Context, pool *pgxpool.Pool, workspaceID, c
 		}); err != nil {
 			return GraphRouteResolution{}, fmt.Errorf("graph_lineage_conflict: append lineage: %w", err)
 		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return GraphRouteResolution{}, err
 	}
 	return GraphRouteResolution{
 		RoutingMode:  next.routingMode,

@@ -85,32 +85,59 @@ func TestApplyDiveResultGradesAndRewards(t *testing.T) {
 
 	type row struct {
 		diveStatus                    string
+		rewardStatus                  string
+		rewardRevision                int
 		relevance, groundedness, comp *float64
 		overall, reward               *float64
 	}
 	read := func(tid string) row {
 		var r row
 		if err := testPool.QueryRow(ctx, `
-			SELECT dive_status, score_relevance, score_groundedness, score_completeness, overall_score, reward
+			SELECT dive_status, reward_status, reward_revision,
+			       score_relevance, score_groundedness, score_completeness, overall_score, reward
 			FROM graph_memory_trajectory WHERE id = $1
-		`, tid).Scan(&r.diveStatus, &r.relevance, &r.groundedness, &r.comp, &r.overall, &r.reward); err != nil {
+		`, tid).Scan(&r.diveStatus, &r.rewardStatus, &r.rewardRevision,
+			&r.relevance, &r.groundedness, &r.comp, &r.overall, &r.reward); err != nil {
 			t.Fatal(err)
 		}
 		return r
 	}
 
 	r1 := read(t1)
-	if r1.diveStatus != "graded" || r1.relevance == nil || *r1.relevance != 0.9 ||
+	if r1.diveStatus != "graded" || r1.rewardStatus != "graded" || r1.rewardRevision != 1 ||
+		r1.relevance == nil || *r1.relevance != 0.9 ||
 		r1.overall == nil || *r1.overall != 0.4 || r1.reward == nil || *r1.reward < 0.1-1e-9 || *r1.reward > 0.1+1e-9 {
-		t.Fatalf("t1 row = %+v, want graded/0.9 dims/overall 0.4/reward 0.1", r1)
+		t.Fatalf("t1 row = %+v, want graded/rev 1/0.9 dims/overall 0.4/reward 0.1", r1)
 	}
 	r2 := read(t2)
-	if r2.diveStatus != "graded" || r2.reward == nil || *r2.reward < -0.3-1e-9 || *r2.reward > -0.3+1e-9 {
-		t.Fatalf("t2 row = %+v, want graded with reward −0.3 (negative allowed)", r2)
+	if r2.diveStatus != "graded" || r2.rewardStatus != "graded" || r2.rewardRevision != 1 ||
+		r2.reward == nil || *r2.reward < -0.3-1e-9 || *r2.reward > -0.3+1e-9 {
+		t.Fatalf("t2 row = %+v, want graded/rev 1 with reward −0.3 (negative allowed)", r2)
 	}
 	r3 := read(t3)
-	if r3.diveStatus != "bypassed" || r3.reward == nil || *r3.reward != 0 || r3.overall != nil {
-		t.Fatalf("t3 row = %+v, want bypassed/reward 0/no scores", r3)
+	// Task 19: the explore agent's own terminal violation is a deterministic
+	// negative, never a neutral 0; no scores are graded.
+	wantBypass := memorygraph.DeterministicViolationReward(0.1, 0)
+	if r3.diveStatus != "bypassed" || r3.rewardStatus != "deterministic" || r3.rewardRevision != 1 ||
+		r3.reward == nil || *r3.reward < wantBypass-1e-9 || *r3.reward > wantBypass+1e-9 || r3.overall != nil {
+		t.Fatalf("t3 row = %+v, want bypassed/deterministic %v/no scores", r3, wantBypass)
+	}
+
+	// Every trajectory carries its immutable ledger revision, graded and
+	// deterministic values alike (Task 19 spec 14.2/14.4).
+	for i, tid := range []string{t1, t2, t3} {
+		var status string
+		var value *float64
+		var policy string
+		if err := testPool.QueryRow(ctx, `
+			SELECT status, value, policy_version FROM graph_memory_reward_record
+			WHERE trajectory_id = $1 AND reward_kind = 'explore' AND revision = 1
+		`, tid).Scan(&status, &value, &policy); err != nil {
+			t.Fatalf("t%d ledger record: %v", i+1, err)
+		}
+		if status != "available" || value == nil || policy != memorygraph.ExploreRewardPolicyVersion {
+			t.Fatalf("t%d ledger record = (%q, %v, %q), want available value/explore policy", i+1, status, value, policy)
+		}
 	}
 
 	// Completion follows application so online-RL reward outboxing can be

@@ -1595,11 +1595,33 @@ func (h *Handler) DeleteComment(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("cancel tasks for deleted trigger comment failed", append(logger.RequestAttrs(r), "error", err, "comment_id", commentId)...)
 	}
 
-	if err := h.Queries.DeleteComment(r.Context(), db.DeleteCommentParams{
+	// Task 8A: the tombstone and the memory retraction fence commit in one
+	// transaction — fencing failure fails the deletion, and a deletion
+	// failure leaves no fence behind.
+	tx, err := h.beginMemoryRetractionTx(r.Context())
+	if err != nil {
+		slog.Warn("begin comment delete transaction failed", append(logger.RequestAttrs(r), "error", err, "comment_id", commentId)...)
+		writeError(w, http.StatusInternalServerError, "failed to delete comment")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	if err := h.fenceMemorySourcesTx(r.Context(), tx, comment.WorkspaceID,
+		[]service.MemorySourceRef{memorySourceRef(comment.WorkspaceID, service.MemorySourceComment, comment.ID)},
+		actorType+":"+actorID, "comment deleted"); err != nil {
+		slog.Warn("fence comment memory sources failed", append(logger.RequestAttrs(r), "error", err, "comment_id", commentId)...)
+		writeError(w, http.StatusInternalServerError, "failed to delete comment")
+		return
+	}
+	if err := db.New(tx).DeleteComment(r.Context(), db.DeleteCommentParams{
 		ID:          comment.ID,
 		WorkspaceID: comment.WorkspaceID,
 	}); err != nil {
 		slog.Warn("delete comment failed", append(logger.RequestAttrs(r), "error", err, "comment_id", commentId)...)
+		writeError(w, http.StatusInternalServerError, "failed to delete comment")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		slog.Warn("commit comment delete failed", append(logger.RequestAttrs(r), "error", err, "comment_id", commentId)...)
 		writeError(w, http.StatusInternalServerError, "failed to delete comment")
 		return
 	}

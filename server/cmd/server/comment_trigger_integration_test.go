@@ -85,11 +85,30 @@ func countPendingTasks(t *testing.T, issueID string) int {
 }
 
 // clearTasks deletes all tasks for an issue (cleanup between subtests).
+// The Segment ledger is the durable record of a Task and deliberately blocks
+// task hard-deletes (RESTRICT FKs plus the append-only guard trigger), so a
+// fixture cleanup that wants the rows gone runs in one transaction under
+// session_replication_role=replica, which suspends trigger and FK
+// enforcement for exactly this transaction. Production paths never
+// hard-delete tasks and are unaffected.
 func clearTasks(t *testing.T, issueID string) {
 	t.Helper()
-	_, err := testPool.Exec(context.Background(),
-		`DELETE FROM agent_inbox_event WHERE issue_id = $1`, issueID)
+	ctx := context.Background()
+	tx, err := testPool.Begin(ctx)
 	if err != nil {
+		t.Fatalf("failed to clear tasks: %v", err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
+		tx.Rollback(ctx)
+		t.Fatalf("failed to clear tasks: %v", err)
+	}
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM agent_inbox_event WHERE issue_id = $1`, issueID); err != nil {
+		tx.Rollback(ctx)
+		t.Fatalf("failed to clear tasks: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
 		t.Fatalf("failed to clear tasks: %v", err)
 	}
 }

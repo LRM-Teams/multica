@@ -892,6 +892,17 @@
     "citations": "Memory sources",
     "citation_version": "Graph v{version}",
     "citation_loading": "Loading sources…",
-    "citation_empty": "No source snapshots are available"
+    "citation_empty": "No source snapshots are available",
+    "citation_class_consolidated": "Consolidated memory",
+    "citation_class_recent_unreviewed": "Recent unreviewed observation",
+    "citation_class_historical": "Historical/superseded evidence",
+    "citation_class_restricted": "Restricted source",
+    "citation_class_retracted": "Retracted source",
+    "citation_restricted_note": "Details withheld for this restricted source.",
+    "citation_retracted_note": "This source was retracted; its content is unavailable.",
+    "migration_title": "Memory migration",
+    "migration_phase": "Phase: {phase}",
+    "migration_generation": "Generation {generation}",
+    "migration_copied": "{count} atoms copied"
   }
 }

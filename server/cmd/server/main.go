@@ -391,11 +391,25 @@ func main() {
 	tc := service.LoadTrainingConfig()
 	var rlSvc *service.GraphMemoryRLSessionService
 	var rewardSink *arealrl.RewardSink
+	// Task 18: training governance owns every training-data consumer. The
+	// global shadow/calibration switches start OFF (migration 472), so no
+	// session opens for source tasks and no reward reaches AReaL until
+	// execution is explicitly enabled.
+	trainingGovernance := service.NewTrainingGovernanceService(pool, nil)
 	if tc.BridgeStubURL != "" {
 		arealClient := arealrl.New(tc.BridgeStubURL, tc.AdminAPIKey)
 		rlSvc = service.NewGraphMemoryRLSessionService(pool, arealClient, arealClient)
-		rewardSink = arealrl.NewRewardSink(rlSvc, arealClient)
-		taskSvc.WithTraining(service.NewTrainingSessionDeps(tc, queries))
+		rewardSink = arealrl.NewRewardSink(rlSvc, arealClient,
+			arealrl.WithRewardSinkExecutionGate(func(ctx context.Context) (bool, error) {
+				policy, err := trainingGovernance.TrainingPolicy(ctx)
+				if err != nil {
+					return false, err
+				}
+				return policy.ExecutionEnabled, nil
+			}))
+		trainingDeps := service.NewTrainingSessionDeps(tc, queries)
+		trainingDeps.Governance = trainingGovernance
+		taskSvc.WithTraining(trainingDeps)
 		slog.Info("training bridge configured", "stub_url", tc.BridgeStubURL)
 	} else {
 		slog.Info("training bridge not configured (AREAL_BRIDGE_STUB_URL unset) — training hooks disabled")
@@ -417,11 +431,12 @@ func main() {
 		},
 	)
 
-	// Graph memory reviewer activation (design §5.1, review P0-1): the
-	// ingest hook routes closed interaction-dag segments into the
-	// per-workspace memory_graph staging area. Nil-safe per workspace (no
-	// memory_graph dir -> skip).
-	taskSvc.SetSegmentIngestHook(service.NewGraphMemoryIngestHook(queries, pool, "", businessMetrics))
+	// Graph memory projection (Task 8): the best-effort segment-ingest hook
+	// is RETIRED as a production path — no live writes flow through
+	// SetSegmentIngestHook anymore. Closed segments reach the per-workspace
+	// memory_graph staging exclusively through the durable pipeline:
+	// publisher (sanitized payload + atoms + projection request) ->
+	// graph_memory_projection_outbox -> GraphMemoryProjectionJob below.
 	// Server-authoritative graph memory recall (spec §1/§3/§14): the daemon
 	// recall endpoint resolves identity/scope/version/K server-side and
 	// answers 202 only after the durable ledger commit. The env default
@@ -539,6 +554,33 @@ func main() {
 		} else {
 			schedulerRegistered = true
 		}
+	}
+	// The canonical interaction DAG publish outbox drains independently of the
+	// Graph read paths: the job only advances the durable migration 454
+	// lifecycle and reports aggregate health counters (spec 7.1/7.2).
+	interactionDAGPublisher := service.NewInteractionDAGPublisher(pool)
+	if err := schedulerMgr.Register(scheduler.InteractionDAGPublishJob(pool, interactionDAGPublisher)); err != nil {
+		slog.Warn("scheduler: failed to register interaction DAG publish job", "error", err)
+	} else {
+		schedulerRegistered = true
+	}
+	// Task 22: approximate historical backfill — the last rollout step
+	// (spec §19.11). Runs only behind the final shadow gate, rate-limited
+	// independently of the realtime publish pipeline.
+	legacyBackfill := service.NewLegacyBackfillService(pool, service.NewShadowGateService(pool))
+	if err := schedulerMgr.Register(scheduler.LegacyBackfillJob(pool, legacyBackfill)); err != nil {
+		slog.Warn("scheduler: failed to register interaction DAG legacy backfill job", "error", err)
+	} else {
+		schedulerRegistered = true
+	}
+	// Event-time graph projection (Task 8): drains the Task 7 projection
+	// outbox through leases — the only production availability path for
+	// graph writes. No fallback scanner exists.
+	graphMemoryProjector := service.NewGraphMemoryProjector(pool)
+	if err := schedulerMgr.Register(scheduler.GraphMemoryProjectionJob(pool, graphMemoryProjector)); err != nil {
+		slog.Warn("scheduler: failed to register graph memory projection job", "error", err)
+	} else {
+		schedulerRegistered = true
 	}
 	if err := schedulerMgr.Register(scheduler.ChannelVoiceTranscriptionJob(h)); err != nil {
 		slog.Warn("scheduler: failed to register channel voice transcription job", "error", err)

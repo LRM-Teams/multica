@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -193,7 +194,17 @@ func (h *Handler) bootstrapChannelGoalControlPlane(
 		resourceCreated = true
 	}
 	if !boundProjectID.Valid {
-		if _, err := tx.Exec(r.Context(), `UPDATE channel SET project_id=$1, updated_at=now() WHERE workspace_id=$2 AND id=$3`, project.ID, workspaceID, channelID); err != nil {
+		// Task 16: the binding service owns the channel.project_id write —
+		// composed into this transaction so project creation, resource
+		// attachment, route switch, and binding stay atomic.
+		if h.ChannelProjectBindings == nil {
+			writeError(w, http.StatusServiceUnavailable, "channel project binding is not configured")
+			return nil
+		}
+		if _, err := h.ChannelProjectBindings.SetChannelProjectTx(r.Context(), tx, service.ChannelProjectBindingParams{
+			WorkspaceID: workspaceID, ChannelID: channelID,
+			NewProjectID: project.ID, Actor: actorType + ":" + actorID.String(),
+		}); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to bind project to channel")
 			return nil
 		}

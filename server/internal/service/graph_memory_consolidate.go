@@ -145,3 +145,10 @@ func graphMemoryPIBackend(policy ResolvedMemoryProvider) (memorygraph.AgentBacke
 	}
 	return backend, nil
 }
+
+// GraphMemoryWorkspacesRootPath exposes the graph workspaces root for
+// cross-package wiring (handler/scheduler) without duplicating the env
+// resolution.
+func GraphMemoryWorkspacesRootPath() (string, error) {
+	return graphMemoryWorkspacesRoot()
+}

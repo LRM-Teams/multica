@@ -16,6 +16,7 @@ to these sources.
 | Atomic per-collector pack write | `mergeNotePeriodBriefCollector`; await matches `pack_job_id` |
 | Narrow retry API | `POST /api/agent/notes/period-briefs/{draftPageId}/retry-collectors` → `RetryAgentNotePeriodBriefCollectors` |
 | Collector submit-pack API | `POST /api/agent/notes/period-briefs/{draftPageId}/submit-pack` → `SubmitAgentNotePeriodBriefPack` |
+| Human stop cancels the run | `POST /api/notes/period-briefs/{runId}/cancel` → `CancelNotePeriodBrief`; pack/retry 409 after `cancelled` |
 | CLI | `multica notes period-brief retry-collectors` → `server/cmd/multica/cmd_notes.go` |
 | Optional human focus + collect plan | `normalizePeriodBriefUserFocus`; `applyNotePeriodBriefCollectPlan`; `<focus>` in `buildNotePeriodBriefPrompt` |
 | Collect-plan wake (earlier) | `multica-period-work-plan`; `submit-collect-plan` |

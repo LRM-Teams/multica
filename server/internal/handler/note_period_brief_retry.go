@@ -73,6 +73,10 @@ func (h *Handler) RetryAgentNotePeriodBriefCollectors(w http.ResponseWriter, r *
 		writeError(w, http.StatusForbidden, "only the Period Brief synthesizer for this draft may retry collectors")
 		return
 	}
+	if !periodBriefRunLocksComposerStatus(run.Status) {
+		writeError(w, http.StatusConflict, "period brief run is not running")
+		return
+	}
 
 	// Authorization is synthesizer_agent_id on the run — not Notes page ACL.
 	// Durable agent_credential tokens have no TaskID and cannot pass

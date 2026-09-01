@@ -1285,6 +1285,15 @@ export class ApiClient {
     });
   }
 
+  async cancelNotePeriodBrief(runId: string): Promise<NotePeriodBriefActiveResponse> {
+    const raw = await this.fetch<unknown>(`/api/notes/period-briefs/${runId}/cancel`, {
+      method: "POST",
+    });
+    return parseWithFallback(raw, NotePeriodBriefActiveResponseSchema, EMPTY_NOTE_PERIOD_BRIEF_ACTIVE, {
+      endpoint: "POST /api/notes/period-briefs/{runId}/cancel",
+    });
+  }
+
   async insertNotePeriodBrief(
     runId: string,
     data: InsertNotePeriodBriefRequest,

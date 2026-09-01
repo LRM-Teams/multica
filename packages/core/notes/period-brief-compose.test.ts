@@ -119,5 +119,6 @@ describe("periodBriefRunLocksComposer", () => {
     expect(periodBriefRunLocksComposer("synthesizing")).toBe(true);
     expect(periodBriefRunLocksComposer("awaiting_confirm")).toBe(false);
     expect(periodBriefRunLocksComposer("done")).toBe(false);
+    expect(periodBriefRunLocksComposer("cancelled")).toBe(false);
   });
 });

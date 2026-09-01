@@ -297,7 +297,8 @@ export type NotePeriodBriefRunStatus =
   | "collecting"
   | "synthesizing"
   | "awaiting_confirm"
-  | "done";
+  | "done"
+  | "cancelled";
 
 export interface NotePeriodBriefActiveRun {
   id: string;

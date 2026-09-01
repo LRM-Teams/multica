@@ -31,6 +31,32 @@ describe("ApiClient", () => {
     );
   });
 
+  it("cancels an in-flight Period Brief run", async () => {
+    const response = {
+      run: {
+        id: "run-1",
+        status: "cancelled",
+        draft_page_id: "draft-1",
+        chat_session_id: "",
+        source_page_id: "",
+      },
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.cancelNotePeriodBrief("run-1")).resolves.toEqual(response);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.test/api/notes/period-briefs/run-1/cancel",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
   it("updates multiple Agent runtime configs with one request", async () => {
     const response = { updated_agent_ids: ["agent-1", "agent-2"] };
     const fetchMock = vi.fn().mockResolvedValue(

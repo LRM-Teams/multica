@@ -564,10 +564,15 @@ UPDATE note_page SET content = $1, updated_at = now(), updated_by = $2 WHERE id 
 	draft.Content = content
 
 	retryOnly := !periodBriefAllCollectorResultsFinal(packResults)
-	if run, err := h.loadNotePeriodBriefRunByDraft(ctx, workspaceID, draft.ID); err == nil {
-		_ = h.updateNotePeriodBriefRunStatus(ctx, run.ID, "synthesizing")
-		h.postPeriodBriefBubbleProgress(ctx, run, userIDString, periodBriefMaterialsProgressCopy(packResults))
+	run, err := h.loadNotePeriodBriefRunByDraft(ctx, workspaceID, draft.ID)
+	if err != nil || !periodBriefRunLocksComposerStatus(run.Status) {
+		return
 	}
+	advanced, advErr := h.tryAdvancePeriodBriefRunStatus(ctx, run.ID, "synthesizing")
+	if advErr != nil || !advanced {
+		return
+	}
+	h.postPeriodBriefBubbleProgress(ctx, run, userIDString, periodBriefMaterialsProgressCopy(packResults))
 
 	agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: agentID, WorkspaceID: workspaceID})
 	if err != nil || agent.ArchivedAt.Valid {
@@ -640,10 +645,17 @@ UPDATE note_page SET content = $1, updated_at = now(), updated_by = $2 WHERE id 
 	draft.Content = content
 
 	retryOnly := !periodBriefAllCollectorResultsFinal(packResults)
-	if run, loadErr := h.loadNotePeriodBriefRunByDraft(r.Context(), workspaceID, draft.ID); loadErr == nil {
-		_ = h.updateNotePeriodBriefRunStatus(r.Context(), run.ID, "synthesizing")
-		h.postPeriodBriefBubbleProgress(r.Context(), run, userIDString, periodBriefMaterialsProgressCopy(packResults))
+	run, loadErr := h.loadNotePeriodBriefRunByDraft(r.Context(), workspaceID, draft.ID)
+	if loadErr != nil || !periodBriefRunLocksComposerStatus(run.Status) {
+		writeError(w, http.StatusConflict, "period brief run is not running")
+		return notePageRow{}, NoteWorkerJobResponse{}, nil, nil, nil, false
 	}
+	advanced, advErr := h.tryAdvancePeriodBriefRunStatus(r.Context(), run.ID, "synthesizing")
+	if advErr != nil || !advanced {
+		writeError(w, http.StatusConflict, "period brief run is not running")
+		return notePageRow{}, NoteWorkerJobResponse{}, nil, nil, nil, false
+	}
+	h.postPeriodBriefBubbleProgress(r.Context(), run, userIDString, periodBriefMaterialsProgressCopy(packResults))
 
 	agent, err := h.Queries.GetAgentInWorkspace(r.Context(), db.GetAgentInWorkspaceParams{ID: agentID, WorkspaceID: workspaceID})
 	if err != nil || agent.ArchivedAt.Valid {

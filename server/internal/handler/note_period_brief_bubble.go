@@ -440,9 +440,15 @@ func (h *Handler) awaitPeriodBriefSynthesizerWrite(ctx context.Context, run note
 }
 
 func (h *Handler) completePeriodBriefRunAfterSynth(ctx context.Context, run notePeriodBriefRunRow, userIDString string, writeAfter time.Time) {
+	if !periodBriefRunLocksComposerStatus(run.Status) {
+		return
+	}
 	cleared := clearCollectorPackMarkdown(run.Collectors)
 	if run.ChatSessionID.Valid {
 		harvested := h.awaitPeriodBriefSynthesizerWrite(ctx, run, writeAfter)
+		if latest, err := h.loadNotePeriodBriefRunByID(ctx, run.WorkspaceID, run.OwnerUserID, run.ID); err != nil || !periodBriefRunLocksComposerStatus(latest.Status) {
+			return
+		}
 		_ = h.updateNotePeriodBriefRunCollectors(ctx, run.ID, cleared, "awaiting_confirm")
 		run.Status = "awaiting_confirm"
 		h.postPeriodBriefResultMessage(ctx, run, userIDString, harvested, writeAfter)

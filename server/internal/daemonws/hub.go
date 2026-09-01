@@ -36,6 +36,7 @@ const (
 	legacyAlpha7ControlPlaneCap = "workspace_runner_control_plane_v1"
 	legacyAttachmentReplayReq   = "agent:attachment.replay_request"
 	legacyAttachmentReplayEnd   = "agent:attachment.replay_end"
+	daemonEgressQueueCapacity   = 16
 )
 
 // ClientIdentity captures the already-authenticated daemon connection scope.
@@ -65,6 +66,47 @@ type client struct {
 	dedupMu  sync.Mutex
 	seenIDs  map[string]struct{}
 	seenList []string
+}
+
+// enqueueReliableFrame applies backpressure to durable control traffic instead
+// of treating a momentarily full egress queue as a dead socket. The independent
+// write pump bounds the wait with its write deadline; unregister closes done
+// when the connection actually fails or is replaced.
+func (c *client) enqueueReliableFrame(frame []byte) bool {
+	if c == nil || c.send == nil || c.done == nil {
+		return false
+	}
+	select {
+	case <-c.done:
+		return false
+	default:
+	}
+	select {
+	case c.send <- frame:
+		return true
+	default:
+	}
+
+	M.EgressBackpressureTotal.Add(1)
+	slog.Debug("workspace daemon websocket egress backpressure",
+		"daemon_id", c.identity.DaemonID,
+		"workspace_id", c.identity.WorkspaceID,
+		"queue_depth", len(c.send),
+		"queue_capacity", cap(c.send),
+	)
+	select {
+	case <-c.done:
+		return false
+	case c.send <- frame:
+		// If replacement raced with this send, report the stale delivery as a
+		// miss so the caller can rely on its reconnect recovery path.
+		select {
+		case <-c.done:
+			return false
+		default:
+			return true
+		}
+	}
 }
 
 func (c *client) supportsRunnerCapability(capability string) bool {
@@ -748,7 +790,7 @@ func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request, identity C
 	c := &client{
 		hub:      h,
 		conn:     conn,
-		send:     make(chan []byte, 16),
+		send:     make(chan []byte, daemonEgressQueueCapacity),
 		done:     make(chan struct{}),
 		identity: identity,
 		runtimes: runtimes,
@@ -953,7 +995,7 @@ func (h *Hub) NotifyAgentRestartCommand(workspaceID, computerID, eventType, comm
 func (h *Hub) notifyFrame(runtimeID string, data []byte, eventID string) (delivered bool, deduped bool) {
 	h.mu.RLock()
 	clients := h.byRuntime[runtimeID]
-	slow := make([]*client, 0)
+	dropped := int64(0)
 	for c := range clients {
 		if !c.markSeen(eventID) {
 			deduped = true
@@ -963,17 +1005,15 @@ func (h *Hub) notifyFrame(runtimeID string, data []byte, eventID string) (delive
 		case c.send <- data:
 			delivered = true
 		default:
-			slow = append(slow, c)
+			// Runtime fan-out frames are best-effort wakeups. Dropping one is
+			// recoverable through polling/retry; disconnecting the shared
+			// WorkspaceDaemon socket would also interrupt durable Agent traffic.
+			dropped++
 		}
 	}
 	h.mu.RUnlock()
-
-	for _, c := range slow {
-		h.unregister(c)
-		c.conn.Close()
-	}
-	if len(slow) > 0 {
-		M.SlowEvictionsTotal.Add(int64(len(slow)))
+	if dropped > 0 {
+		M.EgressDroppedTotal.Add(dropped)
 	}
 	return delivered, deduped
 }
@@ -1130,20 +1170,8 @@ func (h *Hub) NotifyWorkspaceDaemon(daemonID, workspaceID, eventType string, pay
 	key := workspaceDaemonKey{daemonID: daemonID, workspaceID: workspaceID}
 	h.mu.RLock()
 	c := h.byRunner[key]
-	if c == nil {
-		h.mu.RUnlock()
-		return false
-	}
-	select {
-	case c.send <- frame:
-		h.mu.RUnlock()
-		return true
-	default:
-		h.mu.RUnlock()
-		h.unregister(c)
-		_ = c.conn.Close()
-		return false
-	}
+	h.mu.RUnlock()
+	return c != nil && c.enqueueReliableFrame(frame)
 }
 
 // NotifyWorkspaceAgentDelivery sends an at-least-once canonical Message to
@@ -1176,20 +1204,8 @@ func (h *Hub) notifyWorkspaceDaemonFrame(daemonID, workspaceID string, frame []b
 	key := workspaceDaemonKey{daemonID: daemonID, workspaceID: workspaceID}
 	h.mu.RLock()
 	c := h.byRunner[key]
-	if c == nil {
-		h.mu.RUnlock()
-		return false
-	}
-	select {
-	case c.send <- frame:
-		h.mu.RUnlock()
-		return true
-	default:
-		h.mu.RUnlock()
-		h.unregister(c)
-		_ = c.conn.Close()
-		return false
-	}
+	h.mu.RUnlock()
+	return c != nil && c.enqueueReliableFrame(frame)
 }
 
 func (h *Hub) notifyCapableWorkspaceDaemonFrame(daemonID, workspaceID, capability string, frame []byte) bool {
@@ -1204,16 +1220,8 @@ func (h *Hub) notifyCapableWorkspaceDaemonFrame(daemonID, workspaceID, capabilit
 		h.mu.RUnlock()
 		return false
 	}
-	select {
-	case c.send <- frame:
-		h.mu.RUnlock()
-		return true
-	default:
-		h.mu.RUnlock()
-		h.unregister(c)
-		_ = c.conn.Close()
-		return false
-	}
+	h.mu.RUnlock()
+	return c.enqueueReliableFrame(frame)
 }
 
 // CloseWorkspaceDaemon closes only the still-current Runner for the supplied
@@ -1365,12 +1373,7 @@ func (c *client) startRunnerWatchdog() {
 					if err != nil {
 						continue
 					}
-					select {
-					case c.send <- frame:
-					case <-c.done:
-						return
-					default:
-						_ = c.conn.Close()
+					if !c.enqueueReliableFrame(frame) {
 						return
 					}
 				}
@@ -1536,12 +1539,7 @@ func (c *client) handleFrame(raw []byte) {
 		if err != nil {
 			return
 		}
-		select {
-		case c.send <- frame:
-		default:
-			c.hub.unregister(c)
-			_ = c.conn.Close()
-		}
+		_ = c.enqueueReliableFrame(frame)
 	case legacyAttachmentReplayReq:
 		c.handleLegacyUpgradeReplayRequest(msg.Payload)
 	case protocol.EventDaemonHeartbeat:
@@ -1551,12 +1549,7 @@ func (c *client) handleFrame(raw []byte) {
 		if err != nil {
 			return
 		}
-		select {
-		case c.send <- frame:
-		default:
-			c.hub.unregister(c)
-			_ = c.conn.Close()
-		}
+		_ = c.enqueueReliableFrame(frame)
 	case protocol.EventAgentWorkspaceFileTree,
 		protocol.EventAgentWorkspaceFileContent,
 		protocol.EventDaemonWriteFileResponse,
@@ -1642,12 +1635,7 @@ func (c *client) handleLegacyUpgradeReplayRequest(raw json.RawMessage) {
 		return
 	}
 	c.runnerLastInbound.Store(time.Now().UnixNano())
-	select {
-	case c.send <- frame:
-	default:
-		c.hub.unregister(c)
-		_ = c.conn.Close()
-	}
+	_ = c.enqueueReliableFrame(frame)
 }
 
 func (c *client) handleReminderSnapshotRequest(raw json.RawMessage) {
@@ -1677,11 +1665,7 @@ func (c *client) handleReminderSnapshotRequest(raw json.RawMessage) {
 	if err != nil {
 		return
 	}
-	select {
-	case c.send <- frame:
-	default:
-		c.conn.Close()
-	}
+	_ = c.enqueueReliableFrame(frame)
 }
 
 func (c *client) handleReminderFireRequest(raw json.RawMessage) {
@@ -1715,12 +1699,10 @@ func (c *client) sendReminderFrame(eventType string, payload any) error {
 	if err != nil {
 		return err
 	}
-	select {
-	case c.send <- frame:
-		return nil
-	case <-c.done:
+	if !c.enqueueReliableFrame(frame) {
 		return errors.New("daemon websocket client disconnected")
 	}
+	return nil
 }
 
 // handleHeartbeatFrame processes an inbound daemon:heartbeat from the daemon,
@@ -1785,8 +1767,9 @@ func (c *client) handleHeartbeatFrame(raw json.RawMessage) {
 	select {
 	case c.send <- frame:
 	default:
-		// Send buffer is full — slow client. Don't block the read pump; the
-		// next writePump tick or notifyFrame eviction will clean up.
+		// Heartbeats are advisory and frequent, so keep the read pump moving
+		// while durable control frames apply backpressure.
+		M.EgressDroppedTotal.Add(1)
 		slog.Debug("daemon websocket heartbeat ack dropped: send buffer full",
 			"daemon_id", c.identity.DaemonID,
 			"runtime_id", payload.RuntimeID)

@@ -62,6 +62,11 @@ var inboxCmd = &cobra.Command{Use: "inbox", Short: "Inspect and acknowledge the 
 var inboxCheckCmd = &cobra.Command{Use: "check", Short: "Show pending Inbox targets and app items without consuming them", Args: cobra.NoArgs, RunE: runInboxCheck}
 var inboxAckCmd = &cobra.Command{Use: "ack", Short: "Acknowledge one exact app Inbox item", Args: cobra.NoArgs, RunE: runInboxAck}
 
+const (
+	localAgentInboxPath    = "/inbox"
+	localAgentInboxAckPath = "/inbox/ack"
+)
+
 func init() {
 	inboxCmd.AddCommand(inboxCheckCmd, inboxAckCmd)
 	inboxAckCmd.Flags().String("item-id", "", "Exact app Inbox item id")
@@ -82,7 +87,7 @@ func runInboxCheckWithWriter(cmd *cobra.Command, output io.Writer) error {
 	ctx, cancel := cli.APIContext(cmd.Context())
 	defer cancel()
 	var response inboxCheckResponse
-	if err := client.GetJSON(ctx, "/internal/agent-api/inbox", &response); err != nil {
+	if err := client.GetJSON(ctx, localAgentInboxPath, &response); err != nil {
 		return fmt.Errorf("check local Inbox: %w", err)
 	}
 	_, err = fmt.Fprintln(output, formatInboxSnapshot(response))
@@ -104,7 +109,7 @@ func runInboxAck(cmd *cobra.Command, _ []string) error {
 	ctx, cancel := cli.APIContext(cmd.Context())
 	defer cancel()
 	var response inboxAckResponse
-	if err := client.PostJSON(ctx, "/internal/agent-api/inbox/ack", map[string]string{"itemId": itemID}, &response); err != nil {
+	if err := client.PostJSON(ctx, localAgentInboxAckPath, map[string]string{"itemId": itemID}, &response); err != nil {
 		return fmt.Errorf("acknowledge local Inbox item: %w", err)
 	}
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "Inbox item %s acknowledged; %d app item(s) remain.\n", response.ItemID, response.RemainingAppItems)

@@ -10,6 +10,7 @@ import {
   defaultPeriodBriefCollectorIds,
   isPeriodBriefCollectorOnline,
   listOwnedPeriodBriefCollectorAgents,
+  listPeriodBriefCollectorSlotsNeedingRuntime,
   listPeriodBriefCollectorSlotsNeedingSetup,
   periodBriefCollectorLabel,
   togglePeriodBriefCollectorId,
@@ -110,6 +111,16 @@ export function NotePeriodBriefCompose({
   const missingCollectorSlots = useMemo(
     () =>
       listPeriodBriefCollectorSlotsNeedingSetup(
+        runtimes,
+        agents,
+        currentUserId,
+        computers,
+      ).filter((slot) => !dismissedMissingKeys.includes(slot.key)),
+    [agents, computers, currentUserId, dismissedMissingKeys, runtimes],
+  );
+  const waitingRuntimeSlots = useMemo(
+    () =>
+      listPeriodBriefCollectorSlotsNeedingRuntime(
         runtimes,
         agents,
         currentUserId,
@@ -244,7 +255,9 @@ export function NotePeriodBriefCompose({
           {t(($) => $.notes_page.period_brief_collectors_label)}
         </p>
         <div className="max-h-48 space-y-1 overflow-y-auto" data-testid="period-brief-collectors">
-          {collectorAgents.length === 0 && missingCollectorSlots.length === 0 ? (
+          {collectorAgents.length === 0 &&
+          missingCollectorSlots.length === 0 &&
+          waitingRuntimeSlots.length === 0 ? (
             <div className="rounded-md border border-dashed px-2 py-2 text-xs text-muted-foreground">
               {t(($) => $.notes_page.period_brief_collectors_empty)}
             </div>
@@ -290,6 +303,19 @@ export function NotePeriodBriefCompose({
                 slotKey={slot.key}
                 label={slot.label}
                 onOpenRuntimePicker={() => onConfigureCollector?.(slot)}
+                onDismiss={() =>
+                  setDismissedMissingKeys((current) =>
+                    current.includes(slot.key) ? current : [...current, slot.key],
+                  )
+                }
+              />
+            ))}
+            {waitingRuntimeSlots.map((slot) => (
+              <NotesCollectorSetupCard
+                key={slot.key}
+                slotKey={slot.key}
+                label={slot.label}
+                reason="missing-runtime"
                 onDismiss={() =>
                   setDismissedMissingKeys((current) =>
                     current.includes(slot.key) ? current : [...current, slot.key],

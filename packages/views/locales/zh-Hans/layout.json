@@ -184,6 +184,7 @@
     "period_brief_collector_setup_body": "电脑已选定。请选择这台电脑上的运行时，以创建或修复采集员。",
     "period_brief_collector_setup_choose_runtime": "配置",
     "period_brief_collector_missing_hint": "还没有采集员。可忽略，先用其他电脑继续写汇报。",
+    "period_brief_collector_missing_runtime_hint": "电脑已连接，但这台电脑上还没有运行时。请先启动 Cursor 或 Pi，再配置采集员。",
     "period_brief_collector_missing_dismiss": "忽略",
     "period_brief_collector_offline": "离线",
     "period_brief_focus_placeholder": "可写要采集的路径、主题、时间或电脑；与上方选项冲突时以这里为准",

@@ -42,7 +42,10 @@ export type PeriodBriefCollectorSlot = {
   runtimeIds: string[];
   collector: PeriodBriefCollectorCandidate | null;
   strayAgentId: string | null;
+  /** Computer has a bindable runtime but no collector on it. */
   needsSetup: boolean;
+  /** Computer is connected, but no provider runtime has registered yet. */
+  needsRuntime: boolean;
 };
 
 /** True when this Agent is a provisioned Period Work collector. */
@@ -274,6 +277,7 @@ export function listOwnedPeriodBriefCollectorSlots(
       representative?.name?.trim() ||
       group.labelHint ||
       (group.cloud ? "Cloud" : "Computer");
+    const hasRuntime = group.runtimes.length > 0;
     slots.push({
       key,
       machineId: group.machineId,
@@ -282,7 +286,8 @@ export function listOwnedPeriodBriefCollectorSlots(
       runtimeIds: group.runtimes.map((item) => item.id),
       collector: onSlot,
       strayAgentId,
-      needsSetup: !onSlot,
+      needsSetup: hasRuntime && !onSlot,
+      needsRuntime: !hasRuntime,
     });
   }
   return slots;
@@ -296,5 +301,16 @@ export function listPeriodBriefCollectorSlotsNeedingSetup(
 ): PeriodBriefCollectorSlot[] {
   return listOwnedPeriodBriefCollectorSlots(runtimes, agents, userId, connections).filter(
     (slot) => slot.needsSetup,
+  );
+}
+
+export function listPeriodBriefCollectorSlotsNeedingRuntime(
+  runtimes: readonly PeriodBriefCollectorSlotRuntime[],
+  agents: readonly PeriodBriefCollectorCandidate[],
+  userId: string | null | undefined,
+  connections: readonly PeriodBriefCollectorComputer[] = [],
+): PeriodBriefCollectorSlot[] {
+  return listOwnedPeriodBriefCollectorSlots(runtimes, agents, userId, connections).filter(
+    (slot) => slot.needsRuntime,
   );
 }

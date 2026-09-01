@@ -11,7 +11,7 @@ import { useModalStore } from "@multica/core/modals";
 import {
   PRODUCT_CHANGELOG_URL,
   PRODUCT_DOCS_ORIGIN,
-} from "@multica/core/constants/product-origin";
+} from "@multica/core/constants/product-help-links";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../i18n";
 

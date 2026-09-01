@@ -49,20 +49,8 @@ func TestCleanupInstalledReleaseResidueRemovesOnlyInactiveReleaseFiles(t *testin
 			t.Fatalf("release residue still exists at %s: %v", path, err)
 		}
 	}
-}
 
-func TestCleanupInstalledReleaseResidueIsIdempotent(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	installPath := filepath.Join(home, ".local", "bin", "multica")
-	if err := os.MkdirAll(filepath.Dir(installPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(installPath, []byte("active"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	result, err := CleanupInstalledReleaseResidue(installPath)
+	result, err = CleanupInstalledReleaseResidue(installPath)
 	if err != nil {
 		t.Fatal(err)
 	}

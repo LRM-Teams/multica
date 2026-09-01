@@ -48,6 +48,17 @@ supersedes: docs/adr/0018-machine-work-journal-period-brief.md
 > outside agent-private `.multica`. HOME-only is incomplete on container
 > sandboxes. Non-git in-window source files are evidence.
 >
+> **Amendment (2026-09-01):** Collect recipes share one harvest (git probe +
+> file mtime). Only `SCAN_ROOTS` / denylist are OS-shaped. **Do not
+> deep-scan `$HOME`** (skip `AppData`, `Library`, `Downloads`). Roots are
+> first-level project parents (`code` `src` `work` `Documents` `Desktop`
+> / `文档` `桌面`), `/workspace`, HOME symlink children, Windows
+> first-level folders of those names on other volumes, and shallow Linux
+> `/opt` `/srv` git. Non-git harvest includes office/notes (`txt` `docx`
+> `xlsx` `pptx` `pdf`). Cheap git probe first; idle repos (0 in-window
+> commits, clean tree) are recorded, not diff-dumped. Do not prune on
+> parent-directory mtime.
+>
 > **Amendment (2026-09-01):** A collector job that **completes without an
 > error** and without `submit-pack` is a **settled empty pack**, not a
 > failure. Do not ask the Notes Assistant to re-collect. Hand the empty
@@ -75,8 +86,8 @@ not an activity dump and not a PPT file. Collection and synthesis are split:
   Opening Period Work Brief ensures collectors exist for each Computer the
   member **owns** (never another member's machine, even when that runtime is
   visible or `public`).   Collectors gather recent work on that OS
-  (`SCAN_ROOTS`: whole-machine HOME plus `/workspace` and other visible
-  project dirs — not HOME-only on container sandboxes).
+  (`SCAN_ROOTS`: first-level project parents, never a deep HOME / AppData
+  walk, plus `/workspace` and OS extras — see collect-recipes).
   The collector UI lists **only** these owned-Computer Agents.
 2. **Synthesizer** — The Workspace Notes Assistant (「笔记助手」 /
    `notes-assistant`) in its 写汇报 wake. Leftover 「周报」 /

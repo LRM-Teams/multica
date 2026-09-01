@@ -661,14 +661,22 @@ func TestPeriodWorkCollectSkillCoversOSHarvestAndNoteWrite(t *testing.T) {
 		"git log --all",
 		".venv",
 		"*.sh",
+		"*.docx",
 		"dirty now; mtime outside window",
 		"-L \"$child\"",
 		"/opt",
 		"/srv",
+		"AppData",
+		"MINGW",
+		"do not add HOME as a deep-scan root",
+		"present but idle in window",
 	} {
 		if !strings.Contains(recipes, want) {
 			t.Errorf("collect-recipes.md missing %q", want)
 		}
+	}
+	if strings.Contains(recipes, "add_scan_root \"${HOME:-/root}\"") {
+		t.Error("collect-recipes.md must not deep-scan HOME as a root")
 	}
 }
 

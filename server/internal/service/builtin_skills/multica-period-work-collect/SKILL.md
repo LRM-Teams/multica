@@ -21,8 +21,12 @@ honestly.
 
 | Runtime | Scan roots |
 | --- | --- |
-| local laptop / Linux host | Owner `$HOME`, recipe extras (`/workspace`, `$PWD` outside HOME), **HOME symlink children**, common parents (`~/code` `~/src` `~/go` `~/repos` …), and shallow git roots under `/opt` `/srv` `/usr/local/src` |
-| container / cloud sandbox | `$HOME` **plus** `/workspace` when that directory exists — HOME-only is incomplete |
+| any local OS | First-level HOME children named like project parents (`code` `src` `work` `repos` `Documents` `Desktop` / `文档` `桌面`). **Never deep-walk `$HOME`** (skip `AppData`, `Library`, `Downloads`, `.cache`). `/workspace` and `$PWD` when present and not denylisted. HOME symlink children. |
+| Windows | Plus first-level folders with those names on other volumes (`/d/code`, `E:\work`, …). Do not add a whole drive. |
+| Linux host | Plus shallow git roots under `/opt` `/srv` `/usr/local/src` — not those parents as whole-tree roots. |
+| container / cloud sandbox | First-level HOME children **plus** `/workspace` when that directory exists — HOME-deep-walk is still forbidden. |
+
+Harvest logic is shared. Only root resolution and the denylist are OS-shaped.
 
 Resolve `SCAN_ROOTS` with `references/collect-recipes.md` **before** any
 `find`. If a `<focus>` partition is present (Notes Assistant collect plan),
@@ -32,11 +36,12 @@ dirty files **inside the wake `<window>`** (RFC3339 start → end, half-open).
 Use `git log --all` (not `--branches` only) so remote-tracking and detached
 HEAD commits in-window are visible. Keep porcelain-dirty paths even when
 mtime is outside the window — label them `dirty now; mtime outside window`.
-Also harvest **non-git** source-like files whose mtime is in-window (app
-languages **and** `.sh` / yaml / Docker/Make / Terraform / Nix). A lone
-`/workspace/multica/*.py` counts. Never pad the pack with earlier/later
-history. Do not treat an empty `$HOME` as “no user work” when `/workspace`
-has files.
+Also harvest **non-git** files whose **file** mtime is in-window: source-like
+names **and** `txt` / `docx` / `xlsx` / `pptx` / `pdf`. A lone
+`/workspace/multica/*.py` or `Documents/周报.docx` counts. Never pad the pack
+with earlier/later history. Do not treat an empty `$HOME` as “no user work”
+when `/workspace` or another project parent has files. Do not prune a tree
+because a parent directory’s mtime is old.
 
 ## Hard rules
 
@@ -69,8 +74,9 @@ has files.
 - **Do not** read or quote secrets: `.ssh`, `.gnupg`, `.aws`, `.env` / `.env.*`,
   credential stores, private keys, tokens.
 - **Skip noise dirs** while walking: `node_modules`, `.next`, `dist`, `build`,
-  `target`, `vendor`, `__pycache__`, `.cache`, `.venv`, `venv`, `.git` (as a
-  walk skip — still treat parent as a repo root).
+  `target`, `vendor`, `__pycache__`, `.cache`, `.venv`, `venv`, `AppData`,
+  `Library`, `Downloads`, `.git` (as a walk skip — still treat parent as a
+  repo root).
 - **Do not** call Host Digest / Journal APIs. Collect with shell on this OS.
 - **Do not** write the final Period Work Brief — only the collector pack page.
 
@@ -80,10 +86,13 @@ has files.
    local vs cloud (best effort).
 2. **Resolve `SCAN_ROOTS` then discover git roots** under **every** root (see
    recipes). Cap exploration: prefer depth-limited `find`, skip denylist
-   dirs (including `.venv` / `venv`), stop after ~40 roots. If the cap is
-   hit, keep repos with in-window commits or dirty files; drop stale ones
-   first. Then run the non-git in-window file recipe.
-3. **Per repo in the window** collect:
+   dirs (including `.venv` / `venv` / `AppData`), stop after ~40 roots. If
+   the cap is hit, keep repos with in-window commits or dirty files; drop
+   stale ones first. Then run the non-git in-window file recipe (source +
+   office/notes names).
+3. **Per repo — cheap probe first** (log `--all` in-window, porcelain,
+   remotes). Zero commits and a clean tree → “present but idle in window”;
+   do not dump diffs. Only then, for active repos, collect:
    - remotes (`git remote -v`)
    - commits in window (`git log --all --after="$START" --before="$END"`,
      subject + short hash) — **required filter**; `--branches` alone is not

@@ -80,6 +80,9 @@ func TestNotePeriodBriefCollectorInstructionNamesLinuxVisibleRoots(t *testing.T)
 		"--all",
 		"porcelain-dirty",
 		"mtime is outside the window",
+		"AppData",
+		"Do not deep-scan",
+		"docx",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("collector instruction missing %q:\n%s", want, got)

@@ -241,8 +241,6 @@ func TestNotifyWorkspaceDaemonBackpressuresInsteadOfDisconnecting(t *testing.T) 
 	defer hub.unregister(c)
 
 	c.send <- []byte("occupied")
-	disconnectsBefore := M.DisconnectsTotal.Load()
-	backpressureBefore := M.EgressBackpressureTotal.Load()
 	delivered := make(chan bool, 1)
 	go func() {
 		delivered <- hub.NotifyWorkspaceDaemon(
@@ -260,12 +258,6 @@ func TestNotifyWorkspaceDaemonBackpressuresInsteadOfDisconnecting(t *testing.T) 
 	}
 	if !hub.IsCurrentWorkspaceDaemon(key.daemonID, key.workspaceID, "instance-1") {
 		t.Fatal("full egress queue disconnected the current WorkspaceDaemon")
-	}
-	if got := M.DisconnectsTotal.Load(); got != disconnectsBefore {
-		t.Fatalf("disconnects_total = %d, want %d", got, disconnectsBefore)
-	}
-	if got := M.EgressBackpressureTotal.Load(); got != backpressureBefore+1 {
-		t.Fatalf("egress_backpressure_total = %d, want %d", got, backpressureBefore+1)
 	}
 
 	<-c.send

@@ -182,6 +182,11 @@ func TestAgentTemplatesIncludePeriodWorkCollector(t *testing.T) {
 	if tmpl.Instructions == "" || !strings.Contains(tmpl.Instructions, "multica-period-work-collect") {
 		t.Fatalf("template should point at collect skill: %+v", tmpl)
 	}
+	for _, want := range []string{"HOME symlink children", "git log --all", "porcelain-dirty"} {
+		if !strings.Contains(tmpl.Instructions, want) {
+			t.Fatalf("collector template missing %q", want)
+		}
+	}
 }
 
 func TestEnsurePeriodBriefCollectors_SkipsOthersPublicComputers(t *testing.T) {

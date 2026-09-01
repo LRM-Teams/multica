@@ -3,7 +3,8 @@
 Use these on the **runtime OS**. Substitute `$START` / `$END` (RFC3339 from
 the wake `<window>`). **Always resolve `SCAN_ROOTS` first** — never scan
 `$HOME` alone. Container sandboxes keep user work in `/workspace` (or `$PWD`
-outside HOME), which is not under `$HOME`.
+outside HOME), which is not under `$HOME`. Linux desktops often keep work
+off HOME via a symlink, GOPATH, or `/opt` / `/srv`.
 
 ## Resolve scan roots (required, first)
 
@@ -24,6 +25,42 @@ add_scan_root "${HOME:-/root}"
 add_scan_root /workspace
 pwd_now=$(pwd -P 2>/dev/null || pwd)
 add_scan_root "$pwd_now"
+
+# HOME's immediate symlink children (e.g. ~/code -> /mnt/ssd/code).
+# find does not follow those links; resolve one level only. Cap at 16.
+if [ -d "${HOME:-}" ]; then
+  n=0
+  for child in "$HOME"/*; do
+    [ -L "$child" ] && [ -d "$child" ] || continue
+    add_scan_root "$child"
+    n=$((n + 1))
+    [ "$n" -ge 16 ] && break
+  done
+fi
+
+# Common project parents (Linux + generic). add_scan_root no-ops if missing.
+for d in \
+  "$HOME/code" "$HOME/src" "$HOME/work" "$HOME/projects" "$HOME/dev" \
+  "$HOME/go" "$HOME/repos" "$HOME/git" "$HOME/src/github.com"
+do
+  add_scan_root "$d"
+done
+
+# Shallow git roots under system project parents — do not add /opt or /srv
+# themselves (too wide). Cap at 12 extra repos.
+extra=0
+for parent in /opt /srv /usr/local/src; do
+  [ -d "$parent" ] || continue
+  for gitdir in $(find "$parent" -maxdepth 3 \( \
+      -name node_modules -o -name .multica -o -name .venv -o -name venv \
+    \) -prune -o -name .git -print 2>/dev/null | head -n 12); do
+    add_scan_root "${gitdir%/.git}"
+    extra=$((extra + 1))
+    [ "$extra" -ge 12 ] && break
+  done
+  [ "$extra" -ge 12 ] && break
+done
+
 echo "SCAN_ROOTS=$SCAN_ROOTS"
 ```
 
@@ -33,27 +70,41 @@ scan, not an empty cloud box.
 
 ## Discover git roots (bounded)
 
+Prune noise **and** virtualenvs so they do not consume the 40-root cap.
+
 ```bash
+CANDIDATES=""
 for SCAN_ROOT in $SCAN_ROOTS; do
-  find "$SCAN_ROOT" -maxdepth 5 \( \
+  for gitdir in $(find "$SCAN_ROOT" -maxdepth 6 \( \
     -name node_modules -o -name .next -o -name dist -o -name build -o \
     -name target -o -name vendor -o -name __pycache__ -o -name .cache -o \
+    -name .venv -o -name venv -o \
     -name .ssh -o -name .gnupg -o -name .aws -o -name .multica -o \
     -name .cursor -o -name .pi \
-  \) -prune -o -name .git -print 2>/dev/null | head -n 40 | sed 's|/.git$||'
+  \) -prune -o -name .git -print 2>/dev/null | head -n 60); do
+    CANDIDATES="$CANDIDATES ${gitdir%/.git}"
+  done
 done
 ```
 
-If `find` is too slow or blocked, fall back to common project parents **plus
-each scan root**:
+If `find` is too slow or blocked, fall back to common project parents
+**plus each scan root** (shallower):
 
 ```bash
-for d in $SCAN_ROOTS "$HOME/code" "$HOME/src" "$HOME/work" "$HOME/projects" "$HOME/dev"; do
+for d in $SCAN_ROOTS \
+  "$HOME/code" "$HOME/src" "$HOME/work" "$HOME/projects" "$HOME/dev" \
+  "$HOME/go" "$HOME/repos" "$HOME/git" "$HOME/src/github.com"
+do
   [ -d "$d" ] || continue
-  find "$d" -maxdepth 3 \( -name node_modules -o -name .multica \) -prune -o \
-    -name .git -print 2>/dev/null | head -n 20 | sed 's|/.git$||'
+  find "$d" -maxdepth 4 \( \
+    -name node_modules -o -name .multica -o -name .venv -o -name venv \
+  \) -prune -o -name .git -print 2>/dev/null | head -n 20 | sed 's|/.git$||'
 done
 ```
+
+When the candidate list is larger than ~40, **keep repos that have
+in-window commits or porcelain-dirty files**; drop stale ones first. A
+last-commit timestamp (`git log -1 --format=%ct`) is enough to rank.
 
 Skip any path under `.ssh`, `.gnupg`, `.aws`, `.multica`, or whose basename
 looks like `.env` / credentials.
@@ -61,19 +112,26 @@ looks like `.env` / credentials.
 ## Non-git in-window files (required)
 
 Git discovery misses a lone file under `/workspace`. After git roots, harvest
-source-like files whose mtime is inside the window:
+source-like files whose mtime is inside the window. Include Linux ops and
+config-as-code names — not only app languages.
 
 ```bash
 for SCAN_ROOT in $SCAN_ROOTS; do
-  find "$SCAN_ROOT" -maxdepth 4 \( \
+  find "$SCAN_ROOT" -maxdepth 5 \( \
     -name node_modules -o -name .next -o -name dist -o -name build -o \
     -name target -o -name vendor -o -name __pycache__ -o -name .cache -o \
+    -name .venv -o -name venv -o \
     -name .ssh -o -name .gnupg -o -name .aws -o -name .multica -o \
     -name .cursor -o -name .pi \
   \) -prune -o -type f \( \
     -name '*.py' -o -name '*.ts' -o -name '*.tsx' -o -name '*.js' -o \
     -name '*.go' -o -name '*.rs' -o -name '*.java' -o -name '*.md' -o \
-    -name '*.c' -o -name '*.cpp' -o -name '*.h' \
+    -name '*.c' -o -name '*.cpp' -o -name '*.h' -o \
+    -name '*.sh' -o -name '*.bash' -o -name '*.zsh' -o \
+    -name '*.yml' -o -name '*.yaml' -o -name '*.toml' -o \
+    -name '*.tf' -o -name '*.nix' -o -name '*.ipynb' -o \
+    -name '*.vue' -o -name '*.sql' -o \
+    -name Dockerfile -o -name Makefile -o -name 'docker-compose*.yml' \
   \) -newermt "$START" ! -newermt "$END" -print 2>/dev/null | head -n 80
 done
 ```
@@ -90,13 +148,21 @@ END=2026-08-23T16:00:00Z
 
 git -C "$REPO" -c safe.directory="$REPO" remote -v
 
-git -C "$REPO" -c safe.directory="$REPO" log --branches --no-patch \
+# git log --all: local branches, remote-tracking, and detached-reachable.
+# Do not use --branches alone — that misses origin/* and detached HEAD.
+git -C "$REPO" -c safe.directory="$REPO" log --all --no-patch \
   --after="$START" --before="$END" \
   --pretty=format:'%h %ci %an %s' | head -n 40
 
-# Dirty paths: only keep files touched inside the window when possible.
+git -C "$REPO" -c safe.directory="$REPO" symbolic-ref -q HEAD \
+  || echo "DETACHED $(git -C "$REPO" -c safe.directory="$REPO" rev-parse --short HEAD)"
+
+git -C "$REPO" -c safe.directory="$REPO" stash list | head -n 8
+
+# Dirty paths: keep porcelain-dirty entries even when mtime is outside the
+# window. Label those "dirty now; mtime outside window" — do not drop them.
 git -C "$REPO" -c safe.directory="$REPO" status --porcelain | head -n 80
-# Optional mtime filter for a dirty path (GNU find):
+# Optional mtime note for a dirty path (GNU find):
 # find "$REPO/path" -newermt "$START" ! -newermt "$END" 2>/dev/null | head
 
 git -C "$REPO" -c safe.directory="$REPO" diff --stat HEAD 2>/dev/null | head -n 40

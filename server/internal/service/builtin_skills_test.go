@@ -650,7 +650,22 @@ func TestPeriodWorkCollectSkillCoversOSHarvestAndNoteWrite(t *testing.T) {
 			break
 		}
 	}
-	for _, want := range []string{"find ", "git -C", "--after=", "status --porcelain", "head -n"} {
+	for _, want := range []string{
+		"find ",
+		"git -C",
+		"--after=",
+		"status --porcelain",
+		"head -n",
+		"$HOME/go",
+		"$HOME/repos",
+		"git log --all",
+		".venv",
+		"*.sh",
+		"dirty now; mtime outside window",
+		"-L \"$child\"",
+		"/opt",
+		"/srv",
+	} {
 		if !strings.Contains(recipes, want) {
 			t.Errorf("collect-recipes.md missing %q", want)
 		}

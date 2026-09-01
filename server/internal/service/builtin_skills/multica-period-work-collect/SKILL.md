@@ -21,7 +21,7 @@ honestly.
 
 | Runtime | Scan roots |
 | --- | --- |
-| local laptop | Owner `$HOME` **and** any extra roots from the recipes (`/workspace`, `$PWD` outside HOME) |
+| local laptop / Linux host | Owner `$HOME`, recipe extras (`/workspace`, `$PWD` outside HOME), **HOME symlink children**, common parents (`~/code` `~/src` `~/go` `~/repos` …), and shallow git roots under `/opt` `/srv` `/usr/local/src` |
 | container / cloud sandbox | `$HOME` **plus** `/workspace` when that directory exists — HOME-only is incomplete |
 
 Resolve `SCAN_ROOTS` with `references/collect-recipes.md` **before** any
@@ -29,8 +29,12 @@ Resolve `SCAN_ROOTS` with `references/collect-recipes.md` **before** any
 **narrow** harvest to those paths / topics / aspects — do not wander the
 whole machine. Prefer **git repositories under those roots** that have commits or
 dirty files **inside the wake `<window>`** (RFC3339 start → end, half-open).
-Also harvest **non-git** source files whose mtime is in-window (a lone
-`/workspace/multica/*.py` counts). Never pad the pack with earlier/later
+Use `git log --all` (not `--branches` only) so remote-tracking and detached
+HEAD commits in-window are visible. Keep porcelain-dirty paths even when
+mtime is outside the window — label them `dirty now; mtime outside window`.
+Also harvest **non-git** source-like files whose mtime is in-window (app
+languages **and** `.sh` / yaml / Docker/Make / Terraform / Nix). A lone
+`/workspace/multica/*.py` counts. Never pad the pack with earlier/later
 history. Do not treat an empty `$HOME` as “no user work” when `/workspace`
 has files.
 
@@ -65,8 +69,8 @@ has files.
 - **Do not** read or quote secrets: `.ssh`, `.gnupg`, `.aws`, `.env` / `.env.*`,
   credential stores, private keys, tokens.
 - **Skip noise dirs** while walking: `node_modules`, `.next`, `dist`, `build`,
-  `target`, `vendor`, `__pycache__`, `.cache`, `.git` (as a walk skip — still
-  treat parent as a repo root).
+  `target`, `vendor`, `__pycache__`, `.cache`, `.venv`, `venv`, `.git` (as a
+  walk skip — still treat parent as a repo root).
 - **Do not** call Host Digest / Journal APIs. Collect with shell on this OS.
 - **Do not** write the final Period Work Brief — only the collector pack page.
 
@@ -76,12 +80,18 @@ has files.
    local vs cloud (best effort).
 2. **Resolve `SCAN_ROOTS` then discover git roots** under **every** root (see
    recipes). Cap exploration: prefer depth-limited `find`, skip denylist
-   dirs, stop after ~40 roots. Then run the non-git in-window file recipe.
+   dirs (including `.venv` / `venv`), stop after ~40 roots. If the cap is
+   hit, keep repos with in-window commits or dirty files; drop stale ones
+   first. Then run the non-git in-window file recipe.
 3. **Per repo in the window** collect:
    - remotes (`git remote -v`)
-   - commits in window (`git log --after="$START" --before="$END"`, subject + short hash) — **required filter**
-   - dirty paths only when the path’s mtime (or a related commit) is in-window;
-     otherwise omit or park under Unscoped with an explicit “mtime outside window” note
+   - commits in window (`git log --all --after="$START" --before="$END"`,
+     subject + short hash) — **required filter**; `--branches` alone is not
+     enough
+   - detached HEAD and `stash list` (best-effort; park undated stash under
+     Unscoped)
+   - dirty paths from `status --porcelain`. Keep them even when mtime is
+     outside the window; label those `dirty now; mtime outside window`
    - for the **top 3–7** most relevant **in-window** changes: a **short** diff or file
      summary (`git diff --stat`, `git show --stat`, or ≤80 lines of patch /
      file head — never whole files)

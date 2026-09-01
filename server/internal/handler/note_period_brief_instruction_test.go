@@ -70,6 +70,26 @@ func TestNotePeriodBriefRetryInstructionForbidsWrite(t *testing.T) {
 	}
 }
 
+func TestNotePeriodBriefCollectorInstructionNamesLinuxVisibleRoots(t *testing.T) {
+	t.Parallel()
+	got := notePeriodBriefCollectorInstruction("draft-id", "本周", "2026-08-10T00:00:00Z", "2026-08-17T00:00:00Z")
+	for _, want := range []string{
+		"SCAN_ROOTS",
+		"HOME symlink children",
+		"~/go",
+		"--all",
+		"porcelain-dirty",
+		"mtime is outside the window",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("collector instruction missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "journalctl") {
+		t.Fatal("instruction must not teach journal harvest")
+	}
+}
+
 func TestNotePeriodBriefCollectorInstructionScopedAddsHonorFocus(t *testing.T) {
 	t.Parallel()
 	full := notePeriodBriefCollectorInstruction("draft-id", "本周", "2026-08-10T00:00:00Z", "2026-08-17T00:00:00Z")

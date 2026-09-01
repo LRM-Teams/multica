@@ -41,6 +41,7 @@ type createSandboxInstanceCall struct {
 	WorkspaceID string
 	ActorUserID string
 	Template    string
+	DockerImage string
 	NodeID      string
 }
 
@@ -107,6 +108,7 @@ func (f *fakeEnvSandboxLifecycleDeps) InsertSandboxInstance(_ context.Context, i
 		WorkspaceID: in.WorkspaceID,
 		ActorUserID: actorUserID,
 		Template:    in.Template,
+		DockerImage: in.DockerImage,
 		NodeID:      in.NodeID,
 	})
 	if f.insertedRef.InstanceID == "" {
@@ -115,6 +117,7 @@ func (f *fakeEnvSandboxLifecycleDeps) InsertSandboxInstance(_ context.Context, i
 			WorkspaceID:     in.WorkspaceID,
 			NodeID:          in.NodeID,
 			Template:        in.Template,
+			DockerImage:     in.DockerImage,
 			Status:          "pending",
 			RuntimeMetadata: in.Runtime,
 			EndpointInfo:    in.Limits,
@@ -220,6 +223,41 @@ func TestEnvSandboxLifecycleResumeEnqueuesResumeWithRuntimeMetadata(t *testing.T
 	}
 	if _, ok := payload["runtime"]; !ok {
 		t.Fatalf("resume payload missing runtime metadata: %s", string(deps.jobs[0].Payload))
+	}
+}
+
+func TestEnvSandboxLifecyclePayloadRecoversDockerRoutingBeforeCreateCompletes(t *testing.T) {
+	tests := []struct {
+		name string
+		ref  SandboxInstanceRef
+	}{
+		{
+			name: "template",
+			ref:  SandboxInstanceRef{InstanceID: "inst-1", Template: "docker:runtime:test"},
+		},
+		{
+			name: "metadata",
+			ref: SandboxInstanceRef{
+				InstanceID:      "inst-1",
+				Template:        "default",
+				RuntimeMetadata: json.RawMessage(`{"creation_mode":"docker_container","docker_image":"runtime:test"}`),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw, err := sandboxLifecyclePayload(tt.ref, nil)
+			if err != nil {
+				t.Fatalf("payload: %v", err)
+			}
+			var payload map[string]any
+			if err := json.Unmarshal(raw, &payload); err != nil {
+				t.Fatalf("decode payload: %v", err)
+			}
+			if payload["docker_image"] != "runtime:test" {
+				t.Fatalf("docker_image = %v", payload["docker_image"])
+			}
+		})
 	}
 }
 
@@ -342,6 +380,35 @@ func TestEnvSandboxLifecycleCreateEmitsCanonicalPayloadWithInstanceIDAndMetadata
 // MULTICA_DAEMON_ID injected into the sandbox env) so the pre-create-free
 // provisioning path can discover the online runtime by daemon_id. The fake
 // mints "daemon-<instanceID>".
+func TestEnvSandboxLifecycleCreateCarriesDockerImageIntoCanonicalPayload(t *testing.T) {
+	deps := &fakeEnvSandboxLifecycleDeps{}
+	svc := NewEnvSandboxLifecycleService(deps, 5*time.Second)
+	ref, err := svc.Create(context.Background(), CreateSandboxInstanceInput{
+		WorkspaceID: "ws-1", Template: "docker:runtime:test", DockerImage: "runtime:test", DaemonEnabled: true,
+	}, "user-1")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if ref.DockerImage != "runtime:test" {
+		t.Fatalf("ref.DockerImage = %q", ref.DockerImage)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(deps.jobs[0].Payload, &payload); err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	if payload["docker_image"] != "runtime:test" || payload["template"] != "docker:runtime:test" {
+		t.Fatalf("Docker routing missing from payload: %v", payload)
+	}
+	serialized, _ := json.Marshal(ref)
+	var serializedRef map[string]any
+	if err := json.Unmarshal(serialized, &serializedRef); err != nil {
+		t.Fatalf("serialized ref: %v", err)
+	}
+	if _, ok := serializedRef["docker_image"]; ok {
+		t.Fatalf("internal DockerImage field leaked into serialized ref: %s", serialized)
+	}
+}
+
 func TestEnvSandboxLifecycleCreateSurfacesMintedDaemonIDOnRef(t *testing.T) {
 	ctx := context.Background()
 	deps := &fakeEnvSandboxLifecycleDeps{}

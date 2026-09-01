@@ -61,6 +61,14 @@ type sandboxdClient struct {
 	cachedDockerImages    []dockerImageSummary
 	dockerImagesFetchedAt time.Time
 	dockerImagesError     string
+
+	instanceJobsMu sync.Mutex
+	instanceJobs   map[string]*sandboxInstanceJobLock
+}
+
+type sandboxInstanceJobLock struct {
+	mu   sync.Mutex
+	refs int
 }
 
 type cubeTemplateSummary struct {
@@ -601,8 +609,53 @@ func (c *sandboxdClient) handleJob(ctx context.Context, job sandboxJob) {
 	log.Info("sandbox job completed")
 }
 
+func (c *sandboxdClient) lockInstanceJob(instanceID string) func() {
+	instanceID = strings.TrimSpace(instanceID)
+	if instanceID == "" {
+		return func() {}
+	}
+	c.instanceJobsMu.Lock()
+	if c.instanceJobs == nil {
+		c.instanceJobs = make(map[string]*sandboxInstanceJobLock)
+	}
+	entry := c.instanceJobs[instanceID]
+	if entry == nil {
+		entry = &sandboxInstanceJobLock{}
+		c.instanceJobs[instanceID] = entry
+	}
+	entry.refs++
+	c.instanceJobsMu.Unlock()
+	entry.mu.Lock()
+	return func() {
+		c.instanceJobsMu.Lock()
+		entry.refs--
+		if entry.refs == 0 {
+			delete(c.instanceJobs, instanceID)
+		}
+		c.instanceJobsMu.Unlock()
+		entry.mu.Unlock()
+	}
+}
+
+func dockerImageFromSandboxPayload(payload sandboxJobPayload) string {
+	if image := strings.TrimSpace(payload.DockerImage); image != "" {
+		return image
+	}
+	if template := strings.TrimSpace(payload.Template); strings.HasPrefix(template, "docker:") {
+		return strings.TrimSpace(strings.TrimPrefix(template, "docker:"))
+	}
+	if stringFromRawObject(payload.Metadata, "creation_mode") == "docker_container" {
+		return strings.TrimSpace(stringFromRawObject(payload.Metadata, "docker_image"))
+	}
+	return ""
+}
+
 func (c *sandboxdClient) callCube(ctx context.Context, job sandboxJob) (map[string]any, error) {
+	unlock := c.lockInstanceJob(job.InstanceID)
+	defer unlock()
+
 	payload := parseSandboxJobPayload(job.Payload)
+	payload.DockerImage = dockerImageFromSandboxPayload(payload)
 	sandboxID := firstNonEmpty(payload.LocalRef, stringFromRawObject(payload.Metadata, "local_ref"), stringFromRawObject(job.Payload, "local_ref"))
 	dockerMode := payload.DockerImage != "" || endpointKind(payload.EndpointInfo) == "docker"
 	switch job.Type {
@@ -628,7 +681,7 @@ func (c *sandboxdClient) callCube(ctx context.Context, job sandboxJob) (map[stri
 		return c.reconfigureCubeSandbox(ctx, sandboxID, payload)
 	case "delete":
 		if dockerMode {
-			return c.deleteDockerContainer(ctx, sandboxID)
+			return c.deleteDockerContainer(ctx, sandboxID, job.InstanceID)
 		}
 		return c.deleteCubeSandbox(ctx, sandboxID)
 	case "create_template":
@@ -641,7 +694,6 @@ func (c *sandboxdClient) callCube(ctx context.Context, job sandboxJob) (map[stri
 		return nil, fmt.Errorf("unsupported sandbox job type %q", job.Type)
 	}
 }
-
 func endpointKind(raw json.RawMessage) string {
 	if len(raw) == 0 || string(raw) == "null" {
 		return ""
@@ -728,7 +780,9 @@ func (c *sandboxdClient) createDockerContainer(ctx context.Context, job sandboxJ
 	runtimeEnv["PATH"] = firstNonEmpty(runtimeEnv["PATH"], "/root/.local/bin:/root/.npm-global/bin:/root/.bun/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin")
 	ensureDockerDesktopEnv(runtimeEnv)
 	name := dockerContainerNameForJob(job, payload)
-	if existing, ok := c.findDockerContainerByInstance(ctx, job.InstanceID); ok {
+	if existing, ok, err := c.findDockerContainerByInstance(ctx, job.InstanceID); err != nil {
+		return nil, err
+	} else if ok {
 		endpoint := c.dockerEndpointInfo(ctx, existing, name, image)
 		return map[string]any{"local_ref": existing, "endpoint_info": endpoint, "result": map[string]any{"container_id": existing, "container_name": name, "image": image, "reused": true}}, nil
 	}
@@ -917,22 +971,21 @@ func primaryNonLoopbackIPv4() string {
 	return ""
 }
 
-func (c *sandboxdClient) findDockerContainerByInstance(ctx context.Context, instanceID string) (string, bool) {
+func (c *sandboxdClient) findDockerContainerByInstance(ctx context.Context, instanceID string) (string, bool, error) {
 	if strings.TrimSpace(instanceID) == "" {
-		return "", false
+		return "", false, nil
 	}
 	cmd := dockerCommand(ctx, "ps", "-aq", "--filter", "label=multica.sandbox_instance_id="+instanceID)
-	out, err := cmd.Output()
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", false
+		return "", false, fmt.Errorf("docker find sandbox container: %s", strings.TrimSpace(string(out)))
 	}
 	ids := strings.Fields(string(out))
 	if len(ids) == 0 {
-		return "", false
+		return "", false, nil
 	}
-	return ids[0], true
+	return ids[0], true, nil
 }
-
 func (c *sandboxdClient) dockerLifecycle(ctx context.Context, containerID, action string) (map[string]any, error) {
 	if strings.TrimSpace(containerID) == "" {
 		return nil, fmt.Errorf("docker container id is required")
@@ -1014,7 +1067,9 @@ func (c *sandboxdClient) resumeDockerContainer(ctx context.Context, containerID 
 func (c *sandboxdClient) reconfigureDockerContainer(ctx context.Context, job sandboxJob, containerID string, payload sandboxJobPayload) (map[string]any, error) {
 	id := strings.TrimSpace(containerID)
 	if id == "" {
-		if found, ok := c.findDockerContainerByInstance(ctx, job.InstanceID); ok {
+		if found, ok, err := c.findDockerContainerByInstance(ctx, job.InstanceID); err != nil {
+			return nil, err
+		} else if ok {
 			id = found
 		}
 	}
@@ -1053,9 +1108,17 @@ func (c *sandboxdClient) reconfigureDockerContainer(ctx context.Context, job san
 	}, nil
 }
 
-func (c *sandboxdClient) deleteDockerContainer(ctx context.Context, containerID string) (map[string]any, error) {
-	if strings.TrimSpace(containerID) == "" {
-		return map[string]any{"result": map[string]any{"deleted": true, "idempotent": true}}, nil
+func (c *sandboxdClient) deleteDockerContainer(ctx context.Context, containerID, instanceID string) (map[string]any, error) {
+	containerID = strings.TrimSpace(containerID)
+	if containerID == "" {
+		found, ok, err := c.findDockerContainerByInstance(ctx, instanceID)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return map[string]any{"result": map[string]any{"deleted": true, "idempotent": true}}, nil
+		}
+		containerID = found
 	}
 	cmd := dockerCommand(ctx, "rm", "-f", containerID)
 	out, err := cmd.CombinedOutput()
@@ -1068,7 +1131,6 @@ func (c *sandboxdClient) deleteDockerContainer(ctx context.Context, containerID 
 	}
 	return map[string]any{"local_ref": containerID, "result": map[string]any{"deleted": true, "container_id": containerID}}, nil
 }
-
 func (c *sandboxdClient) createCubeSandbox(ctx context.Context, job sandboxJob, payload sandboxJobPayload) (map[string]any, error) {
 	// Explicit job template wins over the node default (cube_template_id).
 	// Only empty / "default" fall back to the configured TemplateID.
@@ -1093,6 +1155,10 @@ func (c *sandboxdClient) createCubeSandbox(ctx context.Context, job sandboxJob, 
 	// booting a daemon in the sandbox.
 	if runtimeEnvToken(runtimeEnv) != "" {
 		if err := c.startRuntimeInCube(ctx, cube.SandboxID, runtimeEnv); err != nil {
+			// The instance row has no local_ref until create completes, so the
+			// control-plane delete job cannot identify this provisional Cube. Reclaim
+			// it here before reporting the sanitized bootstrap failure.
+			c.deleteProvisionalCube(context.WithoutCancel(ctx), cube.SandboxID)
 			return nil, err
 		}
 	}
@@ -1590,7 +1656,42 @@ func (c *sandboxdClient) startRuntimeInCube(ctx context.Context, sandboxID strin
 		return fmt.Errorf("runtime_env missing MULTICA_TOKEN")
 	}
 	code := buildStartRuntimeInCubeCode(runtimeEnv)
-	return c.cubeJSON(ctx, http.MethodPost, "/execute", map[string]any{"code": code, "language": "python"}, fmt.Sprintf("49999-%s.%s", sandboxID, c.cfg.CubeDomain), nil)
+	var stream cubeExecStream
+	if err := c.cubeJSON(ctx, http.MethodPost, "/execute", map[string]any{"code": code, "language": "python"}, fmt.Sprintf("49999-%s.%s", sandboxID, c.cfg.CubeDomain), &stream); err != nil {
+		return fmt.Errorf("cube runtime bootstrap failed")
+	}
+	if stream.err != nil {
+		// The provider/child error can contain credentials or model details. Keep
+		// the job error truthful but sanitized at this boundary.
+		return fmt.Errorf("cube runtime bootstrap failed")
+	}
+	return nil
+}
+
+func (c *sandboxdClient) deleteProvisionalCube(ctx context.Context, sandboxID string) {
+	const attempts = 3
+	path := "/sandboxes/" + url.PathEscape(sandboxID)
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if err := c.cubeJSONWithTimeout(ctx, 10*time.Second, http.MethodDelete, path, nil, "", nil); err == nil {
+			return
+		}
+		if attempt < attempts {
+			timer := time.NewTimer(100 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+		}
+	}
+	logger := c.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	// Never attach the provider response: it may contain child output or
+	// credentials. This fixed category is sufficient for operational diagnosis.
+	logger.Warn("cube provisional cleanup failed", "category", "cube_provisional_delete_failed")
 }
 
 // buildStartRuntimeInCubeCode stops any snapshot-restored daemon, rewrites

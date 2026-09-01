@@ -1,12 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestBuildStartRuntimeInCubeCodeResetsFrozenDaemonIdentity(t *testing.T) {
@@ -29,6 +35,176 @@ func TestBuildStartRuntimeInCubeCodeResetsFrozenDaemonIdentity(t *testing.T) {
 	// kill the reconfigure process itself before models.json is written.
 	if strings.Contains(code, "pkill -f 'multica daemon'") {
 		t.Fatal("pkill pattern must use [m]ultica trick to avoid self-match under python -c")
+	}
+}
+
+func TestStartRuntimeInCubeRejectsNDJSONErrorAndSuppressesDetails(t *testing.T) {
+	const sensitive = "synthetic-provider-detail"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/execute" {
+			t.Fatalf("unexpected Cube request %s %s", r.Method, r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"type":"error","name":"RuntimeError","value":"` + sensitive + `"}` + "\n"))
+	}))
+	defer server.Close()
+	client := &sandboxdClient{cfg: sandboxdConfig{CubeProxyHTTP: server.URL, CubeDomain: "cube.test"}, http: server.Client()}
+	err := client.startRuntimeInCube(context.Background(), "cube-1", map[string]string{"MULTICA_TOKEN": "tok"})
+	if err == nil || err.Error() != "cube runtime bootstrap failed" {
+		t.Fatalf("start error = %v", err)
+	}
+	if strings.Contains(err.Error(), sensitive) {
+		t.Fatal("bootstrap error disclosed child details")
+	}
+}
+
+func TestStartRuntimeInCubeAcceptsSuccessfulNDJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"type":"stdout","text":"started"}` + "\n"))
+	}))
+	defer server.Close()
+	client := &sandboxdClient{cfg: sandboxdConfig{CubeProxyHTTP: server.URL, CubeDomain: "cube.test"}, http: server.Client()}
+	if err := client.startRuntimeInCube(context.Background(), "cube-1", map[string]string{"MULTICA_TOKEN": "tok"}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+}
+
+func TestStartRuntimeInCubeSuppressesNon2xxResponseBody(t *testing.T) {
+	const sensitive = "synthetic-sensitive-bootstrap-body"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(sensitive))
+	}))
+	defer server.Close()
+	client := &sandboxdClient{cfg: sandboxdConfig{CubeProxyHTTP: server.URL, CubeDomain: "cube.test"}, http: server.Client()}
+	err := client.startRuntimeInCube(context.Background(), "cube-1", map[string]string{"MULTICA_TOKEN": "tok"})
+	if err == nil || err.Error() != "cube runtime bootstrap failed" {
+		t.Fatalf("start error = %v", err)
+	}
+	if strings.Contains(err.Error(), sensitive) {
+		t.Fatal("bootstrap error disclosed non-2xx response body")
+	}
+}
+
+func TestCreateCubeSandboxRetriesProvisionalDeleteWithoutLeakingDetails(t *testing.T) {
+	const sensitive = "synthetic-sensitive-delete-body"
+	var deletes atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/sandboxes":
+			_, _ = w.Write([]byte(`{"sandboxID":"cube-provisional"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/execute":
+			_, _ = w.Write([]byte(`{"type":"error","value":"bootstrap failed"}` + "\n"))
+		case r.Method == http.MethodDelete && r.URL.Path == "/sandboxes/cube-provisional":
+			deletes.Add(1)
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte(sensitive))
+		default:
+			t.Fatalf("unexpected Cube request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	var logs bytes.Buffer
+	client := &sandboxdClient{
+		cfg:    sandboxdConfig{SandboxServer: server.URL, CubeProxyHTTP: server.URL, CubeDomain: "cube.test"},
+		http:   server.Client(),
+		logger: slog.New(slog.NewTextHandler(&logs, nil)),
+	}
+	_, err := client.createCubeSandbox(context.Background(), sandboxJob{InstanceID: "instance-1"}, sandboxJobPayload{
+		Template: "template-1", RuntimeEnv: map[string]string{"MULTICA_TOKEN": "tok"},
+	})
+	if err == nil || err.Error() != "cube runtime bootstrap failed" {
+		t.Fatalf("create error = %v", err)
+	}
+	if got := deletes.Load(); got != 3 {
+		t.Fatalf("provisional delete attempts = %d, want 3", got)
+	}
+	if strings.Contains(logs.String(), sensitive) {
+		t.Fatal("provisional cleanup log disclosed provider response body")
+	}
+	if !strings.Contains(logs.String(), "cube_provisional_delete_failed") {
+		t.Fatalf("missing fixed cleanup category in log: %s", logs.String())
+	}
+}
+
+func TestCreateCubeSandboxDockerDeleteSerializesByInstance(t *testing.T) {
+	binDir := t.TempDir()
+	stateDir := t.TempDir()
+	script := `#!/bin/sh
+set -eu
+printf '%s\n' "$*" >> "$DOCKER_TEST_STATE/commands"
+case "$1" in
+  ps)
+    if [ -f "$DOCKER_TEST_STATE/container" ]; then cat "$DOCKER_TEST_STATE/container"; fi
+    ;;
+  run)
+    touch "$DOCKER_TEST_STATE/run_started"
+    while [ ! -f "$DOCKER_TEST_STATE/release_run" ]; do sleep 0.01; done
+    printf '%s\n' 'container-1' > "$DOCKER_TEST_STATE/container"
+    printf '%s\n' 'container-1'
+    ;;
+  port)
+    exit 1
+    ;;
+  rm)
+    rm -f "$DOCKER_TEST_STATE/container"
+    touch "$DOCKER_TEST_STATE/deleted"
+    ;;
+  *)
+    exit 1
+    ;;
+esac
+`
+	dockerPath := filepath.Join(binDir, "docker")
+	if err := os.WriteFile(dockerPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("DOCKER_TEST_STATE", stateDir)
+
+	client := &sandboxdClient{logger: slog.Default()}
+	createDone := make(chan error, 1)
+	go func() {
+		_, err := client.callCube(context.Background(), sandboxJob{
+			InstanceID: "instance-1", WorkspaceID: "workspace-1", Type: "create",
+			Payload: json.RawMessage(`{"docker_image":"runtime:test","runtime_env":{"MULTICA_TOKEN":"tok"}}`),
+		})
+		createDone <- err
+	}()
+	runStarted := filepath.Join(stateDir, "run_started")
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Stat(runStarted); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("docker create did not reach run")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	deleteDone := make(chan error, 1)
+	go func() {
+		_, err := client.callCube(context.Background(), sandboxJob{
+			InstanceID: "instance-1", WorkspaceID: "workspace-1", Type: "delete",
+			Payload: json.RawMessage(`{"template":"docker:runtime:test"}`),
+		})
+		deleteDone <- err
+	}()
+	time.Sleep(50 * time.Millisecond)
+	if _, err := os.Stat(filepath.Join(stateDir, "deleted")); err == nil {
+		t.Fatal("delete ran before create completed")
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "release_run"), []byte("release"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-createDone; err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := <-deleteDone; err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "deleted")); err != nil {
+		t.Fatalf("container was not deleted by instance label: %v", err)
 	}
 }
 

@@ -26,12 +26,33 @@ func TestNewCodexAppServerBackendImplementsResidentInterfaces(t *testing.T) {
 	if _, ok := b.(ResidentRuntimeLivenessChecker); !ok {
 		t.Fatal("CodexAppServerBackend must implement ResidentRuntimeLivenessChecker")
 	}
+	if _, ok := b.(ResidentProgressListener); !ok {
+		t.Fatal("CodexAppServerBackend must expose semantic progress for the resident silence clock")
+	}
 	if err := b.(ResidentRuntimeForceKillable).ForceKill(); err != nil {
 		t.Fatalf("ForceKill empty: %v", err)
 	}
 	alive, known := b.(ResidentRuntimeLivenessChecker).RuntimeAlive()
 	if known || alive {
 		t.Fatalf("empty process: alive=%v known=%v", alive, known)
+	}
+}
+
+func TestCodexResidentProgressListenerReceivesSemanticActivity(t *testing.T) {
+	backend := newCodexAppServerBackend(Config{Logger: slog.Default()})
+	progress := make(chan struct{}, 1)
+	backend.SetProgressListener(func() {
+		select {
+		case progress <- struct{}{}:
+		default:
+		}
+	})
+
+	backend.observeSemanticActivity("item/started:reasoning", make(chan string, 1))
+	select {
+	case <-progress:
+	case <-time.After(time.Second):
+		t.Fatal("Codex semantic activity did not reach the resident progress listener")
 	}
 }
 

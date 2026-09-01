@@ -854,9 +854,10 @@ func TestResidentMessageTurnErrorDoesNotAutoDeliverPending(t *testing.T) {
 func TestRuntimePoolSuppressesUnchangedSameSessionNoticeAndReportsOnlyChangedTargets(t *testing.T) {
 	backend := &pendingNoticeRuntime{}
 	pool := newAgentRuntimePool()
-	pool.slots["agent-1\x00runtime-1"] = &agentRuntimeSlot{
-		backend: backend, running: true,
+	slot := &agentRuntimeSlot{
+		backend: backend, running: true, lastRuntimeActivityAt: time.Now().Add(-30 * time.Minute),
 	}
+	pool.slots["agent-1\x00runtime-1"] = slot
 	first := InboxNoticeSnapshot{
 		Notice: agent.ResidentPendingNotice{TotalPending: 2, ChangedTargets: []agent.ResidentPendingTarget{
 			{Target: "#one", PendingCount: 1},
@@ -870,6 +871,9 @@ func TestRuntimePoolSuppressesUnchangedSameSessionNoticeAndReportsOnlyChangedTar
 	}
 	if err := pool.deliverBusyInboxNotice(context.Background(), "agent-1", "runtime-1", first, commitPendingNoticeForTest); err != nil {
 		t.Fatalf("first Notice: %v", err)
+	}
+	if silentFor, ok := slot.silentFor(time.Now()); !ok || silentFor > time.Minute {
+		t.Fatalf("silence after accepted busy Notice = %v found=%v, want refreshed activity clock", silentFor, ok)
 	}
 	if err := pool.deliverBusyInboxNotice(context.Background(), "agent-1", "runtime-1", first, commitPendingNoticeForTest); err != nil {
 		t.Fatalf("duplicate Notice: %v", err)

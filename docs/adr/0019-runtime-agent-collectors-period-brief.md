@@ -48,6 +48,13 @@ supersedes: docs/adr/0018-machine-work-journal-period-brief.md
 > outside agent-private `.multica`. HOME-only is incomplete on container
 > sandboxes. Non-git in-window source files are evidence.
 >
+> **Amendment (2026-09-01):** A collector job that **completes without an
+> error** and without `submit-pack` is a **settled empty pack**, not a
+> failure. Do not ask the Notes Assistant to re-collect. Hand the empty
+> slot to synthesis (`status=empty`, `retryable=false`). Retry remains
+> for `failed` / `stalled` and for a completed turn that still carried
+> an error string.
+>
 > **Amendment (2026-09-01):** “Other visible project dirs” on Linux includes
 > one level of HOME symlink children, common parents (`~/go`, `~/repos`,
 > `~/src/github.com`, …), and shallow git roots under `/opt` / `/srv` /
@@ -195,8 +202,8 @@ Skill: `multica-period-work-brief`.
 
 ### Narrow retry (synthesizer tool)
 
-For transient failures (`runtime_offline`, network/capacity, empty pack,
-retryable stalled), the synthesizer may call:
+For transient failures (`runtime_offline`, network/capacity, retryable
+stalled, or empty-with-error), the synthesizer may call:
 
 `multica notes period-brief retry-collectors --draft-page-id <draft>`
 

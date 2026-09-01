@@ -11,6 +11,7 @@ to these sources.
 | Collect / retry / synth one-shot session | `persistPeriodBriefNoteBriefContext`; daemon `ForceFreshSession` |
 | Status board fields (status/retryable/abandon_why) | `formatNotePeriodBriefPacks`, `classifyPeriodBriefCollectorOutcome` |
 | Permanent vs retryable classification | `server/internal/handler/note_period_brief_classify.go` |
+| Clean complete + no pack is settled empty (no retry) | `classifyPeriodBriefCollectorOutcome` (`completed` with empty error); `TestClassifyPeriodBriefCollectorOutcomeEmptyCompleted` |
 | One Notes-Assistant retry per collector; inbox does not auto-retry | `notePeriodBriefCollectorMaxRetries`; `SetAgentTaskMaxAttempts(..., 1)` |
 | Retry-only wake vs write wake | `notePeriodBriefRetryInstruction`; `dispatchNotePeriodBriefWorker(..., retryOnly)`; harvest `created_at >= writeAfter` |
 | Atomic per-collector pack write | `mergeNotePeriodBriefCollector`; await matches `pack_job_id` |

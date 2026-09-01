@@ -186,7 +186,9 @@ Transient / recoverable:
 
 - `runtime_offline` / daemon disconnect
 - Network / capacity / provider 5xx
-- `empty` pack (finished without `--note-write`)
+- `empty` pack only when the board says `retryable: true` (completed
+  turn still carried an error). Clean complete + no pack is settled
+  empty — write the Brief; do not retry
 - `stalled` (safety ceiling) when still `retryable: true`
 
 Call **once** per wake when needed:

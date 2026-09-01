@@ -1,0 +1,14 @@
+ALTER TABLE graph_memory_agent_citation
+  DROP CONSTRAINT graph_memory_agent_citation_traj_graph_node_key;
+ALTER TABLE graph_memory_agent_citation
+  ADD CONSTRAINT graph_memory_agent_citation_trajectory_id_node_id_key
+  UNIQUE (trajectory_id, node_id);
+
+ALTER TABLE graph_memory_agent_tool_operation
+  DROP CONSTRAINT graph_memory_agent_tool_operation_traj_graph_idem_key;
+ALTER TABLE graph_memory_agent_tool_operation
+  ADD CONSTRAINT graph_memory_agent_tool_opera_trajectory_id_idempotency_key_key
+  UNIQUE (trajectory_id, idempotency_key);
+
+ALTER TABLE graph_memory_agent_citation DROP COLUMN graph_identity;
+ALTER TABLE graph_memory_agent_tool_operation DROP COLUMN graph_identity;

@@ -301,14 +301,38 @@ func filterGraphModeLegacyMemories(in []execenv.MemoryContextForEnv) []execenv.M
 	return out
 }
 
-// mergeGraphModeExecutionMemory composes graph-mode execution memory:
-// whitelisted legacy user/agent memory plus any graph recall blobs. It never
-// replaces the legacy user/agent snapshot and never injects legacy
-// project/channel/daily memory (spec §8, §13 P0-1/P0-7).
-func mergeGraphModeExecutionMemory(agentRoot string, task Task, serverMemories, graphMemories []execenv.MemoryContextForEnv) []execenv.MemoryContextForEnv {
+// mergeGraphModeExecutionMemory composes graph-mode execution memory under
+// the shared 16 KiB budget: whitelisted legacy user/agent memory plus the
+// current graph recall and the federated research recall. Pack priorities
+// express the fixed trim order (unification spec §4.4): legacy historical
+// memory (priority 6) is trimmed first, the current recall (5) next, and the
+// research recall (4) last — durable user/member facts keep the highest
+// keep-priority. It never replaces the legacy user/agent snapshot and never
+// injects legacy project/channel/daily memory (spec §8, §13 P0-1/P0-7).
+func mergeGraphModeExecutionMemory(agentRoot string, task Task, serverMemories, graphMemories, researchMemories []execenv.MemoryContextForEnv) []execenv.MemoryContextForEnv {
 	legacy, _ := prepareExecutionMemory(agentRoot, task, serverMemories)
-	merged := filterGraphModeLegacyMemories(legacy)
-	return append(merged, graphMemories...)
+	whitelisted := filterGraphModeLegacyMemories(legacy)
+	candidates := make([]executionMemoryCandidate, 0, len(whitelisted)+len(graphMemories)+len(researchMemories))
+	order := 0
+	add := func(priority int, memories []execenv.MemoryContextForEnv) {
+		for _, memory := range memories {
+			memory.Name = strings.TrimSpace(memory.Name)
+			memory.Content = strings.TrimSpace(memory.Content)
+			if memory.Name == "" || memory.Content == "" {
+				continue
+			}
+			candidates = append(candidates, executionMemoryCandidate{Memory: memory, Priority: priority, Order: order})
+			order++
+		}
+	}
+	for _, memory := range whitelisted {
+		add(serverMemoryPriority(memory), []execenv.MemoryContextForEnv{memory})
+	}
+	// Trim order: research survives longest, then current; historical legacy
+	// (agent scope, priority 6) is dropped first when the budget overflows.
+	add(5, graphMemories)
+	add(4, researchMemories)
+	return packExecutionMemoryCandidates(candidates, executionMemoryBudgetBytes)
 }
 
 // withoutAgentScopeMemories drops agent-scope rows so they can be injected

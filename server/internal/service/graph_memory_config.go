@@ -7,6 +7,8 @@ import (
 	"math"
 	"strconv"
 	"strings"
+
+	"github.com/multica-ai/multica/server/internal/memorygraph"
 )
 
 // GraphMemoryTunables mirrors the workspace-tunable graph_memory_profile
@@ -41,6 +43,114 @@ type GraphMemoryLimits struct {
 	Ceilings      GraphMemoryTunables
 	DiveProviders []string
 	DiveModels    []string
+	// Research and ConsolidationWorkingSet carry the research→memory
+	// unification knobs (unification spec §4.2/§4.3). They shape server
+	// behavior only and have no workspace profile columns, so they sit
+	// beside the tunables instead of inside them.
+	Research                ResearchGraphTunables
+	ConsolidationWorkingSet ConsolidationWorkingSetTunables
+}
+
+// ResearchGraphTunables carries the research-graph export knobs
+// (unification spec §4.2): the import-time near-duplicate merge threshold
+// (conservative by design — a wrong merge costs more than a temporary
+// duplicate) and the export poll batch. The enable switch itself is
+// wiring-time env (MULTICA_RESEARCH_GRAPH_EXPORT_ENABLED, default off)
+// because it gates the scheduler job, not a tunable.
+type ResearchGraphTunables struct {
+	DedupThreshold float64
+	ExportBatch    int
+}
+
+// DefaultResearchGraphTunables returns the unification spec §4.2 defaults.
+func DefaultResearchGraphTunables() ResearchGraphTunables {
+	return ResearchGraphTunables{DedupThreshold: 0.95, ExportBatch: 100}
+}
+
+// ConsolidationWorkingSetTunables carries the consolidation working-set
+// budgets (unification spec §4.3 parameter table, decision 14).
+type ConsolidationWorkingSetTunables struct {
+	MaxNodes         int // deduped signal pool cap
+	NodeBodyRunes    int // per-node summary cap in the prompt
+	StagingTopK      int // similar nodes injected per staging segment
+	MaxWindowEntries int // signal-window fallback cap, newest first
+}
+
+// DefaultConsolidationWorkingSetTunables returns the spec §4.3 defaults.
+func DefaultConsolidationWorkingSetTunables() ConsolidationWorkingSetTunables {
+	return ConsolidationWorkingSetTunables{MaxNodes: 64, NodeBodyRunes: 400, StagingTopK: 3, MaxWindowEntries: 256}
+}
+
+// WorkingSetConfig converts the service budgets into the memorygraph
+// builder config (the normalized defaults match DefaultWorkingSetConfig).
+func (t ConsolidationWorkingSetTunables) WorkingSetConfig() memorygraph.WorkingSetConfig {
+	return memorygraph.WorkingSetConfig{
+		MaxNodes:         t.MaxNodes,
+		NodeBodyRunes:    t.NodeBodyRunes,
+		StagingTopK:      t.StagingTopK,
+		MaxWindowEntries: t.MaxWindowEntries,
+	}
+}
+
+// Sanity bounds for the unification groups: env may retune within them and
+// fails closed beyond them, mirroring graphMemoryStorageBounds.
+const (
+	researchDedupThresholdBound     = 1.0
+	researchDedupThresholdFloor     = 0.5 // below this a merge threshold is not conservative
+	researchExportBatchBound        = 1000
+	workingSetMaxNodesBound         = 512
+	workingSetNodeBodyRunesBound    = 4000
+	workingSetStagingTopKBound      = 32
+	workingSetMaxWindowEntriesBound = 4096
+)
+
+const (
+	graphMemoryResearchDedupEnv = "MULTICA_GRAPH_MEMORY_RESEARCH_DEDUP_THRESHOLD"
+	graphMemoryResearchBatchEnv = "MULTICA_GRAPH_MEMORY_RESEARCH_EXPORT_BATCH"
+)
+
+// loadResearchGraphTunables reads the research group. Anything unparseable,
+// out of bound, or below the conservative floor fails closed to the default.
+func loadResearchGraphTunables(getenv func(string) string) ResearchGraphTunables {
+	t := DefaultResearchGraphTunables()
+	if v, ok := parseGraphMemoryEnvNumber(getenv(graphMemoryResearchDedupEnv), graphMemoryEnvKnob{
+		name: "RESEARCH_DEDUP_THRESHOLD", storage: int64(researchDedupThresholdBound), isFloat: true,
+	}); ok && v >= researchDedupThresholdFloor {
+		t.DedupThreshold = v
+	}
+	if v, ok := parseGraphMemoryEnvNumber(getenv(graphMemoryResearchBatchEnv), graphMemoryEnvKnob{
+		name: "RESEARCH_EXPORT_BATCH", storage: researchExportBatchBound,
+	}); ok && v >= 1 {
+		t.ExportBatch = int(v)
+	}
+	return t
+}
+
+// loadConsolidationWorkingSetTunables reads the working-set group. Values
+// below 1 would silently disable a budget, so they fail closed too.
+func loadConsolidationWorkingSetTunables(getenv func(string) string) ConsolidationWorkingSetTunables {
+	t := DefaultConsolidationWorkingSetTunables()
+	if v, ok := parseGraphMemoryEnvNumber(getenv(graphMemoryEnvDefaultPrefix+"WORKING_SET_MAX_NODES"), graphMemoryEnvKnob{
+		name: "WORKING_SET_MAX_NODES", storage: workingSetMaxNodesBound,
+	}); ok && v >= 1 {
+		t.MaxNodes = int(v)
+	}
+	if v, ok := parseGraphMemoryEnvNumber(getenv(graphMemoryEnvDefaultPrefix+"WORKING_SET_NODE_BODY_RUNES"), graphMemoryEnvKnob{
+		name: "WORKING_SET_NODE_BODY_RUNES", storage: workingSetNodeBodyRunesBound,
+	}); ok && v >= 1 {
+		t.NodeBodyRunes = int(v)
+	}
+	if v, ok := parseGraphMemoryEnvNumber(getenv(graphMemoryEnvDefaultPrefix+"WORKING_SET_STAGING_TOP_K"), graphMemoryEnvKnob{
+		name: "WORKING_SET_STAGING_TOP_K", storage: workingSetStagingTopKBound,
+	}); ok && v >= 1 {
+		t.StagingTopK = int(v)
+	}
+	if v, ok := parseGraphMemoryEnvNumber(getenv(graphMemoryEnvDefaultPrefix+"WORKING_SET_MAX_WINDOW_ENTRIES"), graphMemoryEnvKnob{
+		name: "WORKING_SET_MAX_WINDOW_ENTRIES", storage: workingSetMaxWindowEntriesBound,
+	}); ok && v >= 1 {
+		t.MaxWindowEntries = int(v)
+	}
+	return t
 }
 
 // Storage sanity bounds from migration 418 CHECK constraints. Env ceilings
@@ -136,6 +246,8 @@ func LoadGraphMemoryLimits(getenv func(string) string) GraphMemoryLimits {
 	}
 	limits.DiveProviders = splitGraphMemoryEnvList(getenv(graphMemoryDiveProvidersEnv))
 	limits.DiveModels = splitGraphMemoryEnvList(getenv(graphMemoryDiveModelsEnv))
+	limits.Research = loadResearchGraphTunables(getenv)
+	limits.ConsolidationWorkingSet = loadConsolidationWorkingSetTunables(getenv)
 	return limits
 }
 

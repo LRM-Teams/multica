@@ -23,6 +23,15 @@ type PostgresStore struct {
 	txFaultHook                   researchTxFaultHook
 	dispatchManifestBeforeCASHook func(context.Context, *dispatchManifestPlan) error
 	dispatchManifestPlannedHook   func(context.Context, dispatchManifestPlan) error
+	backgroundKnowledge           V6BackgroundKnowledgeProvider
+}
+
+// SetBackgroundKnowledgeProvider wires the Director background-knowledge
+// recall (unification spec §5). The director brief modules constructed inside
+// store methods read it through the store, so this setter is the single
+// injection seam; a nil provider keeps briefs working without background.
+func (s *PostgresStore) SetBackgroundKnowledgeProvider(provider V6BackgroundKnowledgeProvider) {
+	s.backgroundKnowledge = provider
 }
 
 var (

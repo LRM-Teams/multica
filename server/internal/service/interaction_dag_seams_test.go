@@ -443,3 +443,76 @@ func TestSeamHook_NoFireWhenCloseFails(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 	}
 }
+
+// TestSeams_ChannelConversationRecordsSegment: an ordinary channel conversation
+// (non-training, no project binding) in a graph workspace records a
+// channel-scoped local segment at the terminal seam and feeds the ingest hook,
+// so channel learning reaches graph-memory staging.
+func TestSeams_ChannelConversationRecordsSegment(t *testing.T) {
+	t.Setenv("MULTICA_MEMORY_TYPE", "graph")
+	store := newFakeInteractionDAGStore()
+	client := &fakeArealSegmentClient{}
+	msgs := newFakeMessageStore()
+	svc := newSeamTaskServiceWithChecker(store, client, msgs, &fakeEnvDispatchChecker{})
+	hook := newFakeSegmentIngestHook()
+	svc.SetSegmentIngestHook(hook)
+
+	taskID, channelID := testUUID(1), testUUID(2)
+	taskIDStr := util.UUIDToString(taskID)
+	task := db.AgentInboxEvent{ID: taskID, ChannelID: channelID, WorkspaceID: testUUID(3), Context: nil}
+	store.addTestTaskMessage(taskIDStr, 1)
+	msgs.addTaskMessage(taskIDStr, taskMsg(taskID, 1, "user", "remember SEAT-1234"))
+
+	// projectID="" is the channel-conversation branch of the terminal seam.
+	svc.closeSegmentForTerminal(context.Background(), task, "", nil)
+	require.Len(t, store.segmentSnapshots, 1)
+
+	seg := store.segmentSnapshots[0]
+	assert.Equal(t, channelSegmentScope(channelID), seg.ProjectID)
+	assert.Equal(t, taskIDStr, seg.AgentRunID)
+	assert.Equal(t, "task_messages", seg.TrajectorySource)
+	assert.False(t, seg.Trainable, "channel conversations are never trainable")
+	assert.False(t, seg.ClosingEvent.Valid, "terminal leaf close stores NULL closing_event")
+	assert.Contains(t, string(seg.Trajectory), "remember SEAT-1234")
+	assert.Empty(t, client.closeCalls, "channel path makes zero AReaL calls")
+
+	exp := awaitIngest(t, hook)
+	assert.Equal(t, "multica:"+taskIDStr, exp.SegmentID)
+	assert.Equal(t, taskIDStr, exp.AgentRunID)
+	assert.Contains(t, string(exp.Trajectory), "remember SEAT-1234")
+}
+
+// TestSeams_ChannelConversationLegacyNoop: the same channel conversation in a
+// legacy workspace stays the historical no-op (nothing consumes the rows).
+func TestSeams_ChannelConversationLegacyNoop(t *testing.T) {
+	t.Setenv("MULTICA_MEMORY_TYPE", "legacy")
+	store := newFakeInteractionDAGStore()
+	client := &fakeArealSegmentClient{}
+	svc := newSeamTaskServiceWithChecker(store, client, newFakeMessageStore(), &fakeEnvDispatchChecker{})
+	hook := newFakeSegmentIngestHook()
+	svc.SetSegmentIngestHook(hook)
+
+	task := db.AgentInboxEvent{ID: testUUID(1), ChannelID: testUUID(2), WorkspaceID: testUUID(3), Context: nil}
+	svc.closeSegmentForTerminal(context.Background(), task, "", nil)
+
+	assert.Empty(t, store.segmentSnapshots, "legacy workspace records no channel segment")
+	assert.Empty(t, store.sessionRuns, "legacy workspace records no session run")
+	select {
+	case seg := <-hook.calls:
+		t.Fatalf("legacy mode must not fire the ingest hook, got %+v", seg)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// TestSeams_ChannelNoopWithoutChannel: graph gating passes and the project is
+// not env-dispatch, but the task has no channel -> the channel branch no-ops
+// (ordinary project-bound tasks are unaffected by the fall-through).
+func TestSeams_ChannelNoopWithoutChannel(t *testing.T) {
+	t.Setenv("MULTICA_MEMORY_TYPE", "graph")
+	store := newFakeInteractionDAGStore()
+	svc := newSeamTaskServiceWithChecker(store, &fakeArealSegmentClient{}, newFakeMessageStore(), &fakeEnvDispatchChecker{hasRun: false})
+
+	task := db.AgentInboxEvent{ID: testUUID(1), WorkspaceID: testUUID(3), Context: nil}
+	svc.closeSegmentForTerminal(context.Background(), task, "proj-1", leanSnap())
+	assert.Empty(t, store.segmentSnapshots, "task without a channel records nothing")
+}

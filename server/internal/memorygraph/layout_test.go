@@ -65,3 +65,46 @@ func TestEnsureScopedDirCreatesWithIdentityAndFailsClosedOnMismatch(t *testing.T
 		t.Error("VerifyGraphIdentity must fail closed on owner mismatch")
 	}
 }
+
+func TestDirForScopeResearchGraphLayout(t *testing.T) {
+	root := t.TempDir()
+	ws := uuid.NewString()
+
+	dir, err := DirForScope(root, ws, GraphDirKindResearch, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(root, ws, "memory_graph", "research", ws); dir != want {
+		t.Errorf("research dir = %q, want %q", dir, want)
+	}
+	// The research graph is exactly one per workspace: the owner must be
+	// the workspace itself; a foreign owner fails closed.
+	if _, err := DirForScope(root, ws, GraphDirKindResearch, uuid.NewString()); err == nil {
+		t.Error("DirForScope(research, foreign owner) must fail closed")
+	}
+}
+
+func TestEnsureScopedDirResearchIdentity(t *testing.T) {
+	root := t.TempDir()
+	ws := uuid.NewString()
+
+	dir, err := EnsureScopedDir(root, ws, GraphDirKindResearch, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := ReadGraphIdentity(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != (GraphIdentity{WorkspaceID: ws, Kind: "research", OwnerID: ws}) {
+		t.Errorf("identity = %+v", id)
+	}
+	// Second call is idempotent.
+	if _, err := EnsureScopedDir(root, ws, GraphDirKindResearch, ws); err != nil {
+		t.Fatal(err)
+	}
+	// Identity mismatch fails closed.
+	if err := VerifyGraphIdentity(dir, GraphIdentity{WorkspaceID: ws, Kind: "research", OwnerID: uuid.NewString()}); err == nil {
+		t.Error("VerifyGraphIdentity must fail closed on research owner mismatch")
+	}
+}

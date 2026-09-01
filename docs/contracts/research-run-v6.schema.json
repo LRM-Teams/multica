@@ -138,6 +138,30 @@
         "integration_state": { "enum": ["unmatched", "candidate", "discussing", "excluded"] }
       }
     },
+    "background_knowledge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["guidance", "entries"],
+      "properties": {
+        "guidance": { "$ref": "#/$defs/text" },
+        "entries": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["node_id", "graph", "epistemic", "observed_at_date", "summary"],
+            "properties": {
+              "node_id": { "$ref": "#/$defs/short_text" },
+              "graph": { "enum": ["research", "project"] },
+              "epistemic": { "enum": ["", "proposed", "supported", "accepted", "contested"] },
+              "observed_at_date": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+              "summary": { "$ref": "#/$defs/text" }
+            }
+          }
+        }
+      }
+    },
     "branch_frontier_summary": {
       "type": "object",
       "additionalProperties": false,
@@ -275,6 +299,7 @@
         "through_event_sequence": { "$ref": "#/$defs/sequence" },
         "page": { "$ref": "#/$defs/director_brief_page_descriptor" },
         "goal": { "$ref": "#/$defs/goal_snapshot" },
+        "background_knowledge": { "$ref": "#/$defs/background_knowledge" },
         "research": {
           "type": "object",
           "additionalProperties": false,

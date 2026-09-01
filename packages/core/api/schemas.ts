@@ -1633,11 +1633,12 @@ export const GraphMemoryMessageCitationsSchema = z.object({
 }).loose();
 
 export const GraphMemoryGraphStatusSchema = z.object({
-  kind: z.enum(["project", "channel"]).catch("project"),
+  kind: z.enum(["project", "channel", "research"]).catch("project"),
   owner_id: z.string().default(""),
   current_version: z.number().int().default(0),
   versions: z.array(z.number().int()).default([]),
   staging_segments: z.number().int().default(0),
+  node_count: z.number().int().default(0),
   // Backend omits/nulls this when the graph was never consolidated.
   last_consolidated_at: z.string().nullable().default(null),
   consolidation_backoff: z.boolean().default(false),

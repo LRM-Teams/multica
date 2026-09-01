@@ -21,6 +21,7 @@ var ErrKiroACPTurnBusy = errors.New("kiro ACP turn busy")
 // Close is mandatory on eviction, config mismatch, and failed turns.
 type KiroACPBackend interface {
 	Backend
+	ResidentMessageInput
 	Close()
 }
 
@@ -82,11 +83,67 @@ func (b *kiroACPBackend) Execute(ctx context.Context, prompt string, opts ExecOp
 		defer close(msgCh)
 		defer close(resCh)
 		started := time.Now()
-		result := b.executeTurn(ctx, prompt, opts, msgCh)
+		result := b.executeTurn(ctx, prompt, opts, msgCh, nil)
 		result.DurationMs = time.Since(started).Milliseconds()
 		resCh <- result
 	}()
 	return &Session{Messages: msgCh, Result: resCh, RuntimeAlive: b.runtimeAlive}, nil
+}
+
+// AcceptMessageBatch starts one Kiro ACP turn for canonical Message bodies
+// while the resident runtime is idle. Acceptance is reported only after the
+// session/prompt request crosses the serialized ACP write boundary.
+func (b *kiroACPBackend) AcceptMessageBatch(ctx context.Context, messages []ResidentMessage) (ResidentMessageAcceptance, error) {
+	if len(messages) == 0 {
+		done := make(chan error)
+		close(done)
+		return ResidentMessageAcceptance{Done: done}, nil
+	}
+	prompt, err := formatResidentMessageBatch(messages)
+	if err != nil {
+		return ResidentMessageAcceptance{}, err
+	}
+	return b.acceptIdleInputPrompt(ctx, prompt)
+}
+
+func (b *kiroACPBackend) acceptIdleInputPrompt(ctx context.Context, prompt string) (ResidentMessageAcceptance, error) {
+	if !b.running.CompareAndSwap(false, true) {
+		return ResidentMessageAcceptance{}, fmt.Errorf("%w: idle input overlaps an active turn", ErrKiroACPTurnBusy)
+	}
+
+	accepted := make(chan error, 1)
+	done := make(chan error, 1)
+	msgCh := make(chan Message, 256)
+	turnCtx, cancelTurn := context.WithCancel(context.Background())
+	go func() {
+		defer cancelTurn()
+		result := b.executeTurn(turnCtx, prompt, b.cfg.ResidentOptions, msgCh, func(err error) {
+			accepted <- err
+		})
+		close(msgCh)
+		b.running.Store(false)
+		done <- errorForResidentTurn(result)
+		close(done)
+	}()
+
+	select {
+	case err := <-accepted:
+		if err != nil {
+			return ResidentMessageAcceptance{}, err
+		}
+		return ResidentMessageAcceptance{Done: done, Messages: msgCh}, nil
+	case <-ctx.Done():
+		select {
+		case err := <-accepted:
+			if err != nil {
+				return ResidentMessageAcceptance{}, err
+			}
+			return ResidentMessageAcceptance{Done: done, Messages: msgCh}, nil
+		default:
+			cancelTurn()
+			return ResidentMessageAcceptance{}, ctx.Err()
+		}
+	}
 }
 
 func (b *kiroACPBackend) RuntimeAlive() (bool, bool) {
@@ -106,9 +163,12 @@ func (b *kiroACPBackend) runtimeAlive() (bool, bool) {
 	return processAlive(p.cmd.Process)
 }
 
-func (b *kiroACPBackend) executeTurn(ctx context.Context, prompt string, opts ExecOptions, msgCh chan<- Message) Result {
+func (b *kiroACPBackend) executeTurn(ctx context.Context, prompt string, opts ExecOptions, msgCh chan<- Message, reportAcceptance func(error)) Result {
 	p, err := b.ensureProcess(ctx, opts)
 	if err != nil {
+		if reportAcceptance != nil {
+			reportAcceptance(err)
+		}
 		if b.forceKilled.CompareAndSwap(true, false) {
 			return Result{Status: "failed", Error: AgentForceKilledMarker + ": " + err.Error()}
 		}
@@ -134,10 +194,18 @@ func (b *kiroACPBackend) executeTurn(ctx context.Context, prompt string, opts Ex
 	streaming.Store(true)
 	p.client.acceptNotification = func(string) bool { return streaming.Load() }
 
-	_, err = p.client.request(ctx, "session/prompt", map[string]any{
+	promptBlocks := []map[string]any{{"type": "text", "text": prompt}}
+	promptID, promptDone, err := p.client.beginRequest("session/prompt", map[string]any{
 		"sessionId": p.sessionID,
-		"prompt":    []map[string]any{{"type": "text", "text": prompt}},
+		"content":   promptBlocks,
+		"prompt":    promptBlocks,
 	})
+	if reportAcceptance != nil {
+		reportAcceptance(err)
+	}
+	if err == nil {
+		_, err = p.client.awaitRequest(ctx, promptID, promptDone)
+	}
 	streaming.Store(false)
 	p.stateMu.Lock()
 	p.message = nil

@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6DirectorCycleInput) (DirectorBriefFacts, error) {
@@ -20,11 +22,12 @@ func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6Di
 	var audience, freshness, language string
 	var goalVersion int
 	var assignmentStatus string
+	var projectID pgtype.Text
 	err := s.pool.QueryRow(ctx, `SELECT a.id::text,a.generation,a.status,s.state_version,COALESCE((SELECT max(sequence) FROM research_run_event e WHERE e.session_id=s.id),0),s.goal_version,s.goal,
-		COALESCE(c.scope,'{}'::jsonb),COALESCE(c.audience,''),COALESCE(c.freshness,''),COALESCE(c.language,''),COALESCE(c.source_policy,'{}'::jsonb)
+		COALESCE(c.scope,'{}'::jsonb),COALESCE(c.audience,''),COALESCE(c.freshness,''),COALESCE(c.language,''),COALESCE(c.source_policy,'{}'::jsonb),s.project_id
 		FROM research_session s JOIN research_director_assignment a ON a.id=s.current_director_assignment_id
 		LEFT JOIN research_contract_revision c ON c.session_id=s.id AND c.goal_version=s.goal_version
-		WHERE s.workspace_id=$1::uuid AND s.id=$2::uuid AND s.orchestrator_version='research-run-v6' AND a.status IN ('active','unavailable')`, in.WorkspaceID, in.RunID).Scan(&facts.AssignmentID, &facts.DirectorGeneration, &assignmentStatus, &facts.StateVersion, &facts.ThroughSequence, &goalVersion, &goal, &scope, &audience, &freshness, &language, &sourcePolicy)
+		WHERE s.workspace_id=$1::uuid AND s.id=$2::uuid AND s.orchestrator_version='research-run-v6' AND a.status IN ('active','unavailable')`, in.WorkspaceID, in.RunID).Scan(&facts.AssignmentID, &facts.DirectorGeneration, &assignmentStatus, &facts.StateVersion, &facts.ThroughSequence, &goalVersion, &goal, &scope, &audience, &freshness, &language, &sourcePolicy, &projectID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DirectorBriefFacts{}, ErrV6DirectorUnavailable
 	}
@@ -191,7 +194,38 @@ func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6Di
 	if facts.ReportPlan, err = s.loadV6ReportPlanFact(ctx, in.WorkspaceID, in.RunID); err != nil {
 		return DirectorBriefFacts{}, err
 	}
+	facts.BackgroundKnowledge = s.loadV6BackgroundKnowledge(ctx, in, goal, projectID.String)
 	return facts, nil
+}
+
+// loadV6BackgroundKnowledge recalls memory-graph background for one Director
+// cycle (unification spec §5): a single provider call carrying the run goal
+// and the session's project binding. Every provider failure degrades to an
+// empty list — background supplements the brief and never gates the cycle.
+func (s *PostgresStore) loadV6BackgroundKnowledge(ctx context.Context, in StartV6DirectorCycleInput, goal, projectID string) []any {
+	if s.backgroundKnowledge == nil || strings.TrimSpace(goal) == "" {
+		return []any{}
+	}
+	entries, err := s.backgroundKnowledge.BackgroundKnowledge(ctx, in.WorkspaceID, in.RunID, goal, projectID)
+	if err != nil {
+		slog.Warn("research V6 Director brief: background knowledge recall failed; continuing without background",
+			"run_id", in.RunID, "error", err)
+		return []any{}
+	}
+	if len(entries) == 0 {
+		return []any{}
+	}
+	rendered := make([]any, 0, len(entries))
+	for _, entry := range entries {
+		rendered = append(rendered, map[string]any{
+			"node_id":          entry.NodeID,
+			"graph":            entry.Graph,
+			"epistemic":        entry.Epistemic,
+			"observed_at_date": entry.ObservedAt.UTC().Format("2006-01-02"),
+			"summary":          entry.Summary,
+		})
+	}
+	return rendered
 }
 
 func (s *PostgresStore) loadV6DirectionNodeCount(ctx context.Context, workspaceID, runID, branchID string) (int, error) {

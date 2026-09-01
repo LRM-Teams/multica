@@ -60,7 +60,7 @@ func TestGraphModeExecutionMemoryMergesLegacyUserAgent(t *testing.T) {
 		Name: "Graph memory recall", Content: "## Graph Memory Recall\ngraph body", Scope: "workspace",
 	}}
 
-	merged := mergeGraphModeExecutionMemory(agentRoot, task, serverMemories, graph)
+	merged := mergeGraphModeExecutionMemory(agentRoot, task, serverMemories, graph, nil)
 	names := memoryNames(merged)
 
 	for _, want := range []string{
@@ -128,7 +128,7 @@ func TestGraphFailureInjectsNoLegacyProjectChannelDaily(t *testing.T) {
 		InitiatorType: "member", InitiatorID: testMember,
 	}
 	// nil graphMemories == miss/error result of graphExecutionMemories.
-	merged := mergeGraphModeExecutionMemory(agentRoot, task, nil, nil)
+	merged := mergeGraphModeExecutionMemory(agentRoot, task, nil, nil, nil)
 	names := memoryNames(merged)
 	if !names["Current user preferences"] || !names["Agent global memory"] {
 		t.Fatalf("legacy user/agent memory must survive graph failure: %v", names)

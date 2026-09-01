@@ -170,3 +170,19 @@ func TestThinkingEnumsStayInsideCapabilityTable(t *testing.T) {
 		}
 	}
 }
+
+// TestCanonicalResidentBackendsAcceptIdleMessages locks the canonical Message
+// boundary to the concrete backends the daemon actually pools. Advertising a
+// resident provider without this interface strands Pending bodies forever.
+func TestCanonicalResidentBackendsAcceptIdleMessages(t *testing.T) {
+	t.Parallel()
+	for name, ctor := range forceRestartResidentConstructors {
+		backend := ctor(Config{})
+		if !Capabilities(name).CanonicalResident {
+			t.Errorf("%q resident constructor is not marked CanonicalResident", name)
+		}
+		if _, ok := backend.(ResidentMessageInput); !ok {
+			t.Errorf("%q canonical resident backend %T does not implement ResidentMessageInput", name, backend)
+		}
+	}
+}

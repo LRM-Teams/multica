@@ -26,13 +26,15 @@ func NewGraphMemoryStatusService(queries *db.Queries, root string) *GraphMemoryS
 }
 
 // GraphMemoryGraphStatus is the per-physical-graph view: versions/current
-// pointer, staging depth, last consolidation, and 24h recall quality.
+// pointer, staging depth, node count, last consolidation, and 24h recall
+// quality.
 type GraphMemoryGraphStatus struct {
-	Kind                 string     `json:"kind"` // "project" | "channel"
+	Kind                 string     `json:"kind"` // "project" | "channel" | "research"
 	OwnerID              string     `json:"owner_id"`
 	CurrentVersion       int        `json:"current_version"`
 	Versions             []int      `json:"versions"`
 	StagingSegments      int        `json:"staging_segments"`
+	NodeCount            int        `json:"node_count"`
 	LastConsolidatedAt   *time.Time `json:"last_consolidated_at,omitempty"`
 	ConsolidationBackoff bool       `json:"consolidation_backoff"`
 	RecallQueries24h     int        `json:"recall_queries_24h"`
@@ -91,6 +93,11 @@ func (s *GraphMemoryStatusService) Status(ctx context.Context, workspaceID strin
 		if segs, err := store.ListStagingSegments(); err == nil {
 			g.StagingSegments = len(segs)
 		}
+		if g.CurrentVersion > 0 {
+			if graph, err := memorygraph.LoadGraph(store, g.CurrentVersion); err == nil {
+				g.NodeCount = len(graph.Nodes())
+			}
+		}
 		if ds, ok := states[dir]; ok && !ds.LastConsolidated.IsZero() {
 			ts := ds.LastConsolidated
 			g.LastConsolidatedAt = &ts
@@ -108,7 +115,8 @@ func (s *GraphMemoryStatusService) Status(ctx context.Context, workspaceID strin
 }
 
 // forEachWorkspaceGraph walks the canonical per-workspace layout
-// (<root>/<ws>/memory_graph/{projects,channels}/<owner>) and invokes fn for
+// (<root>/<ws>/memory_graph/{projects,channels}/<owner> plus the federated
+// research graph research/<ws>, unification spec §4.4) and invokes fn for
 // every directory whose identity marker matches the workspace scope.
 // Directories with a mismatched or missing identity are skipped (fail
 // closed, spec §3/§12).
@@ -116,7 +124,11 @@ func forEachWorkspaceGraph(root, workspaceID string, fn func(kind memorygraph.Gr
 	for _, sub := range []struct {
 		kind memorygraph.GraphDirKind
 		dir  string
-	}{{memorygraph.GraphDirKindProject, "projects"}, {memorygraph.GraphDirKindChannel, "channels"}} {
+	}{
+		{memorygraph.GraphDirKindProject, "projects"},
+		{memorygraph.GraphDirKindChannel, "channels"},
+		{memorygraph.GraphDirKindResearch, "research"},
+	} {
 		base := filepath.Join(root, workspaceID, "memory_graph", sub.dir)
 		entries, err := os.ReadDir(base)
 		if err != nil {
@@ -124,6 +136,11 @@ func forEachWorkspaceGraph(root, workspaceID string, fn func(kind memorygraph.Gr
 		}
 		for _, e := range entries {
 			if !e.IsDir() {
+				continue
+			}
+			// The research graph is owned by the workspace itself; only that
+			// one directory is a sanctioned research scope.
+			if sub.kind == memorygraph.GraphDirKindResearch && e.Name() != workspaceID {
 				continue
 			}
 			dir := filepath.Join(base, e.Name())

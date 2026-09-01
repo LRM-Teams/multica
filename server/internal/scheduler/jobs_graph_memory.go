@@ -40,6 +40,10 @@ const graphConsolidationMaxStaleness = 24 * time.Hour
 // segments arrive beyond the watermark recorded at backoff entry (A3).
 const graphConsolidationBackoffThreshold = 3
 
+// researchMaintenanceMinInterval is the minimum spacing between two research
+// maintenance rounds on one graph (spec §4.5, default 1h).
+const researchMaintenanceMinInterval = time.Hour
+
 // graphDirState is the per-memory_graph-directory consolidation state.
 type graphDirState struct {
 	// LastConsolidated is the watermark the dual-threshold trigger counts
@@ -60,6 +64,10 @@ type graphDirState struct {
 	// BackoffWatermark is the total staging-segment count observed when
 	// backoff was entered.
 	BackoffWatermark int `json:"backoff_watermark,omitempty"`
+	// LastMaintenance is the last successful research maintenance round
+	// (unification spec §4.5): the query-log count trigger and the 1h
+	// minimum interval both measure against it.
+	LastMaintenance time.Time `json:"last_maintenance,omitempty"`
 }
 
 // graphConsolidationState is <workspaces root>/.consolidation_state.json.
@@ -226,7 +234,11 @@ func makeGraphMemoryConsolidationHandler(pool *pgxpool.Pool, bm *obsmetrics.Busi
 		if err != nil {
 			return HandlerResult{}, err
 		}
-		if len(dirs) == 0 {
+		researchDirs, err := findResearchGraphDirs(root)
+		if err != nil {
+			return HandlerResult{}, err
+		}
+		if len(dirs) == 0 && len(researchDirs) == 0 {
 			return HandlerResult{Result: map[string]any{"skipped": true, "reason": "no_memory_graph_dirs", "root": root}}, nil
 		}
 		state := loadGraphConsolidationState(root)
@@ -265,12 +277,21 @@ func makeGraphMemoryConsolidationHandler(pool *pgxpool.Pool, bm *obsmetrics.Busi
 				}
 			}
 		}
+		// Research maintenance rounds (unification spec §4.5) run on the
+		// research graphs after the project/channel sweep; the export
+		// switch and the same per-workspace graph gate keep them inert.
+		maintained := maintainResearchGraphs(ctx, pool, researchDirs, state, envType, lookup)
 		if err := saveGraphConsolidationState(root, state); err != nil {
 			slog.Warn("graph memory consolidation state write failed", "root", root, "error", err)
 		}
 		return HandlerResult{
 			RowsAffected: int64(consolidated),
-			Result:       map[string]any{"graph_dirs": len(dirs), "consolidated": consolidated},
+			Result: map[string]any{
+				"graph_dirs":          len(dirs),
+				"consolidated":        consolidated,
+				"research_dirs":       len(researchDirs),
+				"research_maintained": maintained,
+			},
 		}, nil
 	}
 }
@@ -633,6 +654,115 @@ func findMemoryGraphDirs(root string) ([]string, error) {
 		}
 	}
 	return dirs, nil
+}
+
+// findResearchGraphDirs walks the canonical research layout
+// <root>/<ws>/memory_graph/research/<ws> and returns only directories whose
+// immutable identity matches their path (spec §3; research owner is the
+// workspace itself).
+func findResearchGraphDirs(root string) ([]string, error) {
+	var dirs []string
+	matches, err := filepath.Glob(filepath.Join(root, "*", "memory_graph", "research", "*"))
+	if err != nil {
+		return nil, err
+	}
+	for _, dir := range matches {
+		info, err := os.Stat(dir)
+		if err != nil || !info.IsDir() {
+			continue
+		}
+		owner := filepath.Base(dir)
+		ws := filepath.Base(filepath.Dir(filepath.Dir(filepath.Dir(dir))))
+		if err := memorygraph.VerifyGraphIdentity(dir, memorygraph.GraphIdentity{
+			WorkspaceID: ws, Kind: string(memorygraph.GraphDirKindResearch), OwnerID: owner,
+		}); err != nil {
+			slog.Warn("graph memory: skipping research graph dir with invalid identity", "dir", dir, "error", err)
+			continue
+		}
+		dirs = append(dirs, dir)
+	}
+	return dirs, nil
+}
+
+// maintainResearchGraphs sweeps the research graphs of the hour (unification
+// spec §4.5). Gating layers: the export switch (off → the research graph is
+// never written), the per-workspace graph gate, the query-log dual-threshold
+// trigger with a 1h minimum interval, and per-dir failure isolation — a
+// failed round logs and leaves the watermark untouched so the next sweep
+// retries. Returns the number of rounds run.
+func maintainResearchGraphs(ctx context.Context, pool *pgxpool.Pool, dirs []string, state *graphConsolidationState, envType string, lookup graphMemoryGateLookup) int {
+	if !researchGraphExportEnabled() || len(dirs) == 0 {
+		return 0
+	}
+	ran := 0
+	for _, dir := range dirs {
+		if decision := resolveGraphMemoryGate(ctx, dir, envType, lookup); decision != "graph" {
+			slog.Info("research graph maintenance skipped", "dir", dir, "decision", decision)
+			continue
+		}
+		wsID, ok := graphDirWorkspaceID(dir)
+		if !ok {
+			continue
+		}
+		ds := state.dir(dir)
+		store := memorygraph.NewStore(dir)
+		if err := store.Init(); err != nil {
+			slog.Warn("research graph maintenance: init store failed", "dir", dir, "error", err)
+			continue
+		}
+		queries, err := countQueryLogEntriesSince(store, ds.LastMaintenance)
+		if err != nil {
+			slog.Warn("research graph maintenance: count queries failed", "dir", dir, "error", err)
+			continue
+		}
+		now := time.Now().UTC()
+		if !shouldRunResearchMaintenance(ds, queries, now) {
+			continue
+		}
+		if err := runResearchMaintenanceRound(ctx, pool, wsID, dir, store); err != nil {
+			slog.Warn("research graph maintenance failed", "dir", dir, "error", err)
+			continue
+		}
+		ds.LastMaintenance = now
+		ran++
+	}
+	return ran
+}
+
+// shouldRunResearchMaintenance reuses the dual-threshold mechanism on the
+// research graph's own query log (staging is structurally zero there) plus
+// the 1h minimum interval. A zero LastMaintenance counts as long elapsed.
+func shouldRunResearchMaintenance(ds *graphDirState, queries int, now time.Time) bool {
+	if now.Sub(ds.LastMaintenance) < researchMaintenanceMinInterval {
+		return false
+	}
+	return memorygraph.ShouldConsolidate(0, queries, memorygraph.DefaultConsolidateConfig())
+}
+
+// runResearchMaintenanceRound runs one LLM maintenance round against a
+// research graph (spec §4.5). It is a function value so the scheduler tests
+// can drive the trigger without a pi backend. The round reuses the
+// Consolidator's op-log audit and working-set machinery and runs the
+// in-place trajectory: TTT candidate generation stays on the project/channel
+// graphs, where explore backtests are wired. Writes go through the graph
+// mutation lease like every other writer.
+var runResearchMaintenanceRound = func(ctx context.Context, pool *pgxpool.Pool, wsID, dir string, store *memorygraph.Store) error {
+	backend, err := graphMemoryPIBackend()
+	if err != nil {
+		return err
+	}
+	cfg, _ := graphMemoryConsolidationConfigs(strings.TrimSpace(os.Getenv("MULTICA_PI_MODEL")), 0, false)
+	c := memorygraph.NewConsolidator(store, backend, cfg, "pi", nil, memorygraph.NewTraceRecorder(dir))
+	c.SetWorkingSetBuilder(memorygraph.NewWorkingSetBuilder(store, memorygraph.RetrievalSignals{}, graphMemoryEmbedder(store), memorygraph.DefaultWorkingSetConfig(), cfg.MaxFanout))
+	round := func(ctx context.Context) error {
+		_, err := c.MaintenanceRound(ctx)
+		return err
+	}
+	if pool != nil {
+		coordinator := service.NewGraphMutationCoordinator(pool)
+		return coordinator.WithGraphLock(ctx, wsID, "research", wsID, round)
+	}
+	return round(ctx)
 }
 
 func loadGraphConsolidationState(root string) *graphConsolidationState {

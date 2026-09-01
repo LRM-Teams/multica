@@ -26,6 +26,7 @@
   "graphBackoff": "退避中",
   "graphVersion": "版本",
   "graphStaging": "暂存",
+  "graphNodes": "节点",
   "graphRecall24h": "召回（24 小时）",
   "graphHitRate": "命中率",
   "graphAudit": "图记忆审计",

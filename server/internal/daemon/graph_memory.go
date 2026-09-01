@@ -15,20 +15,24 @@ import (
 // graph-memory recall. The daemon never resolves graph paths or runs Explore
 // locally. Any unsuccessful recall remains non-fatal and never restores the
 // legacy project/channel/daily/workspace/team memory paths.
-func (d *Daemon) graphExecutionMemories(ctx context.Context, task Task, log *slog.Logger) []execenv.MemoryContextForEnv {
+//
+// The federated research section (unification spec §4.4) comes back as its
+// own memory context so mergeGraphModeExecutionMemory can apply the 16 KiB
+// trim order (historical first, current next, research last).
+func (d *Daemon) graphExecutionMemories(ctx context.Context, task Task, log *slog.Logger) ([]execenv.MemoryContextForEnv, []execenv.MemoryContextForEnv) {
 	profile := effectiveGraphProfile(d.cfg, task)
 	if profile.memoryType != MemoryTypeGraph {
-		return nil
+		return nil, nil
 	}
 	query := graphRecallQuery(task)
 	if query == "" {
-		return nil
+		return nil, nil
 	}
 	if d.client == nil {
 		if log != nil {
 			log.Warn("graph memory recall failed; injecting no graph memory", "task_id", task.ID, "error", "daemon client is not configured")
 		}
-		return nil
+		return nil, nil
 	}
 
 	response, err := d.client.RequestGraphMemoryRecall(ctx, task.WorkspaceID, protocol.GraphMemoryRecallRequest{
@@ -38,9 +42,9 @@ func (d *Daemon) graphExecutionMemories(ctx context.Context, task Task, log *slo
 		if log != nil {
 			log.Warn("graph memory recall failed; injecting no graph memory", "task_id", task.ID, "error", err)
 		}
-		return nil
+		return nil, nil
 	}
-	if response == nil || !response.Found || strings.TrimSpace(response.Injection) == "" {
+	if response == nil || !response.Found || (strings.TrimSpace(response.Injection) == "" && strings.TrimSpace(response.ResearchInjection) == "") {
 		if log != nil {
 			status := ""
 			if response != nil {
@@ -48,11 +52,20 @@ func (d *Daemon) graphExecutionMemories(ctx context.Context, task Task, log *slo
 			}
 			log.Info("graph memory recall returned no injection", "task_id", task.ID, "status", status)
 		}
-		return nil
+		return nil, nil
 	}
-	return []execenv.MemoryContextForEnv{{
-		Name: "Graph memory recall", Content: response.Injection, Scope: "workspace",
-	}}
+	var current, research []execenv.MemoryContextForEnv
+	if strings.TrimSpace(response.Injection) != "" {
+		current = []execenv.MemoryContextForEnv{{
+			Name: "Graph memory recall", Content: response.Injection, Scope: "workspace",
+		}}
+	}
+	if strings.TrimSpace(response.ResearchInjection) != "" {
+		research = []execenv.MemoryContextForEnv{{
+			Name: "Research memory recall", Content: response.ResearchInjection, Scope: "workspace",
+		}}
+	}
+	return current, research
 }
 
 // graphRecallQuery picks the user-authored text of the task as the recall
@@ -72,6 +85,13 @@ func graphRecallQuery(task Task) string {
 	return ""
 }
 
+// graphRecallResult holds the two recall surfaces of one executed query: the
+// current graph recall and the federated research section.
+type graphRecallResult struct {
+	current  []execenv.MemoryContextForEnv
+	research []execenv.MemoryContextForEnv
+}
+
 // memoizedGraphExecutionMemories coalesces identical graph recall queries
 // within one resident message batch: the first message pays the recall and
 // later messages whose normalized query matches reuse the result (spec P0
@@ -79,21 +99,21 @@ func graphRecallQuery(task Task) string {
 // data, not a retryable error, within a near-simultaneous batch.
 func (d *Daemon) memoizedGraphExecutionMemories(
 	ctx context.Context, task Task,
-	memo map[string][]execenv.MemoryContextForEnv, log *slog.Logger,
-) []execenv.MemoryContextForEnv {
+	memo map[string]graphRecallResult, log *slog.Logger,
+) ([]execenv.MemoryContextForEnv, []execenv.MemoryContextForEnv) {
 	key := normalizeGraphRecallKey(graphRecallQuery(task))
 	if key == "" {
-		return nil
+		return nil, nil
 	}
 	if cached, ok := memo[key]; ok {
 		if log != nil {
 			log.Info("graph memory recall coalesced within batch", "task_id", task.ID)
 		}
-		return cached
+		return cached.current, cached.research
 	}
-	memories := d.graphExecutionMemories(ctx, task, log)
-	memo[key] = memories
-	return memories
+	current, research := d.graphExecutionMemories(ctx, task, log)
+	memo[key] = graphRecallResult{current: current, research: research}
+	return current, research
 }
 
 // normalizeGraphRecallKey canonicalizes a recall query for exact-match

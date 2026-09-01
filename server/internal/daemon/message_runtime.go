@@ -487,7 +487,7 @@ func (d *Daemon) prepareResidentMessageBatch(ctx context.Context, agentID, runti
 
 	prepared := make([]protocol.AgentMessageProjection, 0, len(messages))
 	sessionKey := residentTurnScopeSessionKey(agentID, runtimeID)
-	graphRecallMemo := map[string][]execenv.MemoryContextForEnv{}
+	graphRecallMemo := map[string]graphRecallResult{}
 	for _, message := range messages {
 		messageTask := residentMessageMemoryTask(workspaceID, agentID, runtimeID, []protocol.AgentMessageProjection{message})
 		if profile, ok := d.graphProfileForWorkspace(workspaceID); ok {
@@ -501,9 +501,9 @@ func (d *Daemon) prepareResidentMessageBatch(ctx context.Context, agentID, runti
 			// Same merge contract as runTask (spec §8): legacy user/agent
 			// retained, graph blob appended, no legacy project/channel/daily.
 			// Agent-scope rows stay out of per-message context.
+			graphCurrent, graphResearch := d.memoizedGraphExecutionMemories(ctx, messageTask, graphRecallMemo, d.logger)
 			combined := mergeGraphModeExecutionMemory(
-				agentRoot, messageTask, serverMemories,
-				d.memoizedGraphExecutionMemories(ctx, messageTask, graphRecallMemo, d.logger),
+				agentRoot, messageTask, serverMemories, graphCurrent, graphResearch,
 			)
 			memories = withoutAgentScopeMemories(combined)
 		} else {

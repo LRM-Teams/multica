@@ -268,7 +268,7 @@ func TestLimitsConfigDefault(t *testing.T) {
 		t.Fatalf("constructor MaxRelationEdges = %d, want 8", c.cfg.MaxRelationEdges)
 	}
 
-	prompt := c.buildPrompt(nil, graphStats{}, "")
+	prompt := c.buildPrompt(nil, graphStats{}, "", nil)
 	limitsIdx := strings.Index(prompt, "Graph limits:")
 	if limitsIdx < 0 {
 		t.Fatalf("prompt missing Graph limits line:\n%s", prompt)

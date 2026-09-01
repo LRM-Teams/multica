@@ -34,6 +34,12 @@ func NewEngine(store *PostgresStore, dispatcher Dispatcher, projector Projector)
 	return newEngine(store, dispatcher, projector)
 }
 
+// BackgroundKnowledgeConfigured reports whether Director-cycle background
+// recall (unification spec §5) is wired on the underlying store.
+func (e *Engine) BackgroundKnowledgeConfigured() bool {
+	return e != nil && e.store != nil && e.store.backgroundKnowledge != nil
+}
+
 func (e *Engine) ProjectionV6Snapshot(ctx context.Context, request V6ProjectionPageRequest) (V6ProjectionSnapshot, error) {
 	if e == nil || e.store == nil {
 		return V6ProjectionSnapshot{}, ErrV6DirectorUnavailable

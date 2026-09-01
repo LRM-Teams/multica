@@ -132,6 +132,7 @@ const COPY = {
   graphBackoff: "backoff",
   graphVersion: "version",
   graphStaging: "staging",
+  graphNodes: "nodes",
   graphRecall24h: "recalls (24h)",
   graphHitRate: "hit rate",
   graphAudit: "Graph memory audit",

@@ -20,11 +20,17 @@ import (
 var (
 	ErrGraphMemoryAgentGatewayForbidden = errors.New("graph memory agent gateway forbidden")
 	ErrGraphMemoryAgentGatewayOperation = errors.New("graph memory agent gateway operation invalid")
+	ErrGraphMemoryAgentGatewayGraph     = errors.New("graph memory agent gateway graph unavailable")
 )
 
 var graphMemoryAgentOperations = map[string]struct{}{
 	"start": {}, "explore": {}, "redirect": {}, "submit": {}, "checkpoint": {},
 }
+
+const (
+	graphMemoryAgentGraphChannel  = "channel"
+	graphMemoryAgentGraphResearch = "research"
+)
 
 // GraphMemoryAgentGateway is the public Agent-data-plane adapter for the five
 // server-authoritative Graph operations. Scope and graph version come only
@@ -114,6 +120,23 @@ func (g *GraphMemoryAgentGateway) ServeHTTP(w http.ResponseWriter, r *http.Reque
 	}
 	r.Body = io.NopCloser(bytes.NewReader(body))
 
+	// Graph selector (unification spec §4.4): the gateway serves the
+	// channel-route graph (default, for backwards compatibility) and the
+	// federated workspace research graph. Anything else fails closed.
+	var selector struct {
+		Graph string `json:"graph"`
+	}
+	if err := json.Unmarshal(body, &selector); err != nil {
+		return fmt.Errorf("graph memory agent tool body must be a JSON object: %w", err)
+	}
+	graphSel := strings.TrimSpace(selector.Graph)
+	if graphSel == "" {
+		graphSel = graphMemoryAgentGraphChannel
+	}
+	if graphSel != graphMemoryAgentGraphChannel && graphSel != graphMemoryAgentGraphResearch {
+		return fmt.Errorf("%w: unknown graph %q", ErrGraphMemoryAgentGatewayGraph, graphSel)
+	}
+
 	root, err := graphMemoryWorkspacesRoot()
 	if err != nil {
 		return err
@@ -130,6 +153,11 @@ func (g *GraphMemoryAgentGateway) ServeHTTP(w http.ResponseWriter, r *http.Reque
 	if err := store.Init(); err != nil {
 		return err
 	}
+	routeGraphVersion, err := store.CurrentVersion()
+	if err != nil {
+		return err
+	}
+	routeIdentity := route.GraphKind + ":" + route.GraphOwnerID
 
 	var runContext GraphMemoryAgentRunContext
 	if operation == "start" {
@@ -139,11 +167,10 @@ func (g *GraphMemoryAgentGateway) ServeHTTP(w http.ResponseWriter, r *http.Reque
 		if err := json.Unmarshal(body, &start); err != nil || strings.TrimSpace(start.Query) == "" {
 			return errors.New("graph memory agent start query is required")
 		}
-		version, err := store.CurrentVersion()
-		if err != nil {
-			return err
-		}
-		claim, err := g.runs.Claim(r.Context(), workspaceID, channelID, "channel", channelID, start.Query, int64(version))
+		// The run claim always carries the channel-route graph identity: the
+		// research graph is a federated supplement, never the run's primary
+		// graph (spec §4.4).
+		claim, err := g.runs.Claim(r.Context(), workspaceID, channelID, "channel", channelID, start.Query, int64(routeGraphVersion))
 		if err != nil {
 			return err
 		}
@@ -159,14 +186,44 @@ func (g *GraphMemoryAgentGateway) ServeHTTP(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	retrievalConfig := memorygraph.DefaultRetrievalConfig()
-	if route.GraphKind == string(memorygraph.GraphDirKindProject) {
-		retrievalConfig.View = memorygraph.GraphView{AllowProject: true, ChannelID: channelID}
+	// Build the tool server for the selected graph. The channel-route graph
+	// pins the claim's version; the research graph pins its own current
+	// version under a research-only view — research visibility is never
+	// implied by project/channel grants (fail closed, spec §4.4).
+	var targetStore *memorygraph.Store
+	var targetView memorygraph.GraphView
+	var targetVersion int
+	var targetIdentity string
+	if graphSel == graphMemoryAgentGraphResearch {
+		researchDir, err := memorygraph.DirForScope(root, workspaceID, memorygraph.GraphDirKindResearch, workspaceID)
+		if err != nil {
+			return err
+		}
+		if err := memorygraph.VerifyGraphIdentity(researchDir, memorygraph.GraphIdentity{
+			WorkspaceID: workspaceID, Kind: string(memorygraph.GraphDirKindResearch), OwnerID: workspaceID,
+		}); err != nil {
+			return fmt.Errorf("%w: research graph is not initialized", ErrGraphMemoryAgentGatewayGraph)
+		}
+		researchStore := memorygraph.NewStore(researchDir)
+		researchVersion, err := researchStore.CurrentVersion()
+		if err != nil {
+			return fmt.Errorf("%w: research graph version: %v", ErrGraphMemoryAgentGatewayGraph, err)
+		}
+		targetStore, targetView, targetVersion = researchStore, memorygraph.GraphView{AllowResearch: true}, researchVersion
+		targetIdentity = "research:" + workspaceID
 	} else {
-		retrievalConfig.View = memorygraph.GraphView{ChannelID: channelID}
+		if route.GraphKind == string(memorygraph.GraphDirKindProject) {
+			targetView = memorygraph.GraphView{AllowProject: true, ChannelID: channelID}
+		} else {
+			targetView = memorygraph.GraphView{ChannelID: channelID}
+		}
+		targetStore, targetVersion, targetIdentity = store, int(runContext.Claim.GraphVersion), routeIdentity
 	}
-	retriever := memorygraph.NewHybridRetriever(store, nil, retrievalConfig)
-	if err := retriever.RebuildForVersion(r.Context(), int(runContext.Claim.GraphVersion)); err != nil {
+
+	retrievalConfig := memorygraph.DefaultRetrievalConfig()
+	retrievalConfig.View = targetView
+	retriever := memorygraph.NewHybridRetriever(targetStore, nil, retrievalConfig)
+	if err := retriever.RebuildForVersion(r.Context(), targetVersion); err != nil {
 		return err
 	}
 	workspaceUUID, err := util.ParseUUID(workspaceID)
@@ -181,8 +238,8 @@ func (g *GraphMemoryAgentGateway) ServeHTTP(w http.ResponseWriter, r *http.Reque
 	cfg.Agents = 1
 	cfg.MaxRounds = int(profile.ExploreMaxRounds)
 	cfg.MaxExpandPerRound = int(profile.ExploreNodesPerExpansion)
-	ledger := NewGraphMemoryAgentToolLedger(g.runs, runContext.Claim, runContext.ConsumedSeq)
-	toolServer, err := memorygraph.NewExploreToolServerWithAgentLedger(store, retriever, cfg, int(runContext.Claim.GraphVersion), nil, ledger)
+	ledger := NewGraphMemoryAgentToolLedger(g.runs, runContext.Claim, runContext.ConsumedSeq, targetIdentity)
+	toolServer, err := memorygraph.NewExploreToolServerWithAgentLedger(targetStore, retriever, cfg, targetVersion, nil, ledger)
 	if err != nil {
 		return err
 	}

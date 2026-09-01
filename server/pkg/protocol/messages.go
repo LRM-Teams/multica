@@ -789,6 +789,10 @@ type GraphMemoryRecallResponse struct {
 	Citations    []GraphMemoryRecallCitation `json:"citations"`
 	Rounds       int                         `json:"rounds"`
 	Injection    string                      `json:"injection"`
+	// ResearchInjection is the federated research-graph section (unification
+	// spec §4.4), delivered as its own memory context so graph-mode execution
+	// memory can trim research after current (16 KiB order).
+	ResearchInjection string `json:"research_injection"`
 }
 
 // DaemonRegisterPayload is sent from daemon to server on connection.

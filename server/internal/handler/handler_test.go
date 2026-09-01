@@ -427,7 +427,45 @@ func handlerTestRuntimeID(t *testing.T) string {
 		t.Fatalf("failed to load handler test runtime: %v", err)
 	}
 
+	// TestMain writes last_seen_at once. The handler package can run longer
+	// than AgentHealthStaleThreshold (150s); tests that pick this runtime
+	// must see a live heartbeat, not a leftover from suite start.
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE agent_runtime SET last_seen_at = now(), status = 'online' WHERE id = $1`,
+		runtimeID,
+	); err != nil {
+		t.Fatalf("refresh handler test runtime heartbeat: %v", err)
+	}
+
 	return runtimeID
+}
+
+func TestHandlerTestRuntimeIDRefreshesStaleHeartbeat(t *testing.T) {
+	if testPool == nil || testRuntimeID == "" {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_runtime SET last_seen_at = now() - interval '10 minutes' WHERE id = $1
+	`, testRuntimeID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(),
+			`UPDATE agent_runtime SET last_seen_at = now() WHERE id = $1`, testRuntimeID)
+	})
+
+	handlerTestRuntimeID(t)
+
+	var age time.Duration
+	if err := testPool.QueryRow(ctx, `
+		SELECT now() - last_seen_at FROM agent_runtime WHERE id = $1
+	`, testRuntimeID).Scan(&age); err != nil {
+		t.Fatal(err)
+	}
+	if age >= service.AgentHealthStaleThreshold {
+		t.Fatalf("shared test runtime still stale after handlerTestRuntimeID: age=%v (threshold=%v)", age, service.AgentHealthStaleThreshold)
+	}
 }
 
 // resetTestWorkspaceOnboardingAgent clears the shared testWorkspaceID's

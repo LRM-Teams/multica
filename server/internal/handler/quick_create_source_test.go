@@ -31,7 +31,7 @@ func TestQuickCreateIssueSourceTrustBoundary(t *testing.T) {
 		t.Fatalf("fetch agent runtime: %v", err)
 	}
 	if _, err := testPool.Exec(ctx,
-		`UPDATE agent_runtime SET metadata = jsonb_build_object('cli_version', $1::text) WHERE id = $2`,
+		`UPDATE agent_runtime SET metadata = jsonb_build_object('cli_version', $1::text), last_seen_at = now(), status = 'online' WHERE id = $2`,
 		agent.MinQuickCreateCLIVersion, runtimeID,
 	); err != nil {
 		t.Fatalf("bump runtime cli_version: %v", err)

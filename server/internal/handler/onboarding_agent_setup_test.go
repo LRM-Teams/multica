@@ -16,6 +16,7 @@ func TestEnsureWindy_RequiresOwnerExplicitRuntimeAndModelThenSeedsGeneral(t *tes
 		t.Skip("database not available")
 	}
 	ctx := context.Background()
+	_ = handlerTestRuntimeID(t)
 	resetTestWorkspaceOnboardingAgent(t, ctx)
 	_ = ensureSystemGeneralForTest(t)
 	adminSuffix := strings.ReplaceAll(uuid.NewString(), "-", "")

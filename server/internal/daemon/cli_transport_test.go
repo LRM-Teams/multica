@@ -114,6 +114,50 @@ func TestPrepareStableAgentCLITransportUsesAgentScopedFixedPath(t *testing.T) {
 	}
 }
 
+func TestStableCanonicalRuntimeEnvironmentDropsInboxTurnKeys(t *testing.T) {
+	env, err := stableCanonicalRuntimeEnvironment(map[string]string{
+		"PATH":                            "/usr/bin",
+		"MULTICA_SERVER_URL":              "http://localhost:8081",
+		"MULTICA_WORKSPACE_ID":            "workspace-1",
+		"MULTICA_AGENT_ID":                "agent-1",
+		"MULTICA_TASK_ID":                 "task-1",
+		"MULTICA_RUN_ID":                  "task-1",
+		"MULTICA_AGENT_INBOX_EVENT_ID":    "event-1",
+		"MULTICA_AGENT_INBOX_DELIVERY_ID": "delivery-1",
+		"MULTICA_AGENT_INBOX_LEASE_TOKEN": "lease-1",
+		"MULTICA_TOKEN_FILE":              "/tmp/token",
+	})
+	if err != nil {
+		t.Fatalf("stableCanonicalRuntimeEnvironment: %v", err)
+	}
+	identity, err := newCanonicalAgentRuntimeIdentity(canonicalAgentRuntimeIdentityParams{
+		AgentID:     "agent-1",
+		RuntimeID:   "runtime-1",
+		Provider:    "pi",
+		Executable:  "/usr/local/bin/pi",
+		WorkDir:     "/var/lib/multica/agent-1/workspace",
+		Environment: env,
+	})
+	if err != nil {
+		t.Fatalf("inbox collector env must build a resident identity: %v", err)
+	}
+	for _, key := range []string{
+		"MULTICA_TASK_ID",
+		"MULTICA_RUN_ID",
+		"MULTICA_AGENT_INBOX_EVENT_ID",
+		"MULTICA_AGENT_INBOX_DELIVERY_ID",
+		"MULTICA_AGENT_INBOX_LEASE_TOKEN",
+		"MULTICA_TOKEN_FILE",
+	} {
+		if _, ok := identity.Environment[key]; ok {
+			t.Fatalf("resident identity retained current-turn key %s", key)
+		}
+	}
+	if identity.Environment["MULTICA_AGENT_ID"] != "agent-1" {
+		t.Fatalf("stable agent id = %q", identity.Environment["MULTICA_AGENT_ID"])
+	}
+}
+
 func TestSplitAgentProcessEnvironmentRemovesTurnIdentity(t *testing.T) {
 	stable, current, err := splitAgentProcessEnvironment(map[string]string{
 		"MULTICA_AGENT_ID":                       "agent-1",

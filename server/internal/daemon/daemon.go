@@ -2756,7 +2756,10 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	var backend agent.Backend
 	var createErr error
 	if !restrictedExecution && profile == executionProfileFull && isCanonicalResidentProvider(provider) {
-		stableEnvironment := stripProviderCredentialTransport(agentEnv)
+		stableEnvironment, envErr := stableCanonicalRuntimeEnvironment(agentEnv)
+		if envErr != nil {
+			return TaskResult{}, fmt.Errorf("build canonical runtime identity: %w", envErr)
+		}
 		identity, identityErr := newCanonicalAgentRuntimeIdentity(canonicalAgentRuntimeIdentityParams{
 			AgentID:             agentID,
 			RuntimeID:           task.RuntimeID,

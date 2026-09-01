@@ -44,6 +44,11 @@ type codexAppServerBackend struct {
 	running     atomic.Bool
 	forceKilled atomic.Bool
 	compact     compactionAttemptState
+
+	// progressListener forwards Codex semantic notifications that intentionally
+	// produce no public Message to the daemon's resident silence clock.
+	progressMu       sync.Mutex
+	progressListener func()
 }
 
 type codexAppServerProcess struct {
@@ -70,6 +75,31 @@ func newCodexAppServerBackend(cfg Config) *codexAppServerBackend {
 // one-shot codexBackend remains the default for issue/one-shot paths.
 func NewCodexAppServerBackend(cfg Config) CodexAppServerBackend {
 	return newCodexAppServerBackend(cfg)
+}
+
+// SetProgressListener registers the daemon's resident activity callback.
+// Codex emits semantic item notifications for reasoning, MCP, web search, and
+// other useful work that does not always map to a public Message.
+func (b *codexAppServerBackend) SetProgressListener(fn func()) {
+	b.progressMu.Lock()
+	b.progressListener = fn
+	b.progressMu.Unlock()
+}
+
+func (b *codexAppServerBackend) currentProgressListener() func() {
+	b.progressMu.Lock()
+	defer b.progressMu.Unlock()
+	return b.progressListener
+}
+
+func (b *codexAppServerBackend) observeSemanticActivity(description string, semanticActivityCh chan<- string) {
+	if b.cfg.Logger != nil {
+		b.cfg.Logger.Debug("codex semantic activity observed", "activity", description)
+	}
+	if progress := b.currentProgressListener(); progress != nil {
+		progress()
+	}
+	trySendString(semanticActivityCh, description)
 }
 
 func (b *codexAppServerBackend) Close() {
@@ -259,8 +289,7 @@ func (b *codexAppServerBackend) executeTurn(ctx context.Context, prompt string, 
 	semanticActivityCh := make(chan string, 256)
 	turnDone := make(chan bool, 1)
 	p.client.onSemanticActivity = func(description string) {
-		b.cfg.Logger.Debug("codex semantic activity observed", "activity", description)
-		trySendString(semanticActivityCh, description)
+		b.observeSemanticActivity(description, semanticActivityCh)
 	}
 	p.client.onTurnDone = func(aborted bool) {
 		select {

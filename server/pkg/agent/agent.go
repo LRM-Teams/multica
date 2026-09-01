@@ -80,14 +80,15 @@ type ResidentRuntimeSession interface {
 }
 
 var (
-	_ ResidentRuntimeStarter = (*codexAppServerBackend)(nil)
-	_ ResidentRuntimeStarter = (*piRPCBackend)(nil)
-	_ ResidentRuntimeStarter = (*cursorACPBackend)(nil)
-	_ ResidentRuntimeStarter = (*grokACPBackend)(nil)
-	_ ResidentRuntimeStarter = (*kiroACPBackend)(nil)
-	_ ResidentRuntimeStarter = (*claudeACPBackend)(nil)
-	_ ResidentRuntimeStarter = (*claudeStreamJSONBackend)(nil)
-	_ ResidentRuntimeStarter = (*opencodeServeBackend)(nil)
+	_ ResidentRuntimeStarter   = (*codexAppServerBackend)(nil)
+	_ ResidentProgressListener = (*codexAppServerBackend)(nil)
+	_ ResidentRuntimeStarter   = (*piRPCBackend)(nil)
+	_ ResidentRuntimeStarter   = (*cursorACPBackend)(nil)
+	_ ResidentRuntimeStarter   = (*grokACPBackend)(nil)
+	_ ResidentRuntimeStarter   = (*kiroACPBackend)(nil)
+	_ ResidentRuntimeStarter   = (*claudeACPBackend)(nil)
+	_ ResidentRuntimeStarter   = (*claudeStreamJSONBackend)(nil)
+	_ ResidentRuntimeStarter   = (*opencodeServeBackend)(nil)
 )
 
 // ResidentRuntimeForceKillable is an optional contract for backends that keep

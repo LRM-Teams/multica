@@ -86,6 +86,40 @@ func assertResidentTurnDeadlineReleased(t *testing.T, slot *agentRuntimeSlot) {
 	}
 }
 
+func TestResidentTurnsHaveNoAbsoluteCompletionDeadlineByDefault(t *testing.T) {
+	pool := newAgentRuntimePool()
+	if pool.residentTurnCompletionTimeout != 0 {
+		t.Fatalf("default resident turn completion timeout = %v, want disabled", pool.residentTurnCompletionTimeout)
+	}
+	if deadline := pool.residentTurnDeadline(time.Now()); !deadline.IsZero() {
+		t.Fatalf("default resident turn deadline = %v, want none", deadline)
+	}
+
+	backend := &residentTurnDeadlineBackend{done: make(chan error, 1), messages: make(chan agent.Message)}
+	installResidentTurnDeadlineBackend(pool, backend, func() {})
+	completed := make(chan error, 1)
+	if err := pool.deliverIdleMessages(context.Background(), "agent-1", "runtime-1", nil, nil, nil, nil, func(err error, _ uint64, _ *agent.ResidentTurnCapture) {
+		completed <- err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-completed:
+		t.Fatalf("healthy long-running resident turn completed without provider completion: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	backend.done <- nil
+	close(backend.messages)
+	select {
+	case err := <-completed:
+		if err != nil {
+			t.Fatalf("provider-completed resident turn = %v, want nil", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("provider-completed resident turn did not release")
+	}
+}
+
 func TestResidentTurnCompletionDeadlineBoundsEveryAcceptedSettlementStage(t *testing.T) {
 	tests := []struct {
 		name      string

@@ -27,11 +27,6 @@ const (
 	// disposed before the resident registers its control reader.
 	canonicalIdleAcceptTimeout = 20 * time.Second
 
-	// defaultResidentTurnCompletionTimeout is an absolute deadline from native
-	// Message acceptance through provider Done, Activity/Capture drain, and Pi
-	// settlement. Progress and tool calls do not extend it: those signals protect
-	// the silence watchdog, but cannot leave canonical admission owned forever.
-	defaultResidentTurnCompletionTimeout = 15 * time.Minute
 	// residentTurnForceKillGrace bounds a misbehaving ForceKill implementation.
 	// The old backend is generation-fenced before this wait and detached after it.
 	residentTurnForceKillGrace = 5 * time.Second
@@ -189,9 +184,9 @@ type agentRuntimePool struct {
 	// Message turn. Zero disables the recovery watchdog (used by tests and
 	// operators that opt out).
 	residentStallWatchdog time.Duration
-	// residentTurnCompletionTimeout is the non-renewable wall-clock budget for
-	// the complete accepted-turn settlement chain. It is separate from silence:
-	// provider progress may refresh the watchdog but never this deadline.
+	// residentTurnCompletionTimeout is disabled in production. Tests may set it
+	// explicitly to exercise bounded forced-cleanup paths without imposing an
+	// absolute wall-clock limit on healthy long-running turns.
 	residentTurnCompletionTimeout time.Duration
 }
 
@@ -252,9 +247,8 @@ type agentRuntimeSlot struct {
 
 func newAgentRuntimePool() *agentRuntimePool {
 	return &agentRuntimePool{
-		slots:                         make(map[string]*agentRuntimeSlot),
-		nextResume:                    make(map[string]string),
-		residentTurnCompletionTimeout: defaultResidentTurnCompletionTimeout,
+		slots:      make(map[string]*agentRuntimeSlot),
+		nextResume: make(map[string]string),
 	}
 }
 
@@ -1421,6 +1415,7 @@ func (p *agentRuntimePool) deliverAppInboxNotice(ctx context.Context, agentID, r
 			slot.mu.Unlock()
 			return err
 		}
+		slot.lastRuntimeActivityAt = time.Now()
 		slot.lastAppInboxNoticeFingerprint = fingerprint
 		slot.mu.Unlock()
 		return nil
@@ -1682,6 +1677,9 @@ func (p *agentRuntimePool) deliverBusyInboxNotice(ctx context.Context, agentID, 
 	if err := input.AcceptPendingNotice(ctx, notice); err != nil {
 		return err
 	}
+	// A successful native Notice receipt proves the busy provider is responsive,
+	// even though the content-free control input produces no public Message.
+	slot.lastRuntimeActivityAt = time.Now()
 	if !commitIfCurrent(func() {
 		slot.lastPendingNoticeFingerprint = snapshot.Fingerprint
 		slot.lastPendingTargetFingerprint = make(map[string]string, len(snapshot.TargetFingerprints))

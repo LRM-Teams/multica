@@ -68,6 +68,24 @@ func TestNotifyTaskAvailable(t *testing.T) {
 	}
 }
 
+func TestNotifyTaskAvailableDropsFullQueueWithoutDisconnecting(t *testing.T) {
+	hub := NewHub()
+	c := attachDaemonTestClient(hub, "runtime-1")
+	defer hub.unregister(c)
+	c.send <- []byte("occupied-1")
+	c.send <- []byte("occupied-2")
+
+	droppedBefore := M.EgressDroppedTotal.Load()
+	hub.NotifyTaskAvailable("runtime-1", "task-1")
+
+	if got := hub.RuntimeConnectionCount("runtime-1"); got != 1 {
+		t.Fatalf("runtime connection count = %d, want 1 after best-effort drop", got)
+	}
+	if got := M.EgressDroppedTotal.Load(); got != droppedBefore+1 {
+		t.Fatalf("egress_dropped_total = %d, want %d", got, droppedBefore+1)
+	}
+}
+
 func TestRequestWorkdirFilesUsesRaftAgentWorkspaceFlow(t *testing.T) {
 	hub := NewHub()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -202,6 +220,70 @@ func TestWorkspaceDaemonRoutesOnlyWithinDaemonWorkspaceScope(t *testing.T) {
 	workspaceB.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 	if _, _, err := workspaceB.ReadMessage(); err == nil {
 		t.Fatal("workspace-b received a workspace-a command")
+	}
+}
+
+func TestNotifyWorkspaceDaemonBackpressuresInsteadOfDisconnecting(t *testing.T) {
+	hub := NewHub()
+	key := workspaceDaemonKey{daemonID: "daemon-1", workspaceID: "workspace-1"}
+	c := &client{
+		hub:                    hub,
+		send:                   make(chan []byte, 1),
+		done:                   make(chan struct{}),
+		identity:               ClientIdentity{DaemonID: key.daemonID, WorkspaceID: key.workspaceID},
+		runtimes:               make(map[string]struct{}),
+		runnerDaemonInstanceID: "instance-1",
+	}
+	hub.mu.Lock()
+	hub.clients[c] = true
+	hub.byRunner[key] = c
+	hub.mu.Unlock()
+	defer hub.unregister(c)
+
+	c.send <- []byte("occupied")
+	disconnectsBefore := M.DisconnectsTotal.Load()
+	backpressureBefore := M.EgressBackpressureTotal.Load()
+	delivered := make(chan bool, 1)
+	go func() {
+		delivered <- hub.NotifyWorkspaceDaemon(
+			key.daemonID,
+			key.workspaceID,
+			protocol.EventDaemonAgentStart,
+			protocol.AgentStartPayload{AgentID: "agent-1", RuntimeID: "runtime-1"},
+		)
+	}()
+
+	select {
+	case result := <-delivered:
+		t.Fatalf("full egress queue returned %v instead of applying backpressure", result)
+	case <-time.After(25 * time.Millisecond):
+	}
+	if !hub.IsCurrentWorkspaceDaemon(key.daemonID, key.workspaceID, "instance-1") {
+		t.Fatal("full egress queue disconnected the current WorkspaceDaemon")
+	}
+	if got := M.DisconnectsTotal.Load(); got != disconnectsBefore {
+		t.Fatalf("disconnects_total = %d, want %d", got, disconnectsBefore)
+	}
+	if got := M.EgressBackpressureTotal.Load(); got != backpressureBefore+1 {
+		t.Fatalf("egress_backpressure_total = %d, want %d", got, backpressureBefore+1)
+	}
+
+	<-c.send
+	select {
+	case result := <-delivered:
+		if !result {
+			t.Fatal("WorkspaceDaemon notification failed after the writer freed capacity")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WorkspaceDaemon notification did not resume after the writer freed capacity")
+	}
+
+	var message protocol.Message
+	if err := json.Unmarshal(<-c.send, &message); err != nil {
+		t.Fatalf("unmarshal queued WorkspaceDaemon frame: %v", err)
+	}
+	if message.Type != protocol.EventDaemonAgentStart {
+		t.Fatalf("queued event = %q, want %q", message.Type, protocol.EventDaemonAgentStart)
 	}
 }
 

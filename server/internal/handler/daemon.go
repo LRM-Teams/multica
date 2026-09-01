@@ -1221,15 +1221,11 @@ func (h *Handler) HandleDaemonWSHeartbeat(ctx context.Context, identity daemonws
 	if err != nil || ack == nil {
 		return ack, err
 	}
-	// A capable current WorkspaceDaemon receives managed process commands on
-	// its fenced socket. Do not also return the legacy first-start envelope on
-	// the heartbeat: both paths share the same durable intent, but only one may
-	// be active for a given connection generation.
-	if h.DaemonHub != nil && h.DaemonHub.WorkspaceDaemonSupportsCapability(identity.DaemonID, identity.WorkspaceID, protocol.DaemonCapabilityWorkspaceDaemonAgentProcess) {
-		if err := h.reconcileWorkspaceDaemonLaunches(ctx, identity); err != nil {
-			return nil, err
-		}
-	}
+	// Heartbeats report Runtime liveness; they are not process-reconcile
+	// triggers. Ready, placement changes, and inactive Agent status already
+	// converge desired launches. Re-running the full WorkspaceDaemon reconcile
+	// for every Runtime heartbeat multiplies agent:start traffic by the number
+	// of Runtime heartbeat loops when a launch remains unobserved.
 	return ack, nil
 }
 

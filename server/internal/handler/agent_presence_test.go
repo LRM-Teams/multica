@@ -381,21 +381,17 @@ func agentPresenceFromHTTP(t *testing.T, h Handler, agentID string) string {
 	return ""
 }
 
-func TestWorkspaceDaemonReconcileUsesAgentDesiredRuntime(t *testing.T) {
+func TestWorkspaceDaemonReconcileUsesAgentDesiredRuntimeWithoutHeartbeatRedrive(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 	ctx := context.Background()
-	agentID, runtimeID := createHandlerTestAgent(t, "runner-dispatch-"+uuid.NewString()[:8], nil), handlerTestRuntimeID(t)
-	if _, err := testPool.Exec(ctx, `UPDATE agent_runtime SET daemon_id = 'daemon-1' WHERE id = $1`, runtimeID); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `UPDATE agent_runtime SET daemon_id = NULL WHERE id = $1`, runtimeID)
-	})
+	daemonID := "daemon-runner-dispatch-" + uuid.NewString()[:8]
+	runtimeID := seedMachineLockedRuntime(t, daemonID, "runner heartbeat no redrive")
+	agentID := createHandlerTestAgentOnRuntime(t, "runner-dispatch-"+uuid.NewString()[:8], runtimeID)
 	hub := daemonws.NewHub()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hub.HandleWebSocket(w, r, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}})
+		hub.HandleWebSocket(w, r, daemonws.ClientIdentity{DaemonID: daemonID, WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}})
 	}))
 	defer server.Close()
 	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
@@ -411,7 +407,7 @@ func TestWorkspaceDaemonReconcileUsesAgentDesiredRuntime(t *testing.T) {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(time.Second)
-	for hub.WorkspaceDaemonConnectionCount("daemon-1", testWorkspaceID) != 1 {
+	for hub.WorkspaceDaemonConnectionCount(daemonID, testWorkspaceID) != 1 {
 		if time.Now().After(deadline) {
 			t.Fatal("Runner did not become ready")
 		}
@@ -419,7 +415,7 @@ func TestWorkspaceDaemonReconcileUsesAgentDesiredRuntime(t *testing.T) {
 	}
 	h := *testHandler
 	h.DaemonHub = hub
-	identity := daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
+	identity := daemonws.ClientIdentity{DaemonID: daemonID, WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
 	if err := h.reconcileWorkspaceDaemonLaunches(ctx, identity); err != nil {
 		t.Fatalf("reconcile WorkspaceDaemon launch: %v", err)
 	}
@@ -444,6 +440,16 @@ func TestWorkspaceDaemonReconcileUsesAgentDesiredRuntime(t *testing.T) {
 			t.Fatalf("Runner launch payload=%+v", start)
 		}
 		break
+	}
+
+	if _, err := h.HandleDaemonWSHeartbeat(ctx, identity, protocol.DaemonHeartbeatRequestPayload{RuntimeID: runtimeID}); err != nil {
+		t.Fatalf("handle WorkspaceDaemon heartbeat: %v", err)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := conn.ReadMessage(); err == nil {
+		t.Fatal("Runtime heartbeat re-drove an already-dispatched WorkspaceDaemon start")
 	}
 }
 

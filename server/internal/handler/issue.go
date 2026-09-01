@@ -2826,7 +2826,24 @@ func (h *Handler) DeleteIssue(w http.ResponseWriter, r *http.Request) {
 	// Collect all attachment URLs (issue-level + comment-level) before CASCADE delete.
 	attachmentURLs, _ := h.Queries.ListAttachmentURLsByIssueOrComments(r.Context(), issue.ID)
 
-	err := h.Queries.DeleteIssue(r.Context(), db.DeleteIssueParams{
+	// Task 8A: fence the issue's complete canonical source closure (issue,
+	// task outputs, comments, attachments) in the same transaction as the
+	// business delete.
+	userID := requestUserID(r)
+	actorType, actorID := h.resolveActor(r, userID, uuidToString(issue.WorkspaceID))
+	tx, err := h.beginMemoryRetractionTx(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to start transaction")
+		return
+	}
+	defer func() { _ = tx.Rollback(r.Context()) }()
+	if err := service.NewMemoryRetractionService().RetractIssueSourcesTx(
+		r.Context(), tx, issue.WorkspaceID, issue.ID,
+		actorType+":"+actorID, "issue deleted"); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to fence issue memory")
+		return
+	}
+	err = h.Queries.WithTx(tx).DeleteIssue(r.Context(), db.DeleteIssueParams{
 		ID:          issue.ID,
 		WorkspaceID: issue.WorkspaceID,
 	})
@@ -2834,10 +2851,12 @@ func (h *Handler) DeleteIssue(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to delete issue")
 		return
 	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to commit issue delete")
+		return
+	}
 
 	h.deleteS3Objects(r.Context(), attachmentURLs)
-	userID := requestUserID(r)
-	actorType, actorID := h.resolveActor(r, userID, uuidToString(issue.WorkspaceID))
 	// Always emit the resolved UUID — frontend caches key by UUID, so an
 	// identifier-style payload ("MUL-123") would leave stale entries on
 	// other clients after an identifier-path delete.
@@ -3180,18 +3199,39 @@ func (h *Handler) BatchDeleteIssues(w http.ResponseWriter, r *http.Request) {
 		// Collect attachment URLs before CASCADE delete to clean up S3 objects.
 		attachmentURLs, _ := h.Queries.ListAttachmentURLsByIssueOrComments(r.Context(), issue.ID)
 
-		if err := h.Queries.DeleteIssue(r.Context(), db.DeleteIssueParams{
+		// Task 8A: fence the issue closure in the same transaction as the
+		// business delete; a fencing failure skips the issue, never deletes
+		// unfenced.
+		actorType, actorID := h.resolveActor(r, userID, workspaceID)
+		tx, err := h.beginMemoryRetractionTx(r.Context())
+		if err != nil {
+			slog.Warn("batch delete issue retraction tx failed", "issue_id", issueID, "error", err)
+			continue
+		}
+		if err := service.NewMemoryRetractionService().RetractIssueSourcesTx(
+			r.Context(), tx, issue.WorkspaceID, issue.ID,
+			actorType+":"+actorID, "issue deleted"); err != nil {
+			slog.Warn("batch delete issue fence failed", "issue_id", issueID, "error", err)
+			_ = tx.Rollback(r.Context())
+			continue
+		}
+		err = h.Queries.WithTx(tx).DeleteIssue(r.Context(), db.DeleteIssueParams{
 			ID:          issue.ID,
 			WorkspaceID: issue.WorkspaceID,
-		}); err != nil {
+		})
+		if err != nil {
 			slog.Warn("batch delete issue failed", "issue_id", issueID, "error", err)
+			_ = tx.Rollback(r.Context())
+			continue
+		}
+		if err := tx.Commit(r.Context()); err != nil {
+			slog.Warn("batch delete issue commit failed", "issue_id", issueID, "error", err)
 			continue
 		}
 
 		h.deleteS3Objects(r.Context(), attachmentURLs)
 
 		// Always emit the resolved UUID — frontend caches key by UUID.
-		actorType, actorID := h.resolveActor(r, userID, workspaceID)
 		h.publish(protocol.EventIssueDeleted, workspaceID, actorType, actorID, map[string]any{"issue_id": uuidToString(issue.ID)})
 		deleted++
 	}

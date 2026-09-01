@@ -10,8 +10,10 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -31,6 +33,9 @@ const (
 	OfflineReasonNormalizationUnsupported = "normalization_unsupported"
 	OfflineReasonRawPayloadUnavailable    = "raw_payload_unavailable"
 	OfflineReasonHashMismatch             = "hash_mismatch"
+	// OfflineReasonContentRetracted: the run's canonical task_output source
+	// was fenced (Task 8A read gate); no provider payload is ever resolved.
+	OfflineReasonContentRetracted = "content_retracted"
 )
 
 const (
@@ -49,11 +54,16 @@ func NewOfflineTrajectoryService(queries *db.Queries) *OfflineTrajectoryService 
 }
 
 // OfflineResolveRequest is the authorized, snapshot-bound resolve input.
+// TrainingManifestID is the manifest-bound export authorization (Task 18,
+// spec 14.1): raw NDJSON resolution is only possible under an exported
+// training manifest while the global switches and the workspace grant stay
+// open.
 type OfflineResolveRequest struct {
-	RunID       pgtype.UUID
-	WorkspaceID pgtype.UUID
-	SnapshotID  string
-	CallIDs     []string
+	RunID              pgtype.UUID
+	WorkspaceID        pgtype.UUID
+	SnapshotID         string
+	CallIDs            []string
+	TrainingManifestID string
 }
 
 // OfflineResolveLine is one NDJSON result line.
@@ -129,6 +139,50 @@ type OfflineCallSource struct {
 	ResponseHash          string
 }
 
+// requireTrainingManifest is the Task 18 raw-NDJSON route gate (spec 14.1):
+// without the reward shadow/calibration switches and a valid exported
+// training manifest, no frozen provider payload is serialized at all.
+func (s *OfflineTrajectoryService) requireTrainingManifest(ctx context.Context, req OfflineResolveRequest) error {
+	policy, err := s.queries.GetTrainingGovernancePolicy(ctx)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "42P01" {
+			// Pre-472 schema: governance is not installed, so training is
+			// not enabled anywhere. Fail closed.
+			return &OfflineResolveError{Code: "training_disabled", Message: "training governance is not installed", Status: 503}
+		}
+		return err
+	}
+	if !policy.SelectionEnabled {
+		return &OfflineResolveError{Code: "training_disabled", Message: "training selection is globally disabled", Status: 503}
+	}
+	if strings.TrimSpace(req.TrainingManifestID) == "" {
+		return &OfflineResolveError{Code: "manifest_required", Message: "a valid training manifest is required for raw export", Status: 400}
+	}
+	manifestID, err := util.ParseUUID(req.TrainingManifestID)
+	if err != nil {
+		return &OfflineResolveError{Code: "manifest_required", Message: "training manifest id is invalid", Status: 400}
+	}
+	manifest, err := s.queries.GetTrainingManifest(ctx, manifestID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return &OfflineResolveError{Code: "manifest_not_found", Message: "training manifest not found", Status: 404}
+	}
+	if err != nil {
+		return err
+	}
+	if manifest.WorkspaceID != req.WorkspaceID {
+		return &OfflineResolveError{Code: "forbidden", Message: "training manifest belongs to another workspace", Status: 403}
+	}
+	switch manifest.Status {
+	case "exported", "execution_started", "consumed":
+		return nil
+	case "invalidated":
+		return &OfflineResolveError{Code: "manifest_invalidated", Message: "the training grant was revoked", Status: 409}
+	default:
+		return &OfflineResolveError{Code: "manifest_not_exported", Message: "training manifest is not exported", Status: 409}
+	}
+}
+
 // OfflineResolveError is a request-level failure (auth/snapshot), not a per-call
 // exclusion.
 type OfflineResolveError struct {
@@ -156,6 +210,9 @@ func (s *OfflineTrajectoryService) Resolve(ctx context.Context, req OfflineResol
 	if strings.TrimSpace(req.SnapshotID) == "" {
 		return nil, &OfflineResolveError{Code: "validation_failed", Message: "snapshot_id is required", Status: 400}
 	}
+	if err := s.requireTrainingManifest(ctx, req); err != nil {
+		return nil, err
+	}
 
 	run, err := s.queries.GetMixedRLRun(ctx, req.RunID)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -173,6 +230,19 @@ func (s *OfflineTrajectoryService) Resolve(ctx context.Context, req OfflineResol
 	frozenSnapshotID := mixedRLTextValue(run.FrozenSnapshotID)
 	if frozenSnapshotID == "" || frozenSnapshotID != req.SnapshotID {
 		return nil, &OfflineResolveError{Code: "snapshot_mismatch", Message: "snapshot_id does not match the frozen run snapshot", Status: 409}
+	}
+
+	// Task 8A read gate: map the run back to its Universal Segment task
+	// sources and fail closed to content_retracted before any frozen
+	// provider payload is loaded. A retracted source never yields a stored
+	// provider payload line.
+	if gateErr := s.authorizeSources(ctx, req); gateErr != nil {
+		requested := DeduplicateCallIDs(req.CallIDs)
+		lines := make([]OfflineResolveLine, 0, len(requested))
+		for _, callID := range requested {
+			lines = append(lines, excludedOfflineLine(callID, OfflineReasonContentRetracted, nil))
+		}
+		return lines, nil
 	}
 
 	agents, err := s.queries.ListMixedRLRunAgents(ctx, req.RunID)
@@ -207,6 +277,12 @@ func (s *OfflineTrajectoryService) Resolve(ctx context.Context, req OfflineResol
 		})
 	}
 	return ResolveOfflineTrajectoryLines(sources, req.CallIDs), nil
+}
+
+// authorizeSources fails closed when any canonical task_output source of the
+// run is fenced.
+func (s *OfflineTrajectoryService) authorizeSources(ctx context.Context, req OfflineResolveRequest) error {
+	return AuthorizeRunSources(ctx, s.queries, req.WorkspaceID, req.RunID)
 }
 
 // DeduplicateCallIDs preserves first-seen order while dropping duplicates.

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 )
 
 // stagingDocPrefix prefixes staging segment ids in retrieval results so
@@ -33,8 +34,10 @@ func DefaultRetrievalConfig() RetrievalConfig {
 }
 
 // HybridRetriever implements the BM25 + vector hybrid recall of design
-// §5.2 over the current graph version plus all staging segments. Call
-// Rebuild after ingestion or version switches to refresh the indexes.
+// §5.2 over the current graph version. Staging segments are no longer
+// indexed as retrievable docs: staging memory is reachable only through
+// the class-aware atom channel (SearchAt). Call Rebuild after ingestion
+// or version switches to refresh the indexes.
 type HybridRetriever struct {
 	store *Store
 	emb   *CachedEmbedder // nil → BM25-only mode
@@ -44,6 +47,10 @@ type HybridRetriever struct {
 	bm25  *BM25Index
 	vecs  map[string][]float32 // doc id -> embedding (only when emb != nil)
 	nodes map[string]*Node     // doc id -> graph node (graph docs only; staging docs absent)
+
+	// atoms is the Task 9 active-atom ledger snapshot (staging channel of
+	// the class-aware search). Installed by the service loader; nil-safe.
+	atoms *atomIndex
 	// version is the graph version the installed indexes were built from
 	// (0 = never built). Explore pins its tool server to a version and uses
 	// a matching retriever view for the whole call (design R5).
@@ -63,13 +70,17 @@ func NewHybridRetriever(store *Store, emb *CachedEmbedder, cfg RetrievalConfig) 
 		bm25:  NewBM25Index(),
 		vecs:  make(map[string][]float32),
 		nodes: make(map[string]*Node),
+		atoms: newAtomIndex(),
 	}
 }
 
-// Rebuild reloads the current version graph and all staging segments,
-// re-indexing every node body and staging body into BM25 and (when an
-// embedder is configured) into the in-memory vector map. The content-hash
-// disk cache dedupes embedding work across rebuilds.
+// Rebuild reloads the current version graph, re-indexing every node body
+// into BM25 and (when an embedder is configured) into the in-memory vector
+// map. The content-hash disk cache dedupes embedding work across rebuilds.
+//
+// Offline default only: the file current pointer is never reader
+// authority (Task 14). Production callers pin the DB-authoritative
+// version via RebuildForVersion.
 func (r *HybridRetriever) Rebuild(ctx context.Context) error {
 	current, err := r.store.CurrentVersion()
 	if err != nil {
@@ -88,7 +99,10 @@ func (r *HybridRetriever) RebuildForVersion(ctx context.Context, version int) er
 		return fmt.Errorf("retriever rebuild: load graph v%d: %w", version, err)
 	}
 
-	// Collect docs: node bodies plus staging segment bodies.
+	// Collect docs: node bodies only. Staging segments are deliberately
+	// absent from the default corpus (Task 22): unconditional staging
+	// retrieval predated the class-aware atom channel, and keeping both
+	// would surface the same memory twice with different visibility rules.
 	type doc struct {
 		id   string
 		body string
@@ -98,17 +112,6 @@ func (r *HybridRetriever) RebuildForVersion(ctx context.Context, version int) er
 	for _, n := range g.Nodes() {
 		docs = append(docs, doc{id: n.NodeID, body: n.Body})
 		nodes[n.NodeID] = n
-	}
-	segIDs, err := r.store.ListStagingSegments()
-	if err != nil {
-		return fmt.Errorf("retriever rebuild: list staging: %w", err)
-	}
-	for _, segID := range segIDs {
-		body, err := r.store.ReadStagingSegment(segID)
-		if err != nil {
-			return fmt.Errorf("retriever rebuild: read staging %s: %w", segID, err)
-		}
-		docs = append(docs, doc{id: stagingDocPrefix + segID, body: string(body)})
 	}
 
 	index := NewBM25Index()
@@ -123,12 +126,13 @@ func (r *HybridRetriever) RebuildForVersion(ctx context.Context, version int) er
 			texts[i] = d.body
 		}
 		embeddings, err := r.emb.Embed(ctx, texts)
-		if err != nil {
-			return fmt.Errorf("retriever rebuild: embed docs: %w", err)
+		if err == nil {
+			for i, d := range docs {
+				vecs[d.id] = embeddings[i]
+			}
 		}
-		for i, d := range docs {
-			vecs[d.id] = embeddings[i]
-		}
+		// Provider outage degrades this index generation to BM25. The
+		// resolved provider is never replaced and later rebuilds may retry it.
 	}
 
 	r.mu.Lock()
@@ -164,6 +168,7 @@ func (r *HybridRetriever) ForkForVersion(ctx context.Context, version int) (*Hyb
 			bm25:    r.bm25,
 			vecs:    r.vecs,
 			nodes:   r.nodes,
+			atoms:   r.atoms,
 			version: r.version,
 		}
 		r.mu.RUnlock()
@@ -181,15 +186,19 @@ func (r *HybridRetriever) ForkForVersion(ctx context.Context, version int) (*Hyb
 // Rebuild/RebuildForVersion. When cfg.View is active, docs whose node is
 // not visible under the view are dropped from the results (spec §5: the
 // view is reapplied at every retrieval step so ranking can never leak
-// cross-scope material). Staging docs carry no graph node and pass
-// through — they are only reachable in the graph they were staged into,
-// and recall dirs are already scope-resolved upstream.
+// cross-scope material). Staging segments are not part of the corpus at
+// all; staging memory is reachable only through SearchAt's atom channel.
 func (r *HybridRetriever) Search(ctx context.Context, query string) ([]ScoredDoc, error) {
 	r.mu.RLock()
 	index := r.bm25
 	vecs := r.vecs
 	r.mu.RUnlock()
 	docs, err := hybridSearch(ctx, index, vecs, r.emb, r.cfg, query)
+	if err != nil && r.emb != nil {
+		// Query-time embedding outage follows the same deterministic BM25
+		// degradation as rebuild; never retry through another provider.
+		docs, err = hybridSearch(ctx, index, nil, nil, r.cfg, query)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -308,4 +317,124 @@ func hybridSearch(ctx context.Context, index *BM25Index, vecs map[string][]float
 		hits = hits[:cfg.TopK]
 	}
 	return hits, nil
+}
+
+// InstallAtomSnapshot atomically replaces the active-atom ledger of the
+// staging search channel (Task 9). The DB loader resolves the snapshot at a
+// publish_seq watermark and applies the Task 8A retraction fence upstream;
+// the retriever independently re-asserts the retraction set, the consumed
+// flag, the exact-channel partition and the caller's publish_seq ceiling on
+// every SearchAt, so a loader bug cannot leak a forbidden atom. A nil slice
+// clears the channel.
+func (r *HybridRetriever) InstallAtomSnapshot(atoms []AtomDoc, publishSeqMax int64, retractedAtomIDs map[string]bool) {
+	if r.atoms == nil {
+		r.atoms = newAtomIndex()
+	}
+	r.atoms.install(atoms, publishSeqMax, retractedAtomIDs)
+}
+
+// SearchAt is the class-aware retrieval of Task 9: the graph channel (nodes
+// of the version the retriever was built for — current-node-only by
+// construction, staging segments never surface as graph hits) fused with the
+// staging-atom channel, filtered by the caller's view and publish_seq
+// watermark before scoring. Fusion is deterministic: per-channel scores are
+// normalized to [0,1], multiplied by the class prior, the atom channel adds
+// its 14-day shadow half-life component, and ties break by ref key. The
+// results are shadow-only until the DB atom_search gate turns green.
+func (r *HybridRetriever) SearchAt(ctx context.Context, query string, view GraphView, publishSeqMax int64) ([]SearchHit, error) {
+	r.mu.RLock()
+	index := r.bm25
+	vecs := r.vecs
+	emb := r.emb
+	r.mu.RUnlock()
+
+	docs, err := hybridSearch(ctx, index, vecs, emb, r.cfg, query)
+	if err != nil && emb != nil {
+		// Query-time embedding outage follows the same deterministic BM25
+		// degradation as Search.
+		docs, err = hybridSearch(ctx, index, nil, nil, r.cfg, query)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	hits := make([]SearchHit, 0, len(docs))
+	viewOn := view.AllowProject || view.ChannelID != ""
+	for _, d := range docs {
+		n := r.nodeForDoc(d.ID)
+		if n == nil {
+			// Staging segment docs never surface as graph hits: staging
+			// memory is reachable only through the atom ledger channel,
+			// never by treating a missing graph node as visible.
+			continue
+		}
+		if viewOn && !view.Allows(n) {
+			continue
+		}
+		hits = append(hits, SearchHit{
+			Ref:   MemoryRef{Kind: MemoryRefGraphNode, NodeID: n.NodeID, ChannelID: n.ChannelID},
+			Class: SearchGraphNode,
+			Score: d.Score * searchGraphClassPrior,
+			Components: SearchScoreComponents{
+				Lexical:    d.Score, // fused channel score (BM25+vector) normalized in [0,1]
+				ClassPrior: searchGraphClassPrior,
+			},
+		})
+	}
+
+	// Staging-atom channel: BM25 over the installed snapshot, visibility
+	// re-asserted per atom, half-limited freshness folded in.
+	norm, order := r.atomScores(query)
+	now := time.Now()
+	for _, id := range order {
+		a := r.atomDoc(id)
+		if r.atoms != nil && !r.atoms.visible(a, view, publishSeqMax) {
+			continue
+		}
+		base := norm[id] * searchAtomClassPrior
+		fresh := atomShadowFreshness(a.CreatedAt, now)
+		hits = append(hits, SearchHit{
+			Ref: MemoryRef{
+				Kind: MemoryRefStagingAtom, AtomID: a.AtomID,
+				SegmentID: a.SegmentID, ChannelID: a.ChannelID,
+			},
+			Class: SearchAtom,
+			Score: base*(1-atomFreshnessWeight) + fresh*atomFreshnessWeight,
+			Components: SearchScoreComponents{
+				Lexical:         norm[id],
+				ShadowFreshness: fresh,
+				ClassPrior:      searchAtomClassPrior,
+			},
+		})
+	}
+
+	sort.SliceStable(hits, func(i, j int) bool {
+		if hits[i].Score != hits[j].Score {
+			return hits[i].Score > hits[j].Score
+		}
+		return hits[i].Ref.Key() < hits[j].Ref.Key()
+	})
+	if len(hits) > r.cfg.TopK {
+		hits = hits[:r.cfg.TopK]
+	}
+	return hits, nil
+}
+
+// atomScores runs the lexical channel over the installed atom snapshot and
+// returns the normalized scores plus the index's deterministic hit order.
+func (r *HybridRetriever) atomScores(query string) (map[string]float64, []string) {
+	if r.atoms == nil {
+		return map[string]float64{}, nil
+	}
+	return r.atoms.search(query, 0)
+}
+
+// atomDoc returns the installed atom by id (zero AtomDoc when absent).
+func (r *HybridRetriever) atomDoc(id string) AtomDoc {
+	if r.atoms == nil {
+		return AtomDoc{}
+	}
+	r.atoms.mu.RLock()
+	defer r.atoms.mu.RUnlock()
+	return r.atoms.atoms[id]
 }

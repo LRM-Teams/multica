@@ -4,6 +4,8 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -12,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/multica-ai/multica/server/internal/memorygraph"
 	"github.com/multica-ai/multica/server/internal/util"
 )
 
@@ -236,8 +239,8 @@ func (s *GraphMemoryDiveService) Complete(ctx context.Context, jobID, workerID s
 // Fail records a worker failure, fenced on the worker's live lease. A
 // retryable failure re-queues the job while attempts remain; exhausting the
 // bounded retries (or a non-retryable failure) terminalizes the job and
-// moves the recall to judge_failed with reward 0 for normally completed
-// runs and no ground truth (A8).
+// moves the recall to judge_failed: its normally completed runs become
+// reward-unavailable (never a numeric 0, A46) with no ground truth (A8).
 func (s *GraphMemoryDiveService) Fail(ctx context.Context, jobID, workerID, errorKind, lastError string, retryable bool) (bool, error) {
 	jUUID, err := util.ParseUUID(jobID)
 	if err != nil {
@@ -357,8 +360,13 @@ func releaseDiveVersionLease(ctx context.Context, tx pgx.Tx, jobID pgtype.UUID) 
 }
 
 // graphMemoryDiveTerminalFailRecall moves the recall to judge_failed and
-// zeroes the rewards of its normally completed runs (A8: reward 0, no
-// authoritative ground truth).
+// marks its normally completed runs unavailable (Task 19, spec 14.2/A46): a
+// judge infrastructure failure is NOT a numeric 0 reward. Each run receives
+// an immutable unavailable reward record (revision ledger), its trajectory
+// projection loses the numeric value (reward_status='unavailable',
+// reward=NULL), and any still-undelivered outbox rows of superseded earlier
+// revisions fail terminally so no stale value reaches AReaL. No authoritative
+// ground truth is produced (A8).
 func graphMemoryDiveTerminalFailRecall(ctx context.Context, tx pgx.Tx, recallID pgtype.UUID) error {
 	if _, err := tx.Exec(ctx, `
 		UPDATE graph_memory_recall SET status = 'judge_failed', terminal_at = now(), updated_at = now()
@@ -366,11 +374,67 @@ func graphMemoryDiveTerminalFailRecall(ctx context.Context, tx pgx.Tx, recallID 
 	`, recallID); err != nil {
 		return fmt.Errorf("graph memory dive: mark recall judge_failed: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE graph_memory_trajectory SET reward = 0, dive_status = 'judge_failed', updated_at = now()
+	var wsID pgtype.UUID
+	if err := tx.QueryRow(ctx, `
+		SELECT workspace_id FROM graph_memory_recall WHERE id = $1
+	`, recallID).Scan(&wsID); err != nil {
+		return fmt.Errorf("graph memory dive: load recall workspace: %w", err)
+	}
+	manifest := sha256.Sum256([]byte("judge_failure:" + util.UUIDToString(recallID)))
+	manifestHash := hex.EncodeToString(manifest[:])
+
+	rows, err := tx.Query(ctx, `
+		SELECT id FROM graph_memory_trajectory
 		WHERE recall_id = $1 AND status IN ('found', 'miss')
-	`, recallID); err != nil {
-		return fmt.Errorf("graph memory dive: zero normal-run rewards: %w", err)
+		ORDER BY seed_index
+		FOR UPDATE
+	`, recallID)
+	if err != nil {
+		return fmt.Errorf("graph memory dive: select judged-affected runs: %w", err)
+	}
+	var affected []pgtype.UUID
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return fmt.Errorf("graph memory dive: scan judged-affected run: %w", err)
+		}
+		affected = append(affected, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("graph memory dive: iterate judged-affected runs: %w", err)
+	}
+	rows.Close()
+
+	for _, id := range affected {
+		revision, err := RecordTrajectoryRewardTx(ctx, tx, TrajectoryRewardRecord{
+			WorkspaceID: wsID, TrajectoryID: id, RewardKind: "explore",
+			Status:            "unavailable",
+			Components:        memorygraph.RewardComponents{Source: "unavailable"},
+			PolicyVersion:     memorygraph.ExploreRewardPolicyVersion,
+			InputManifestHash: manifestHash,
+		})
+		if err != nil {
+			return fmt.Errorf("graph memory dive: unavailable reward record: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE graph_memory_trajectory
+			SET reward = NULL, dive_status = 'judge_failed',
+			    reward_status = 'unavailable', reward_revision = $2, updated_at = now()
+			WHERE id = $1
+		`, id, revision); err != nil {
+			return fmt.Errorf("graph memory dive: mark run unavailable: %w", err)
+		}
+		// Superseded earlier revisions must not deliver a stale value after
+		// the judge failed: still-claimable outbox rows fail terminally.
+		if _, err := tx.Exec(ctx, `
+			UPDATE graph_memory_reward_outbox
+			SET status = 'failed', last_error = 'reward re-evaluated unavailable', updated_at = now()
+			WHERE trajectory_id = $1 AND reward_revision < $2 AND status IN ('pending', 'delivering')
+		`, id, revision); err != nil {
+			return fmt.Errorf("graph memory dive: cancel superseded outbox rewards: %w", err)
+		}
 	}
 	return nil
 }

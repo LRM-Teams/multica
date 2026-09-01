@@ -394,11 +394,12 @@ func (r *DiagnosisAgentRunner) freezeDiagnosisSegmentTargets(
 		if err != nil {
 			return nil, fmt.Errorf("diagnosis on-demand: get segment %s: %w", segmentID, err)
 		}
-		if segment.ProjectID != run.ProjectID {
-			return nil, fmt.Errorf("diagnosis on-demand: segment %s is outside project", segmentID)
+		if segment.ContentStatus == "legacy_unverified" ||
+			!segment.ProjectIDAtEvent.Valid || util.UUIDToString(segment.ProjectIDAtEvent) != run.ProjectID {
+			return nil, fmt.Errorf("diagnosis on-demand: segment %s is unavailable", segmentID)
 		}
 		messages, err := r.messageStore.MessagesForTaskInRange(ctx, db.MessagesForTaskInRangeParams{
-			TaskID: segment.AgentRunID, StartSeq: segment.StartSeq, EndSeq: segment.EndSeq,
+			TaskID: util.UUIDToString(segment.AgentRunID), StartSeq: segment.StartSeq, EndSeq: segment.EndSeq,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("diagnosis on-demand: messages for segment %s: %w", segmentID, err)
@@ -426,7 +427,7 @@ func (r *DiagnosisAgentRunner) freezeDiagnosisSegmentTargets(
 
 		targets = append(targets, DiagnosisSegmentTarget{
 			SegmentID:     segmentID,
-			AgentRunID:    segment.AgentRunID,
+			AgentRunID:    util.UUIDToString(segment.AgentRunID),
 			StartSeq:      segment.StartSeq,
 			EndSeq:        segment.EndSeq,
 			AssistantSeqs: assistantSeqs,

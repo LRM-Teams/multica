@@ -6,7 +6,7 @@ import "testing"
 // machine-readable reason, not merely an in-memory ConsolidateResult field.
 func TestManagementRejectionIsAppendedToOperationAudit(t *testing.T) {
 	store := newTestStore(t)
-	c := NewConsolidator(store, nil, DefaultConsolidateConfig(), "", nil, nil)
+	c := NewConsolidator(store, nil, DefaultConsolidateConfig(), testConsolidateScope(), nil, nil)
 	g := newGraph()
 	_, rejected, err := c.applyOperations(g, 1, CreatorConsolidator, []ConsolidateOp{{Op: "not_an_operation"}})
 	if err != nil {

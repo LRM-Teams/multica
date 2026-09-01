@@ -4,13 +4,18 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/multica-ai/multica/server/internal/util"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // Offline export exclusion reasons for graph-memory trajectories (spec §5,
@@ -21,6 +26,9 @@ const (
 	GraphMemoryOfflineReasonExploreBypassed         = "explore_bypassed"
 	GraphMemoryOfflineReasonNotTerminal             = "not_terminal"
 	GraphMemoryOfflineReasonWrongModeOfflineCapture = "wrong_mode_offline_capture"
+	// GraphMemoryOfflineReasonNotInManifest: the trajectory is not fixed in
+	// the authorized training manifest (Task 18) and never serializes.
+	GraphMemoryOfflineReasonNotInManifest = "not_in_manifest"
 )
 
 const graphMemoryOfflineExportMaxLimit = 1000
@@ -94,13 +102,22 @@ func ClassifyOfflineExportEligibility(trainingMode, trajectoryDiveStatus string,
 // including excluded candidates with their reason. Results are ordered by
 // recall created_at then seed_index. limit <= 0 or above the cap is clamped
 // to graphMemoryOfflineExportMaxLimit.
-func (s *GraphMemoryOfflineExportService) ListOfflineExports(ctx context.Context, workspaceID string, limit int) ([]GraphMemoryOfflineExportLine, error) {
+//
+// Task 18 (spec 14.1): trainingManifestID is REQUIRED. The graph-memory
+// offline export serializes only trajectories fixed in an exported training
+// manifest; without one the call answers training_disabled /
+// manifest_required and never selects rows directly.
+func (s *GraphMemoryOfflineExportService) ListOfflineExports(ctx context.Context, workspaceID, trainingManifestID string, limit int) ([]GraphMemoryOfflineExportLine, error) {
 	ws, err := util.ParseUUID(workspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("graph memory offline export: workspace id: %w", err)
 	}
 	if limit <= 0 || limit > graphMemoryOfflineExportMaxLimit {
 		limit = graphMemoryOfflineExportMaxLimit
+	}
+	manifestItems, err := s.requireTrainingManifest(ctx, ws, trainingManifestID)
+	if err != nil {
+		return nil, err
 	}
 
 	rows, err := s.pool.Query(ctx, `
@@ -122,7 +139,8 @@ func (s *GraphMemoryOfflineExportService) ListOfflineExports(ctx context.Context
 	}
 	defer rows.Close()
 
-	out := make([]GraphMemoryOfflineExportLine, 0)
+	lines := make([]GraphMemoryOfflineExportLine, 0)
+	ownerKindByID := make(map[pgtype.UUID]string)
 	for rows.Next() {
 		var (
 			trajID, recallID, ownerID  pgtype.UUID
@@ -151,7 +169,7 @@ func (s *GraphMemoryOfflineExportService) ListOfflineExports(ctx context.Context
 		eligible, reason := ClassifyOfflineExportEligibility(
 			trainingMode, diveStatus, recallTerminal, jobCompleted, jobIncompleteFlag)
 		if !eligible {
-			out = append(out, GraphMemoryOfflineExportLine{
+			lines = append(lines, GraphMemoryOfflineExportLine{
 				TrajectoryID: util.UUIDToString(trajID),
 				RecallID:     util.UUIDToString(recallID),
 				Status:       offlineStatusExcluded,
@@ -159,7 +177,10 @@ func (s *GraphMemoryOfflineExportService) ListOfflineExports(ctx context.Context
 			})
 			continue
 		}
-		out = append(out, GraphMemoryOfflineExportLine{
+		if ownerID.Valid {
+			ownerKindByID[ownerID] = graphKind
+		}
+		lines = append(lines, GraphMemoryOfflineExportLine{
 			TrajectoryID:      util.UUIDToString(trajID),
 			RecallID:          util.UUIDToString(recallID),
 			Status:            offlineStatusTrajectory,
@@ -182,5 +203,150 @@ func (s *GraphMemoryOfflineExportService) ListOfflineExports(ctx context.Context
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("graph memory offline export: rows: %w", err)
 	}
+
+	// Task 18: only manifest items serialize as trajectories; everything
+	// else reports not_in_manifest and carries no payload fields.
+	for i := range lines {
+		if lines[i].Status == offlineStatusTrajectory && !manifestItems[lines[i].TrajectoryID] {
+			lines[i].Status = offlineStatusExcluded
+			lines[i].Reason = GraphMemoryOfflineReasonNotInManifest
+			lines[i].TraceID = ""
+			lines[i].GraphKind = ""
+			lines[i].GraphOwnerID = ""
+			lines[i].GraphVersion = 0
+			lines[i].SeedIndex = 0
+			lines[i].ScoreRelevance = nil
+			lines[i].ScoreGroundedness = nil
+			lines[i].ScoreCompleteness = nil
+			lines[i].OverallScore = nil
+			lines[i].Reward = nil
+			lines[i].Rounds = 0
+			lines[i].ArtifactRef = ""
+			lines[i].Summary = ""
+		}
+	}
+
+	// Task 8A read gate: one batched fence check over the graph owners. A
+	// retracted owner degrades every line of that owner to content_retracted
+	// — no summary, no artifact ref, never a stored payload.
+	retracted := retractedGraphOwners(ctx, s.pool, ws, ownerKindByID)
+	if len(retracted) > 0 {
+		for i := range lines {
+			if lines[i].Status != offlineStatusTrajectory || lines[i].GraphOwnerID == "" {
+				continue
+			}
+			if retracted[lines[i].GraphOwnerID] {
+				lines[i].Status = offlineStatusExcluded
+				lines[i].Reason = serviceContentRetracted
+				lines[i].Summary = ""
+				lines[i].ArtifactRef = ""
+				lines[i].ScoreRelevance = nil
+				lines[i].ScoreGroundedness = nil
+				lines[i].ScoreCompleteness = nil
+				lines[i].OverallScore = nil
+				lines[i].Reward = nil
+			}
+		}
+	}
+	return lines, nil
+}
+
+// serviceContentRetracted is the shared, machine-readable retraction reason.
+const serviceContentRetracted = "content_retracted"
+
+// retractedGraphOwners batch-checks the retraction fence for the export's
+// graph owners (channel/project scoped).
+func retractedGraphOwners(ctx context.Context, pool *pgxpool.Pool, ws pgtype.UUID, ownerKindByID map[pgtype.UUID]string) map[string]bool {
+	if len(ownerKindByID) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(ownerKindByID))
+	for ownerID, kind := range ownerKindByID {
+		sourceKind := serviceKindForGraphOwner(kind)
+		if sourceKind == "" {
+			continue
+		}
+		keys = append(keys, sourceKind+":"+ownerID.String())
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	retractedRows, err := db.New(pool).RetractedMemorySources(ctx, db.RetractedMemorySourcesParams{
+		WorkspaceID: ws, SourceKeys: keys,
+	})
+	if err != nil {
+		// Fail closed: an unreadable fence reads as fully retracted.
+		all := make(map[string]bool, len(ownerKindByID))
+		for ownerID := range ownerKindByID {
+			all[ownerID.String()] = true
+		}
+		return all
+	}
+	out := make(map[string]bool, len(retractedRows))
+	for _, row := range retractedRows {
+		out[row.SourceID] = true
+	}
+	return out
+}
+
+// requireTrainingManifest enforces the Task 18 export gate for graph-memory
+// trajectories and returns the manifest's trajectory-id set (empty only when
+// the manifest itself is empty, which is legal).
+func (s *GraphMemoryOfflineExportService) requireTrainingManifest(ctx context.Context, ws pgtype.UUID, manifestID string) (map[string]bool, error) {
+	q := db.New(s.pool)
+	policy, err := q.GetTrainingGovernancePolicy(ctx)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "42P01" {
+			return nil, &OfflineResolveError{Code: "training_disabled", Message: "training governance is not installed", Status: 503}
+		}
+		return nil, fmt.Errorf("graph memory offline export: policy: %w", err)
+	}
+	if !policy.SelectionEnabled {
+		return nil, &OfflineResolveError{Code: "training_disabled", Message: "training selection is globally disabled", Status: 503}
+	}
+	if strings.TrimSpace(manifestID) == "" {
+		return nil, &OfflineResolveError{Code: "manifest_required", Message: "a valid training manifest is required for raw export", Status: 400}
+	}
+	id, err := util.ParseUUID(manifestID)
+	if err != nil {
+		return nil, &OfflineResolveError{Code: "manifest_required", Message: "training manifest id is invalid", Status: 400}
+	}
+	manifest, err := q.GetTrainingManifest(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, &OfflineResolveError{Code: "manifest_not_found", Message: "training manifest not found", Status: 404}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("graph memory offline export: manifest: %w", err)
+	}
+	if manifest.WorkspaceID != ws {
+		return nil, &OfflineResolveError{Code: "forbidden", Message: "training manifest belongs to another workspace", Status: 403}
+	}
+	switch manifest.Status {
+	case "exported", "execution_started", "consumed":
+	default:
+		return nil, &OfflineResolveError{Code: "manifest_not_exported", Message: "training manifest is not exported", Status: 409}
+	}
+	items, err := q.ListTrainingManifestItems(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("graph memory offline export: manifest items: %w", err)
+	}
+	out := make(map[string]bool, len(items))
+	for _, item := range items {
+		if item.ItemKind == "graph_trajectory" {
+			out[item.ItemKey] = true
+		}
+	}
 	return out, nil
+}
+
+func serviceKindForGraphOwner(graphKind string) string {
+	switch graphKind {
+	case "channel":
+		return "channel"
+	case "project":
+		return "project"
+	default:
+		return ""
+	}
 }

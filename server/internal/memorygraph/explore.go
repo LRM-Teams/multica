@@ -79,8 +79,10 @@ type Explorer struct {
 	traces   *TraceRecorder // nil → trajectories are drained but not persisted
 
 	// pinnedVersion, when > 0, forces Explore to run against that graph
-	// version instead of resolving the current pointer (the production
-	// FullBacktestRunner uses it to evaluate candidate versions).
+	// version instead of resolving the current pointer. Production callers
+	// always pin the DB-authoritative publication version (Task 14); the
+	// file-pointer fallback below serves offline tooling only (the
+	// FullBacktestRunner uses pinning to evaluate candidate versions).
 	pinnedVersion int
 }
 

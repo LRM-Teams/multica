@@ -341,7 +341,7 @@ func TestWorkingSetSummaryTruncation(t *testing.T) {
 // working set. An empty working set must leave the prompt unchanged.
 func TestBuildPromptIncludesWorkingSet(t *testing.T) {
 	store := newTestStore(t)
-	c := NewConsolidator(store, nil, DefaultConsolidateConfig(), "test", nil, nil)
+	c := NewConsolidator(store, nil, DefaultConsolidateConfig(), testConsolidateScope(), nil, nil)
 
 	ws := &WorkingSet{Nodes: []WorkingSetNode{{
 		NodeID:    "n1",
@@ -388,7 +388,7 @@ func TestConsolidateUsesWorkingSet(t *testing.T) {
 	}}
 	cfg := DefaultConsolidateConfig()
 	cfg.TTVTrajectories = 1
-	c := NewConsolidator(store, backend, cfg, "test", nil, nil)
+	c := NewConsolidator(store, backend, cfg, testConsolidateScope(), nil, nil)
 	c.SetWorkingSetBuilder(NewWorkingSetBuilder(store, wsSignals(nil, nil), nil, DefaultWorkingSetConfig(), 8))
 
 	res, err := c.Consolidate(context.Background())

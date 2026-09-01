@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/multica-ai/multica/server/internal/service"
 )
 
 func TestEvolutionModelRuntimeConfigStartsOffAndRequiresCandidate(t *testing.T) {
@@ -35,6 +37,26 @@ func TestEvolutionModelRuntimeConfigStartsOffAndRequiresCandidate(t *testing.T) 
 	if badRec.Code != http.StatusBadRequest {
 		t.Fatalf("shadow without candidate status=%d body=%s, want 400", badRec.Code, badRec.Body.String())
 	}
+
+	// Task 18: enabling a student model is model consumption — while the
+	// global execution switch is off the enablement is refused.
+	gatedReq := withURLParam(newRequest(http.MethodPut, "/api/evolution/model-configs/attention_student?workspace_id="+testWorkspaceID, map[string]any{"mode": "shadow", "candidate_version": "attn-shadow-v1", "rollout_percent": 10}), "modelKind", "attention_student")
+	gatedRec := httptest.NewRecorder()
+	testHandler.UpdateEvolutionModelRuntimeConfig(gatedRec, gatedReq)
+	if gatedRec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("shadow under a closed execution switch: status=%d body=%s, want 503", gatedRec.Code, gatedRec.Body.String())
+	}
+
+	// With the execution switch on and the workspace grant acknowledged the
+	// same enablement succeeds.
+	gov := service.NewTrainingGovernanceService(testPool, nil)
+	ctx := context.Background()
+	restoreTrainingPolicy(t)
+	on := true
+	if _, err := gov.SetTrainingPolicy(ctx, service.TrainingPolicyPatch{ExecutionEnabled: &on}, "evolution-test"); err != nil {
+		t.Fatal(err)
+	}
+	mustAckTrainingGrant(t, gov, ctx, testWorkspaceID)
 
 	okReq := withURLParam(newRequest(http.MethodPut, "/api/evolution/model-configs/attention_student?workspace_id="+testWorkspaceID, map[string]any{"mode": "shadow", "candidate_version": "attn-shadow-v1", "rollout_percent": 10}), "modelKind", "attention_student")
 	okRec := httptest.NewRecorder()

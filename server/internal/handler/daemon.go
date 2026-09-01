@@ -21,6 +21,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/messageparts"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/middleware"
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -364,6 +365,15 @@ WHERE computer_workspace_bindings.user_id = EXCLUDED.user_id`, req.DaemonID, own
 		return
 	}
 	capabilities := normalizeDaemonCapabilities(req.Capabilities)
+	// Task 12 bidirectional capability negotiation: the daemon advertises
+	// memory_explore_v2; the server answers generation 2 only while this
+	// workspace's explore phase gate is green. The negotiated generation is
+	// persisted on the computer's runtime rows (memoryExploreGeneration) so
+	// the gateway resolves run-level protocol from durable state, and the
+	// capability is echoed in server_capabilities so the daemon knows which
+	// of its two tool contracts to teach. A capability alone never
+	// authorizes a disabled server path.
+	exploreGeneration := service.ResolveGraphMemoryAgentProtocol(r.Context(), capabilities, registrationHandler.DB, wsUUID)
 	if err := registrationHandler.registerDaemonUpdateObservation(r.Context(), wsUUID, req.DaemonID, req.UpdateObservation); err != nil {
 		if errors.Is(err, errDaemonUpdateObservationConflict) {
 			writeError(w, http.StatusConflict, "auto_update revision conflicts with stored payload")
@@ -430,6 +440,10 @@ ON CONFLICT (id) DO UPDATE SET
 			"cli_version":  req.CLIVersion,
 			"launched_by":  req.LaunchedBy,
 			"capabilities": capabilities,
+			// camelCase negotiated protocol field (plan Task 12 Step 2):
+			// 2 only while the workspace explore gate stayed green at this
+			// registration, 1 otherwise.
+			"memoryExploreGeneration": exploreGeneration,
 		}
 		// Persist the structured device_name the daemon already sends so the
 		// API can expose it without re-parsing the glued device_info string.
@@ -566,12 +580,16 @@ ON CONFLICT (id) DO UPDATE SET
 		"runtimes": resp,
 	})
 
+	negotiated := negotiatedDaemonCapabilities(capabilities)
+	if exploreGeneration == 2 {
+		negotiated = append(negotiated, protocol.DaemonCapabilityMemoryExploreV2)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"runtimes":                resp,
 		"settings":                json.RawMessage(ws.Settings),
 		"daemon_token":            daemonToken.raw,
 		"daemon_token_expires_at": daemonToken.expiresAt.UTC().Format(time.RFC3339Nano),
-		"server_capabilities":     negotiatedDaemonCapabilities(capabilities),
+		"server_capabilities":     negotiated,
 	})
 }
 
@@ -610,6 +628,19 @@ func (h *Handler) completeRuntimeUpdateOnTargetRegister(r *http.Request, rt db.A
 	if err := h.UpdateStore.Complete(r.Context(), update.ID, "Daemon registered updated CLI "+version); err != nil {
 		slog.Warn("failed to complete runtime update during register", "error", err, "runtime_id", runtimeID, "update_id", update.ID)
 	}
+}
+
+// memoryExploreGenerationFromRuntime reads the camelCase negotiated protocol
+// field persisted at registration (1 when absent — pre-rollout runtimes).
+func memoryExploreGenerationFromRuntime(metadata any) int {
+	fields, ok := metadata.(map[string]any)
+	if !ok {
+		return 1
+	}
+	if value, ok := fields["memoryExploreGeneration"].(float64); ok && value == 2 {
+		return 2
+	}
+	return 1
 }
 
 func normalizeDaemonCapabilities(capabilities []string) []string {
@@ -2149,6 +2180,14 @@ func (h *Handler) ReportTaskMessages(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to persist task messages")
+		return
+	}
+	defer func() { _ = tx.Rollback(r.Context()) }()
+	qtx := h.Queries.WithTx(tx)
+	published := make([]protocol.TaskMessagePayload, 0, len(req.Messages))
 	for _, msg := range req.Messages {
 		// Redact sensitive information before persisting or broadcasting.
 		msg.Content = redact.Text(msg.Content)
@@ -2163,28 +2202,34 @@ func (h *Handler) ReportTaskMessages(w http.ResponseWriter, r *http.Request) {
 		if msg.Input != nil {
 			inputJSON, _ = json.Marshal(msg.Input)
 		}
-		created, createErr := h.Queries.CreateTaskMessage(r.Context(), db.CreateTaskMessageParams{
-			TaskID:     parseUUID(taskID),
-			Seq:        int32(msg.Seq),
-			Type:       msg.Type,
-			Tool:       pgtype.Text{String: msg.Tool, Valid: msg.Tool != ""},
-			Content:    pgtype.Text{String: msg.Content, Valid: msg.Content != ""},
-			Input:      inputJSON,
-			Output:     pgtype.Text{String: msg.Output, Valid: msg.Output != ""},
-			Visibility: visibility,
+		created, _, createErr := h.TaskService.RecordTaskMessageBoundaryTx(r.Context(), qtx, tx, service.TaskMessageBoundaryInput{
+			Task: task,
+			Message: db.CreateTaskMessageParams{
+				Seq:        int32(msg.Seq),
+				Type:       msg.Type,
+				Tool:       pgtype.Text{String: msg.Tool, Valid: msg.Tool != ""},
+				Content:    pgtype.Text{String: msg.Content, Valid: msg.Content != ""},
+				Input:      inputJSON,
+				Output:     pgtype.Text{String: msg.Output, Valid: msg.Output != ""},
+				Visibility: visibility,
+			},
+			BoundaryKind: service.DAGBoundaryInbound,
 		})
 		if createErr != nil {
-			slog.Error("failed to create task message", "task_id", taskID, "seq", msg.Seq, "error", createErr)
+			slog.Error("failed to create canonical task message", "task_id", taskID, "seq", msg.Seq, "error", createErr)
 			writeError(w, http.StatusInternalServerError, "failed to persist task message")
 			return
 		}
-
-		if workspaceID != "" {
-			if visibility == "user_facing" {
-				h.publishTask(protocol.EventTaskMessage, workspaceID, "system", "", taskID,
-					taskMessageToPayload(created, taskID, uuidToString(task.IssueID)))
-			}
+		if workspaceID != "" && visibility == "user_facing" {
+			published = append(published, taskMessageToPayload(created, taskID, uuidToString(task.IssueID)))
 		}
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to persist task messages")
+		return
+	}
+	for _, payload := range published {
+		h.publishTask(protocol.EventTaskMessage, workspaceID, "system", "", taskID, payload)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})

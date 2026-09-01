@@ -97,7 +97,7 @@ func (s *graphConsolidationState) dir(path string) *graphDirState {
 // process env MULTICA_MEMORY_TYPE, then "legacy". pool may be nil (tests,
 // DB-less deployments), in which case only the env fallback is available.
 // bm may be nil; every BusinessMetrics method tolerates a nil receiver.
-func GraphMemoryJobs(pool *pgxpool.Pool, bm *obsmetrics.BusinessMetrics) JobSpec {
+func GraphMemoryJobs(pool *pgxpool.Pool, bm *obsmetrics.BusinessMetrics, policy *service.MemoryProviderPolicyResolver) JobSpec {
 	return JobSpec{
 		Name:              JobNameGraphMemoryConsolidation,
 		Cadence:           time.Hour,
@@ -112,7 +112,7 @@ func GraphMemoryJobs(pool *pgxpool.Pool, bm *obsmetrics.BusinessMetrics) JobSpec
 		MaxAttempts:       2,
 		RetryBackoff:      []time.Duration{10 * time.Minute},
 		Scopes:            StaticScopes(ScopeGlobal),
-		Handler:           makeGraphMemoryConsolidationHandler(pool, bm),
+		Handler:           makeGraphMemoryConsolidationHandler(pool, bm, policy),
 	}
 }
 
@@ -127,8 +127,6 @@ type graphMemoryWorkspaceGate struct {
 }
 
 type graphMemoryGateLookup func(ctx context.Context, workspaceID string) (graphMemoryWorkspaceGate, error)
-
-type graphMemoryProfileLookup func(ctx context.Context, workspaceID string) (exploreMaxRounds int, tttEnabled bool)
 
 func graphMemoryGateLookupForPool(pool *pgxpool.Pool) graphMemoryGateLookup {
 	if pool == nil {
@@ -145,33 +143,6 @@ func graphMemoryGateLookupForPool(pool *pgxpool.Pool) graphMemoryGateLookup {
 			return graphMemoryWorkspaceGate{}, err
 		}
 		return graphMemoryWorkspaceGate{memoryType: gate.MemoryType, scopedWriterReady: gate.ScopedWriterReady}, nil
-	}
-}
-
-// graphMemoryProfileForPool resolves a workspace profile's explore budget
-// and TTT flag. Missing rows and all lookup errors fail open to the
-// defaults (default rounds, TTT off) so a profile lookup cannot block
-// consolidation.
-func graphMemoryProfileForPool(pool *pgxpool.Pool) graphMemoryProfileLookup {
-	if pool == nil {
-		return nil
-	}
-	q := db.New(pool)
-	return func(ctx context.Context, workspaceID string) (int, bool) {
-		defaultRounds := memorygraph.DefaultExploreConfig().MaxRounds
-		ws, err := uuid.Parse(workspaceID)
-		if err != nil {
-			return defaultRounds, false
-		}
-		profile, err := q.GetGraphMemoryProfile(ctx, pgtype.UUID{Bytes: ws, Valid: true})
-		if err != nil {
-			return defaultRounds, false
-		}
-		rounds := int(profile.ExploreMaxRounds)
-		if rounds <= 0 {
-			rounds = defaultRounds
-		}
-		return rounds, profile.RecallTttEnabled
 	}
 }
 
@@ -196,16 +167,6 @@ func resolveGraphMemoryGate(ctx context.Context, dir, envType string, lookup gra
 	return "graph"
 }
 
-// resolveGraphMemoryProfile returns a workspace's configured explore budget
-// and TTT flag. Dirs without a workspace or without a lookup retain the
-// defaults (zero rounds, TTT off) when the consolidation config is built.
-func resolveGraphMemoryProfile(ctx context.Context, dir string, lookup graphMemoryProfileLookup) (int, bool) {
-	if wsID, ok := graphDirWorkspaceID(dir); ok && lookup != nil {
-		return lookup(ctx, wsID)
-	}
-	return 0, false
-}
-
 // graphDirWorkspaceID extracts the workspace id from a canonical graph dir
 // <root>/<ws>/memory_graph/<kind>s/<owner>.
 func graphDirWorkspaceID(dir string) (string, bool) {
@@ -216,11 +177,10 @@ func graphDirWorkspaceID(dir string) (string, bool) {
 	return ws, true
 }
 
-func makeGraphMemoryConsolidationHandler(pool *pgxpool.Pool, bm *obsmetrics.BusinessMetrics) Handler {
+func makeGraphMemoryConsolidationHandler(pool *pgxpool.Pool, bm *obsmetrics.BusinessMetrics, policy *service.MemoryProviderPolicyResolver) Handler {
 	return func(ctx context.Context, in HandlerInput) (HandlerResult, error) {
 		envType := strings.ToLower(strings.TrimSpace(os.Getenv("MULTICA_MEMORY_TYPE")))
 		lookup := graphMemoryGateLookupForPool(pool)
-		profileLookup := graphMemoryProfileForPool(pool)
 		if lookup == nil && envType != "graph" {
 			// Without a DB there is no per-workspace override to resolve; the
 			// env default gates the whole sweep.
@@ -241,6 +201,60 @@ func makeGraphMemoryConsolidationHandler(pool *pgxpool.Pool, bm *obsmetrics.Busi
 		if len(dirs) == 0 && len(researchDirs) == 0 {
 			return HandlerResult{Result: map[string]any{"skipped": true, "reason": "no_memory_graph_dirs", "root": root}}, nil
 		}
+		// Task 16: drain queued channel migrations (binding copies) before
+		// consolidation — the worker itself checks each workspace's
+		// channel_migration gate and claims nothing while it is red, and a
+		// failed sweep logs without blocking consolidation.
+		channelMigrations := 0
+		if pool != nil {
+			reports, err := service.NewGraphMemoryChannelMigrationService(pool).RunPending(ctx, 16)
+			if err != nil {
+				slog.Warn("graph memory channel migration sweep failed", "error", err)
+			} else {
+				channelMigrations = len(reports)
+			}
+		}
+		// Task 17: retention sweep — trace windows, archive creation and
+		// due crypto-erase. Archive streams stay disabled until the
+		// master key is configured; the policy/trace halves run either
+		// way. A failed sweep logs without blocking consolidation.
+		retentionSwept := 0
+		if pool != nil {
+			archiveCipher, cipherErr := service.ArchiveCipherFromEnv()
+			if cipherErr != nil {
+				slog.Warn("memory archive cipher unavailable", "error", cipherErr)
+			}
+			var archive *service.MemoryArchiveService
+			if archiveCipher != nil {
+				archive = service.NewMemoryArchiveService(pool, archiveCipher,
+					service.NewFilesystemArchiveObjectStore(root))
+			}
+			if actions, err := service.NewMemoryRetentionService(pool, archive).SweepDue(ctx, 64); err != nil {
+				slog.Warn("memory retention sweep failed", "error", err)
+			} else {
+				retentionSwept = actions
+			}
+		}
+		// Task 21: shadow-gate sweep — prove the six named canaries per
+		// workspace and auto-shutdown dependent read/training phases on a
+		// red verdict. The durable DAG writes stay untouched by design; a
+		// failed sweep logs without blocking consolidation.
+		shadowShutdowns := 0
+		if pool != nil {
+			for _, wsID := range shadowGateSweepTargets(dirs) {
+				wsUUID, err := uuid.Parse(wsID)
+				if err != nil {
+					continue
+				}
+				report, err := service.NewShadowGateServiceWithMetrics(pool, bm).
+					Sweep(ctx, pgtype.UUID{Bytes: wsUUID, Valid: true})
+				if err != nil {
+					slog.Warn("shadow gate sweep failed", "workspace", wsID, "error", err)
+					continue
+				}
+				shadowShutdowns += len(report.Shutdown)
+			}
+		}
 		state := loadGraphConsolidationState(root)
 
 		consolidated := 0
@@ -253,10 +267,26 @@ func makeGraphMemoryConsolidationHandler(pool *pgxpool.Pool, bm *obsmetrics.Busi
 				slog.Info("graph memory consolidation skipped", "dir", dir, "decision", decision)
 				continue
 			}
+			// Task 14: the DB-default-off atom_consolidation route gates the
+			// scheduler itself — a red gate claims nothing.
+			if wsID, ok := graphDirWorkspaceID(dir); ok && pool != nil {
+				if wsUUID, err := uuid.Parse(wsID); err == nil {
+					wsTyped := pgtype.UUID{Bytes: wsUUID, Valid: true}
+					enabled, err := service.NewMemoryReadGate(db.New(pool)).
+						RouteEnabled(ctx, wsTyped, service.MemoryRouteAtomConsolidation)
+					if err != nil {
+						slog.Warn("graph memory consolidation gate read failed", "dir", dir, "error", err)
+						continue
+					}
+					if !enabled {
+						slog.Info("graph memory consolidation skipped", "dir", dir, "decision", "atom_consolidation_disabled")
+						continue
+					}
+				}
+			}
 			// Per-workspace errors are logged and the loop continues: one
 			// broken graph must not starve the others.
-			exploreMaxRounds, tttEnabled := resolveGraphMemoryProfile(ctx, dir, profileLookup)
-			ok, err := consolidateOneGraphWithPool(ctx, pool, dir, exploreMaxRounds, tttEnabled, state.dir(dir), bm)
+			ok, err := consolidateOneGraphWithPool(ctx, pool, policy, dir, state.dir(dir), bm)
 			if err != nil {
 				slog.Warn("graph memory consolidation failed", "dir", dir, "error", err)
 				continue
@@ -280,7 +310,7 @@ func makeGraphMemoryConsolidationHandler(pool *pgxpool.Pool, bm *obsmetrics.Busi
 		// Research maintenance rounds (unification spec §4.5) run on the
 		// research graphs after the project/channel sweep; the export
 		// switch and the same per-workspace graph gate keep them inert.
-		maintained := maintainResearchGraphs(ctx, pool, researchDirs, state, envType, lookup)
+		maintained := maintainResearchGraphs(ctx, pool, policy, researchDirs, state, envType, lookup)
 		if err := saveGraphConsolidationState(root, state); err != nil {
 			slog.Warn("graph memory consolidation state write failed", "root", root, "error", err)
 		}
@@ -291,172 +321,183 @@ func makeGraphMemoryConsolidationHandler(pool *pgxpool.Pool, bm *obsmetrics.Busi
 				"consolidated":        consolidated,
 				"research_dirs":       len(researchDirs),
 				"research_maintained": maintained,
+				"channel_migrations":  channelMigrations,
+				"retention_swept":     retentionSwept,
+				"shadow_shutdowns":    shadowShutdowns,
 			},
 		}, nil
 	}
 }
 
-// graphConsolidationRunner runs one consolidation against a store; it is a
-// function value so tests can drive the trigger/backoff state machine
+// shadowGateSweepTargets extracts the deduplicated, order-preserving
+// workspace ids of the graph dirs the sweep must prove canaries for.
+func shadowGateSweepTargets(dirs []string) []string {
+	seen := make(map[string]bool, len(dirs))
+	targets := make([]string, 0, len(dirs))
+	for _, dir := range dirs {
+		wsID, ok := graphDirWorkspaceID(dir)
+		if !ok || seen[wsID] {
+			continue
+		}
+		seen[wsID] = true
+		targets = append(targets, wsID)
+	}
+	return targets
+}
+
+// graphConsolidationRunner runs one consolidation+publication cycle; it is
+// a function value so tests can drive the trigger/backoff state machine
 // without a pi backend.
-type graphConsolidationRunner func(ctx context.Context) (*memorygraph.ConsolidateResult, error)
+type graphConsolidationRunner func(ctx context.Context) (*service.GraphMemoryConsolidationPublishReport, error)
 
-// graphMemoryConsolidationConfigs applies the effective profile budget to
-// the backtest runner and to D_q's closure-radius configuration. With TTT
-// off, consolidation runs a single in-place trajectory (TTVTrajectories=1,
-// design Q16) instead of T parallel candidate versions.
-func graphMemoryConsolidationConfigs(model string, exploreMaxRounds int, tttEnabled bool) (memorygraph.ConsolidateConfig, memorygraph.ExploreConfig) {
-	cfg := memorygraph.DefaultConsolidateConfig()
-	cfg.Model = model
-	if !tttEnabled {
-		cfg.TTVTrajectories = 1
+// consolidateOneGraphWithPool resolves every external provider only after
+// the DB trigger fires. The trigger input is the scope's uncovered active
+// atom count (Task 14): staging files are never replayed.
+func consolidateOneGraphWithPool(ctx context.Context, pool *pgxpool.Pool, policy *service.MemoryProviderPolicyResolver, dir string, ds *graphDirState, bm *obsmetrics.BusinessMetrics) (bool, error) {
+	if pool == nil {
+		// The atom trigger is DB-authoritative; a DB-less sweep claims nothing.
+		slog.Info("graph memory consolidation skipped", "dir", dir, "decision", "no_database")
+		return false, nil
 	}
-	exploreCfg := memorygraph.DefaultExploreConfig()
-	exploreCfg.Model = cfg.Model
-	if exploreMaxRounds > 0 {
-		exploreCfg.MaxRounds = exploreMaxRounds
-	}
-	// D_q's closure radius must track the explore budget the runner
-	// actually plays with (spec §5.1 L2).
-	cfg.ExploreMaxRounds = exploreCfg.MaxRounds
-	return cfg, exploreCfg
-}
-
-// consolidateOneGraph runs one gated consolidation cycle against the
-// memory_graph store at dir, updating ds in place. It reports whether a
-// consolidation ran.
-func consolidateOneGraph(ctx context.Context, dir string, exploreMaxRounds int, tttEnabled bool, ds *graphDirState, bm *obsmetrics.BusinessMetrics) (bool, error) {
-	return consolidateOneGraphWithPool(ctx, nil, dir, exploreMaxRounds, tttEnabled, ds, bm)
-}
-
-// consolidateOneGraphWithPool keeps the scheduler's workspace profile budget
-// and attaches dev's server-authoritative BacktestItem ground truth.
-func consolidateOneGraphWithPool(ctx context.Context, pool *pgxpool.Pool, dir string, exploreMaxRounds int, tttEnabled bool, ds *graphDirState, bm *obsmetrics.BusinessMetrics) (bool, error) {
 	store := memorygraph.NewStore(dir)
 	if err := store.Init(); err != nil {
 		return false, fmt.Errorf("init store: %w", err)
 	}
-	cfg, exploreCfg := graphMemoryConsolidationConfigs(strings.TrimSpace(os.Getenv("MULTICA_PI_MODEL")), exploreMaxRounds, tttEnabled)
-	if pool != nil {
-		identity, err := memorygraph.ReadGraphIdentity(dir)
-		if err != nil {
-			return false, err
-		}
-		catalog := service.NewGraphMemoryInfoCatalogService(pool)
-		cfg.BacktestGroundTruth = func(ctx context.Context, _ *memorygraph.Store, _ int, queries []*memorygraph.BacktestQuery) error {
-			return catalog.AttachBacktestGroundTruth(ctx, identity.Kind, identity.OwnerID, queries)
-		}
-	}
-	run := func(ctx context.Context) (*memorygraph.ConsolidateResult, error) {
-		backend, err := graphMemoryPIBackend()
-		if err != nil {
-			return nil, err
-		}
-		consolidator := memorygraph.NewConsolidator(store, backend, cfg, "pi", nil, memorygraph.NewTraceRecorder(dir))
-		if cfg.TTVTrajectories > 1 {
-			// R2: wire the production full-backtest runner so a candidate
-			// whose retrieval coverage rises runs a real explore backtest
-			// (rebuilt against the candidate version) instead of taking the
-			// conservative pass. The embedder (when configured) keeps the
-			// backtest retrieval identical to production (A2).
-			emb := graphMemoryEmbedder(store)
-			consolidator.SetRunner(memorygraph.NewExploreBacktestRunner(store, emb, backend, memorygraph.DefaultRetrievalConfig(), exploreCfg, "pi"))
-			consolidator.SetEmbedder(emb)
-		}
-		return consolidator.Consolidate(ctx)
-	}
-	return consolidateOneGraphWith(ctx, dir, store, cfg, ds, bm, run, time.Now().UTC())
-}
-
-// graphMemoryEmbedder builds the shared embedding cache for a store from the
-// MULTICA_GRAPH_EMBED_* env contract; it returns nil when no endpoint is
-// configured (BM25-only retrieval, same as the daemon).
-func graphMemoryEmbedder(store *memorygraph.Store) *memorygraph.CachedEmbedder {
-	emb, err := memorygraph.NewOpenAIEmbedderFromEnv()
-	if err != nil {
-		return nil
-	}
-	return memorygraph.NewCachedEmbedder(emb, store)
-}
-
-// consolidateOneGraphWith implements the A3-hardened trigger (design Q10):
-// the dual threshold, a 24h time-based fallback, and a failure backoff that
-// skips dirs after graphConsolidationBackoffThreshold consecutive errored
-// or no-switch consolidations until new staging segments arrive.
-func consolidateOneGraphWith(ctx context.Context, dir string, store *memorygraph.Store, cfg memorygraph.ConsolidateConfig, ds *graphDirState, bm *obsmetrics.BusinessMetrics, run graphConsolidationRunner, now time.Time) (bool, error) {
-	newSegments, totalStaging, err := countStagingSegmentsSince(store, ds.LastConsolidated)
+	identity, err := memorygraph.ReadGraphIdentity(dir)
 	if err != nil {
 		return false, err
 	}
+	workspaceUUID, err := serviceWorkspaceUUID(identity.WorkspaceID)
+	if err != nil {
+		return false, err
+	}
+	ownerUUID, err := uuid.Parse(identity.OwnerID)
+	if err != nil {
+		// Publication scopes are UUID-owned; a non-UUID owner can never be
+		// claimed by the atom flow (permanent condition, not a failure).
+		slog.Info("graph memory consolidation skipped", "dir", dir, "decision", "owner_not_uuid")
+		return false, nil
+	}
+	ownerTyped := pgtype.UUID{Bytes: ownerUUID, Valid: true}
+	newAtoms, totalAtoms, err := service.ActiveGraphUncoveredAtomCounts(ctx, pool, workspaceUUID, identity.Kind, ownerTyped)
+	if err != nil {
+		return false, err
+	}
+	cfg := memorygraph.DefaultConsolidateConfig() // trigger thresholds
+	run := func(ctx context.Context) (*service.GraphMemoryConsolidationPublishReport, error) {
+		resolved, err := policy.Resolve(ctx, workspaceUUID, service.ProviderConsolidate)
+		if err != nil {
+			return nil, err
+		}
+		scope := graphMemoryProviderScope(identity.WorkspaceID, service.ProviderConsolidate, resolved)
+		backend, err := graphMemoryPIBackend(resolved)
+		if err != nil {
+			return nil, err
+		}
+		return service.NewGraphMemoryConsolidationPublishService(pool).
+			PublishScope(ctx, workspaceUUID, identity.Kind, identity.OwnerID, backend, scope)
+	}
+	return consolidateOneGraphWith(ctx, dir, store, cfg, ds, bm, int(newAtoms), int(totalAtoms), run, time.Now().UTC())
+}
+
+func serviceWorkspaceUUID(workspaceID string) (pgtype.UUID, error) {
+	parsed, err := uuid.Parse(workspaceID)
+	if err != nil {
+		return pgtype.UUID{}, fmt.Errorf("graph memory policy workspace id: %w", err)
+	}
+	var out pgtype.UUID
+	copy(out.Bytes[:], parsed[:])
+	out.Valid = true
+	return out, nil
+}
+
+func graphMemoryProviderScope(workspaceID string, purpose service.MemoryProviderPurpose, resolved service.ResolvedMemoryProvider) memorygraph.ProviderScope {
+	return memorygraph.ProviderScope{
+		WorkspaceID: workspaceID, Purpose: memorygraph.ProviderPurpose(purpose),
+		Provider: resolved.Provider, Model: resolved.Model, Region: resolved.Region, PolicyVersion: resolved.PolicyVersion,
+	}
+}
+
+// consolidateOneGraphWith implements the A3-hardened trigger (design Q10)
+// over the Task 14 atom inputs: the dual threshold on uncovered active
+// atoms and query-log entries, a 24h time-based fallback, and a failure
+// backoff that skips dirs after graphConsolidationBackoffThreshold
+// consecutive failed cycles until the scope's total active atom count
+// grows past the watermark recorded at backoff entry.
+func consolidateOneGraphWith(ctx context.Context, dir string, store *memorygraph.Store, cfg memorygraph.ConsolidateConfig, ds *graphDirState, bm *obsmetrics.BusinessMetrics, newAtoms, totalAtoms int, run graphConsolidationRunner, now time.Time) (bool, error) {
 	queries, err := countQueryLogEntriesSince(store, ds.LastConsolidated)
 	if err != nil {
 		return false, err
 	}
 
-	// Failure backoff (A3): skip until the total staging count grows past
-	// the watermark recorded at backoff entry, i.e. until genuinely new
-	// material arrives.
+	// Failure backoff (A3): skip until the total active atom count grows
+	// past the watermark recorded at backoff entry, i.e. until genuinely
+	// new material arrives.
 	if ds.Backoff {
-		if totalStaging > ds.BackoffWatermark {
+		if totalAtoms > ds.BackoffWatermark {
 			ds.Backoff = false
 			ds.ConsecutiveNoSwitch = 0
-			slog.Info("graph memory consolidation backoff cleared: new staging segments arrived",
-				"dir", dir, "staging", totalStaging, "watermark", ds.BackoffWatermark)
+			slog.Info("graph memory consolidation backoff cleared: new active atoms arrived",
+				"dir", dir, "atoms", totalAtoms, "watermark", ds.BackoffWatermark)
 		} else {
 			slog.Info("graph memory consolidation skipped: failure backoff active",
-				"dir", dir, "staging", totalStaging, "watermark", ds.BackoffWatermark,
+				"dir", dir, "atoms", totalAtoms, "watermark", ds.BackoffWatermark,
 				"consecutive_no_switch", ds.ConsecutiveNoSwitch)
 			return false, nil
 		}
 	}
 
 	// Dual-threshold trigger (Q10), plus the time-based fallback (A3): at
-	// least one new staging segment and no successful consolidation in over
+	// least one uncovered atom and no successful consolidation in over
 	// graphConsolidationMaxStaleness triggers anyway. A zero LastSuccessAt
 	// (never consolidated, or a pre-A3 state file) counts as maximally
 	// stale.
 	reason := ""
 	switch {
-	case memorygraph.ShouldConsolidate(newSegments, queries, cfg):
+	case memorygraph.ShouldConsolidate(newAtoms, queries, cfg):
 		reason = "threshold"
-	case newSegments >= 1 && now.Sub(ds.LastSuccessAt) > graphConsolidationMaxStaleness:
+	case newAtoms >= 1 && now.Sub(ds.LastSuccessAt) > graphConsolidationMaxStaleness:
 		reason = "time_fallback"
 	default:
 		slog.Info("graph memory consolidation skipped: trigger not met",
-			"dir", dir, "new_segments", newSegments, "queries", queries,
+			"dir", dir, "uncovered_atoms", newAtoms, "queries", queries,
 			"last_success_at", ds.LastSuccessAt)
 		return false, nil
 	}
 	slog.Info("graph memory consolidation triggered", "dir", dir, "reason", reason,
-		"new_segments", newSegments, "queries", queries)
+		"uncovered_atoms", newAtoms, "queries", queries)
 
-	res, err := run(ctx)
+	report, err := run(ctx)
 	if err != nil {
-		recordConsolidationFailure(ds, totalStaging, dir, "error: "+err.Error())
+		recordConsolidationFailure(ds, totalAtoms, dir, "error: "+err.Error())
 		return false, fmt.Errorf("consolidate: %w", err)
 	}
 
-	ds.LastConsolidated = now
-	ds.LastSuccessAt = now
-	// A TTT consolidation that completes without a version switch counts
-	// toward the backoff (A3/R2: a systematically-failing TTT must not burn
-	// T trajectories every hour). Non-TTT in-place consolidations never
-	// switch by design (Q16), so a clean non-TTT run resets the counter.
-	switch {
-	case res.Switched:
+	switch report.Outcome {
+	case service.GraphMemoryConsolidationPublishPublished:
+		ds.LastConsolidated = now
+		ds.LastSuccessAt = now
 		ds.ConsecutiveNoSwitch = 0
 		ds.Backoff = false
-		bm.RecordGraphVersionSwitch()
-	case cfg.TTVTrajectories > 1:
-		recordConsolidationFailure(ds, totalStaging, dir, "no version switch")
+		if bm != nil {
+			bm.RecordGraphVersionSwitch()
+		}
+		slog.Info("graph memory publication published", "dir", dir,
+			"generation", report.Generation, "candidate_version", report.CandidateVersion,
+			"atoms", report.AtomCount)
+		return true, nil
+	case service.GraphMemoryConsolidationPublishSkippedNoAtoms:
+		// The trigger raced an emptied manifest; nothing was consumed, no
+		// watermark moves, and the next sweep sees zero uncovered atoms.
+		slog.Info("graph memory consolidation skipped: no active atoms", "dir", dir)
+		return false, nil
 	default:
-		ds.ConsecutiveNoSwitch = 0
-		ds.Backoff = false
+		// A non-consuming abort (e.g. uncited atoms) still burned a cycle;
+		// it feeds the backoff so a systematically failing agent cannot
+		// burn one every sweep.
+		recordConsolidationFailure(ds, totalAtoms, dir, "outcome: "+report.Outcome)
+		return false, fmt.Errorf("consolidate: outcome %s", report.Outcome)
 	}
-	if ratio, ok := backtestBypassRatio(res); ok {
-		bm.RecordGraphBacktestBypass(ratio)
-	}
-	return true, nil
 }
 
 // sealGraphMemoryDaily runs the daily seal pass for one graph directory
@@ -533,38 +574,20 @@ func recordConsolidationFailure(ds *graphDirState, totalStaging int, dir, cause 
 // graphMemoryPIBackend builds the pi agent backend for the consolidation
 // trajectory, reading the same env contract the daemon uses
 // (MULTICA_PI_PATH / MULTICA_PI_MODEL).
-func graphMemoryPIBackend() (memorygraph.AgentBackend, error) {
-	path := strings.TrimSpace(os.Getenv("MULTICA_PI_PATH"))
-	if path == "" {
-		path = "pi"
+func graphMemoryPIBackend(policy service.ResolvedMemoryProvider) (memorygraph.AgentBackend, error) {
+	cfg := agentpkg.Config{}
+	if policy.Provider == "pi" {
+		path := strings.TrimSpace(os.Getenv("MULTICA_PI_PATH"))
+		if path == "" {
+			path = "pi"
+		}
+		cfg.ExecutablePath = path
 	}
-	backend, err := agentpkg.New("pi", agentpkg.Config{ExecutablePath: path})
+	backend, err := agentpkg.New(policy.Provider, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("pi backend: %w", err)
+		return nil, fmt.Errorf("graph memory backend: %w", err)
 	}
 	return backend, nil
-}
-
-// countStagingSegmentsSince counts staging segment files modified after
-// since and also returns the total staging count (staging segments are
-// immutable and kept for provenance after consolidation (design §5.1), so
-// the modtime watermark is the "new" predicate and the total is monotonic,
-// which the A3 failure backoff watermarks against).
-func countStagingSegmentsSince(store *memorygraph.Store, since time.Time) (newCount, total int, err error) {
-	ids, err := store.ListStagingSegments()
-	if err != nil {
-		return 0, 0, fmt.Errorf("list staging segments: %w", err)
-	}
-	for _, id := range ids {
-		info, err := os.Stat(filepath.Join(store.Root, "staging", "segments", id+".md"))
-		if err != nil {
-			return 0, 0, fmt.Errorf("stat staging segment %s: %w", id, err)
-		}
-		if info.ModTime().After(since) {
-			newCount++
-		}
-	}
-	return newCount, len(ids), nil
 }
 
 // countQueryLogEntriesSince counts query-log entries recorded after since
@@ -587,26 +610,6 @@ func countQueryLogEntriesSince(store *memorygraph.Store, since time.Time) (int, 
 		}
 	}
 	return count, nil
-}
-
-// backtestBypassRatio computes the backtest bypass rate (回测免跑率, design
-// §7): the fraction of backtested queries accepted on graph distance alone
-// without a full agent explore run. ok is false when no query was
-// backtested.
-func backtestBypassRatio(res *memorygraph.ConsolidateResult) (float64, bool) {
-	total, bypassed := 0, 0
-	for _, cand := range res.Candidates {
-		for _, q := range cand.Queries {
-			total++
-			if q.AcceptedWithoutExplore {
-				bypassed++
-			}
-		}
-	}
-	if total == 0 {
-		return 0, false
-	}
-	return float64(bypassed) / float64(total), true
 }
 
 // graphMemoryWorkspacesRoot resolves the workspaces root on the server from
@@ -690,7 +693,7 @@ func findResearchGraphDirs(root string) ([]string, error) {
 // trigger with a 1h minimum interval, and per-dir failure isolation — a
 // failed round logs and leaves the watermark untouched so the next sweep
 // retries. Returns the number of rounds run.
-func maintainResearchGraphs(ctx context.Context, pool *pgxpool.Pool, dirs []string, state *graphConsolidationState, envType string, lookup graphMemoryGateLookup) int {
+func maintainResearchGraphs(ctx context.Context, pool *pgxpool.Pool, policy *service.MemoryProviderPolicyResolver, dirs []string, state *graphConsolidationState, envType string, lookup graphMemoryGateLookup) int {
 	if !researchGraphExportEnabled() || len(dirs) == 0 {
 		return 0
 	}
@@ -719,7 +722,7 @@ func maintainResearchGraphs(ctx context.Context, pool *pgxpool.Pool, dirs []stri
 		if !shouldRunResearchMaintenance(ds, queries, now) {
 			continue
 		}
-		if err := runResearchMaintenanceRound(ctx, pool, wsID, dir, store); err != nil {
+		if err := runResearchMaintenanceRound(ctx, pool, policy, wsID, dir, store); err != nil {
 			slog.Warn("research graph maintenance failed", "dir", dir, "error", err)
 			continue
 		}
@@ -746,14 +749,41 @@ func shouldRunResearchMaintenance(ds *graphDirState, queries int, now time.Time)
 // in-place trajectory: TTT candidate generation stays on the project/channel
 // graphs, where explore backtests are wired. Writes go through the graph
 // mutation lease like every other writer.
-var runResearchMaintenanceRound = func(ctx context.Context, pool *pgxpool.Pool, wsID, dir string, store *memorygraph.Store) error {
-	backend, err := graphMemoryPIBackend()
+var runResearchMaintenanceRound = func(ctx context.Context, pool *pgxpool.Pool, policy *service.MemoryProviderPolicyResolver, wsID, dir string, store *memorygraph.Store) error {
+	workspaceUUID, err := serviceWorkspaceUUID(wsID)
 	if err != nil {
 		return err
 	}
-	cfg, _ := graphMemoryConsolidationConfigs(strings.TrimSpace(os.Getenv("MULTICA_PI_MODEL")), 0, false)
-	c := memorygraph.NewConsolidator(store, backend, cfg, "pi", nil, memorygraph.NewTraceRecorder(dir))
-	c.SetWorkingSetBuilder(memorygraph.NewWorkingSetBuilder(store, memorygraph.RetrievalSignals{}, graphMemoryEmbedder(store), memorygraph.DefaultWorkingSetConfig(), cfg.MaxFanout))
+	resolved, err := policy.Resolve(ctx, workspaceUUID, service.ProviderConsolidate)
+	if err != nil {
+		return err
+	}
+	scope := graphMemoryProviderScope(wsID, service.ProviderConsolidate, resolved)
+	backend, err := graphMemoryPIBackend(resolved)
+	if err != nil {
+		return err
+	}
+	cfg := memorygraph.DefaultConsolidateConfig()
+	c := memorygraph.NewConsolidator(store, backend, cfg, scope, nil, memorygraph.NewTraceRecorder(dir))
+	// Working-set similarity degrades to BM25 when the embed channel is not
+	// configured; a missing embedder never blocks the maintenance round.
+	embedder := func() *memorygraph.CachedEmbedder {
+		embedResolved, embedErr := policy.Resolve(ctx, workspaceUUID, service.ProviderEmbed)
+		if embedErr != nil {
+			return nil
+		}
+		embedScope := graphMemoryProviderScope(wsID, service.ProviderEmbed, embedResolved)
+		provider, embErr := memorygraph.NewOpenAIEmbedderFromEnv(embedScope)
+		if embErr != nil {
+			return nil
+		}
+		emb, embErr := memorygraph.NewCachedEmbedder(provider, store, embedScope)
+		if embErr != nil {
+			return nil
+		}
+		return emb
+	}()
+	c.SetWorkingSetBuilder(memorygraph.NewWorkingSetBuilder(store, memorygraph.RetrievalSignals{}, embedder, memorygraph.DefaultWorkingSetConfig(), cfg.MaxFanout))
 	round := func(ctx context.Context) error {
 		_, err := c.MaintenanceRound(ctx)
 		return err

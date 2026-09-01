@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -194,14 +195,14 @@ type ConsolidateResult struct {
 // place; in TTT mode T trajectories edit isolated candidate version copies
 // and a backtest selects the winner.
 type Consolidator struct {
-	store    *Store
-	backend  AgentBackend
-	cfg      ConsolidateConfig
-	provider string // agent CLI provider name (e.g. "pi"); integration-time wiring
-	oplog    *OpLogger
-	traces   *TraceRecorder // nil → trajectories are drained but not persisted
+	store   *Store
+	backend AgentBackend
+	cfg     ConsolidateConfig
+	scope   ProviderScope
+	oplog   *OpLogger
+	traces  *TraceRecorder // nil → trajectories are drained but not persisted
 
-	runner FullBacktestRunner // nil → full backtests count as misses
+	runner *ScopedFullBacktestRunner // nil → full backtests count as misses
 	// emb enables the vector channel of the per-candidate backtest retrieval
 	// (design Q13/A2: the backtest retriever must mirror production); nil
 	// keeps backtests BM25-only through the same two-channel merge.
@@ -215,37 +216,80 @@ type Consolidator struct {
 	// direction. roundWS is the round's working-set id set backing that gate.
 	maintenance bool
 	roundWS     map[string]bool
+
+	runnerBindingErr   error
+	embedderBindingErr error
 }
 
-// NewConsolidator returns a Consolidator over the given store. cfg zero
-// values fall back to DefaultConsolidateConfig. oplog may be nil, in which
-// case a fresh OpLogger over store is used. provider is informational until
-// provider wiring lands at integration time. traces may be nil, in which
-// case trajectories are not persisted.
-func NewConsolidator(store *Store, backend AgentBackend, cfg ConsolidateConfig, provider string, oplog *OpLogger, traces *TraceRecorder) *Consolidator {
+// NewConsolidator returns a Consolidator over the given store. The provider
+// scope must come from the server resolver; cfg.Model is overwritten by its
+// resolved model. oplog and traces may be nil.
+func NewConsolidator(store *Store, backend AgentBackend, cfg ConsolidateConfig, scope ProviderScope, oplog *OpLogger, traces *TraceRecorder) *Consolidator {
 	if oplog == nil {
 		oplog = NewOpLogger(store)
 	}
+	cfg.Model = scope.Model
 	return &Consolidator{
-		store:    store,
-		backend:  backend,
-		cfg:      cfg.normalized(),
-		provider: provider,
-		oplog:    oplog,
-		traces:   traces,
+		store:   store,
+		backend: backend,
+		cfg:     cfg.normalized(),
+		scope:   scope,
+		oplog:   oplog,
+		traces:  traces,
 	}
 }
 
-// SetRunner installs the FullBacktestRunner used when a candidate's
-// retrieval distance regresses (design Q13: distance increase triggers a
-// full agent explore backtest). In production this rebuilds an Explorer
-// against the candidate version; in tests a fake.
-func (c *Consolidator) SetRunner(r FullBacktestRunner) { c.runner = r }
+// SetRunner installs a FullBacktestRunner with the Consolidator's resolved identity.
+func (c *Consolidator) SetRunner(r *ScopedFullBacktestRunner) error {
+	if r == nil {
+		c.runner = nil
+		c.runnerBindingErr = nil
+		return nil
+	}
+	if err := validateProviderScope(c.scope, ProviderPurposeConsolidate); err != nil {
+		c.runnerBindingErr = err
+		return err
+	}
+	if err := validateProviderScope(r.scope, ProviderPurposeConsolidate); err != nil {
+		c.runnerBindingErr = err
+		return err
+	}
+	if !providerScopeIdentityEqual(c.scope, r.scope) {
+		err := fmt.Errorf("consolidate: runner scope identity does not match consolidation scope identity")
+		c.runnerBindingErr = err
+		return err
+	}
+	c.runner = r
+	c.runnerBindingErr = nil
+	return nil
+}
 
 // SetEmbedder installs the embedding channel used by the per-candidate
 // backtest retrievers so backtests mirror the production hybrid retrieval
 // (design Q13/A2). Nil keeps backtests BM25-only.
-func (c *Consolidator) SetEmbedder(emb *CachedEmbedder) { c.emb = emb }
+func (c *Consolidator) SetEmbedder(emb *CachedEmbedder) error {
+	if emb == nil {
+		c.emb = nil
+		c.embedderBindingErr = nil
+		return nil
+	}
+	if err := validateProviderScope(c.scope, ProviderPurposeConsolidate); err != nil {
+		c.embedderBindingErr = err
+		return err
+	}
+	if err := validateProviderScope(emb.scope, ProviderPurposeEmbed); err != nil {
+		c.embedderBindingErr = err
+		return err
+	}
+	if !providerScopeIdentityEqual(c.scope, emb.scope) {
+		err := fmt.Errorf("consolidate: embedder scope identity does not match consolidation scope identity")
+		c.embedderBindingErr = err
+		return err
+	}
+	c.emb = emb
+	c.embedderBindingErr = nil
+	return nil
+}
 
 // SetWorkingSetBuilder installs the builder whose working set is injected
 // into every consolidation prompt (unification spec §4.3). Nil — the default
@@ -264,9 +308,21 @@ const maxStagingPromptChars = 2000
 // Consolidate runs one consolidation cycle against the current version
 // (design §5.4). The caller is expected to have gated on ShouldConsolidate.
 func (c *Consolidator) Consolidate(ctx context.Context) (*ConsolidateResult, error) {
+	if err := validateProviderScope(c.scope, ProviderPurposeConsolidate); err != nil {
+		return nil, fmt.Errorf("consolidate: %w", err)
+	}
+	if c.runnerBindingErr != nil {
+		return nil, c.runnerBindingErr
+	}
+	if c.embedderBindingErr != nil {
+		return nil, c.embedderBindingErr
+	}
 	if c.backend == nil {
 		return nil, fmt.Errorf("consolidate: agent backend not configured")
 	}
+	// Legacy staging-file flow: the scheduler no longer drives it (Task 14
+	// replaced it with ConsolidateAtoms + the publication coordinator); it
+	// remains for offline tooling and backtests.
 	current, err := c.store.CurrentVersion()
 	if err != nil {
 		return nil, fmt.Errorf("consolidate: current version: %w", err)
@@ -454,6 +510,7 @@ func (c *Consolidator) consolidateTTT(ctx context.Context, current int, staging 
 	btCfg := BacktestConfig{
 		RecallTolerance: c.cfg.RecallTolerance,
 		Embedder:        c.emb,
+		Scope:           c.scope,
 		Runner:          c.runner,
 		// Cold start (spec §7): below the threshold the window baselines are
 		// too thin to trust, so the statistical gates (recall, rounds
@@ -494,6 +551,18 @@ func (c *Consolidator) consolidateTTT(ctx context.Context, current int, staging 
 		cands[i] = stats
 		result.OpsApplied += outcomes[i].applied
 		result.Rejected = append(result.Rejected, outcomes[i].rejected...)
+	}
+
+	// Shadow consolidation reward (spec §14.3, Task 19): every candidate
+	// carries the reward computed from its OWN absolute stats over the
+	// evaluation partition — winner identity contributes nothing, and
+	// SelectWinner's batch-relative cost never leaks into the reward. The
+	// components are recorded for offline calibration; no model update runs
+	// until weights ship under a new policy version (spec §14.4).
+	for i := range cands {
+		cands[i].Reward, cands[i].RewardComponents = ConsolidationReward(
+			ConsolidationRewardInputFromStats(&cands[i]), DefaultConsolidationRewardWeights())
+		cands[i].RewardPolicyVersion = ConsolidationRewardPolicyVersion
 	}
 
 	// Step 5: minimum-cost selection among gate survivors.
@@ -563,6 +632,7 @@ func appendBudgetAudit(stats []QueryBacktestStat, cb candidateBudget, measured, 
 		stats = append(stats, QueryBacktestStat{
 			TraceID:        q.TraceID,
 			Query:          q.Query,
+			Partition:      QueryPartition(q.TraceID),
 			BaselineRounds: baselineRounds(q.BaselineRounds),
 			BaselineFound:  q.BaselineFound,
 			Skipped:        true,
@@ -1411,6 +1481,12 @@ func candidateAuditDetails(cands []CandidateStats) []map[string]any {
 			"embed_bytes":   cs.EmbedBytes,
 			"edge_churn":    cs.EdgeChurn,
 			"cost":          cs.Cost,
+			// Spec §14.3/§14.4 (Task 19): the shadow reward and its raw
+			// components ride the audit entry for offline calibration;
+			// weights only change under a new reward policy version.
+			"reward":                cs.Reward,
+			"reward_components":     cs.RewardComponents,
+			"reward_policy_version": cs.RewardPolicyVersion,
 		}
 		if cs.Error != "" {
 			out[i]["error"] = cs.Error
@@ -1429,4 +1505,141 @@ func extractJSONObject(output string, dst any) bool {
 		return false
 	}
 	return json.Unmarshal([]byte(output[start:end+1]), dst) == nil
+}
+
+// ============ Task 14: atom-manifest consolidation ============
+
+// AtomManifestEntry is one active atom of the DB-authoritative manifest:
+// the Task 14 consolidator input. Staging files are no longer the source of
+// truth — the caller loads the active, unfenced atom ledger at the current
+// publish watermark and hands it in explicitly.
+type AtomManifestEntry struct {
+	AtomID    string
+	SegmentID string
+	Body      string
+}
+
+// AtomConsolidateResult reports one immutable candidate built from the atom
+// manifest. The caller (the publication coordinator service) decides
+// whether to publish; nothing here flips the current pointer.
+type AtomConsolidateResult struct {
+	CandidateVersion int
+	OpsApplied       int
+	Rejected         []RejectReason
+	// UncitedAtomIDs are manifest atoms no applied operation cited. They are
+	// NOT consumed: the next cycle still sees them.
+	UncitedAtomIDs []string
+	// NodeAtoms maps each node to the manifest atoms its operations cited,
+	// ready to become the publication reverse provenance.
+	NodeAtoms map[string][]string
+}
+
+// buildAtomsPrompt renders the atom-manifest prompt. Coverage is explicit:
+// every add/update must cite the atom ids it folds, and every manifest atom
+// must end up cited by at least one node.
+func (c *Consolidator) buildAtomsPrompt(atoms []AtomManifestEntry, stats graphStats) string {
+	var b strings.Builder
+	b.WriteString("Consolidate the active memory atoms into the memory graph. This is protocol generation 2: the input is the atom ledger, not staging segments.\n\n")
+
+	b.WriteString("Allowed operations (emit them as a JSON array under \"operations\"):\n")
+	b.WriteString("- {\"op\":\"add_node\",\"node\":{\"node_id\",\"body\",\"atom_refs\":[...],\"tags\":[...],\"entity_refs\":[...]}} — create a node citing the atom ids it folds; atom_refs is REQUIRED on every add_node.\n")
+	b.WriteString("- {\"op\":\"update_node\",\"node_id\":\"<id>\",\"node\":{\"node_id\":\"<id>\",\"body\":...,\"atom_refs\":[...]}} — replace an existing node's content; cited atoms merge into its provenance.\n")
+	b.WriteString("- {\"op\":\"delete_node\",\"node_id\":\"<id>\"} — remove a node and its incident edges.\n")
+	b.WriteString("- {\"op\":\"add_hierarchy_edge\",\"edge\":{\"edge_id\",\"from\":\"<parent>\",\"to\":\"<child>\"}} — summarizes edge; must keep the hierarchy a DAG.\n")
+	b.WriteString("- {\"op\":\"add_relation_edge\",\"edge\":{\"edge_id\",\"type\":\"causes|supports|contradicts|supersedes|evidence_for|derived_from|...\",\"from\",\"to\",\"confidence\":0.0}} — typed relation edge (may form cycles, may target \"edge:<edge_id>\").\n")
+	b.WriteString("- {\"op\":\"delete_edge\",\"edge_id\":\"<id>\"} — remove an edge.\n")
+	b.WriteString("- {\"op\":\"prune_edge\",\"edge_id\":\"<id>\"} — remove an edge as deliberate sparsification.\n")
+	b.WriteString("- {\"op\":\"submit\"} — finish within budget.\n\n")
+
+	fmt.Fprintf(&b, "Budgets (hard limits): at most %d operations and %d working rounds; submit when done.\n", c.cfg.OpBudget, c.cfg.RoundBudget)
+	fmt.Fprintf(&b, "Graph limits: at most %d hierarchy levels, %d children per node, and %d relation edges per node.\n\n", c.cfg.MaxLevels, c.cfg.MaxFanout, c.cfg.MaxRelationEdges)
+
+	fmt.Fprintf(&b, "Current graph stats: %d nodes, %d hierarchy edges, %d relation edges, max level %d.\n\n",
+		stats.NodeCount, stats.HierEdgeCount, stats.RelEdgeCount, stats.MaxLevel)
+
+	b.WriteString("Active atoms (every atom id must end up cited by at least one node's atom_refs):\n")
+	if len(atoms) == 0 {
+		b.WriteString("- (none)\n")
+	}
+	for _, a := range atoms {
+		body := a.Body
+		if len(body) > maxStagingPromptChars {
+			body = body[:maxStagingPromptChars]
+		}
+		fmt.Fprintf(&b, "- atom %s (segment %s):\n%s\n", a.AtomID, a.SegmentID, body)
+	}
+
+	b.WriteString("\nYour FINAL response must be exactly one JSON object and nothing else (no prose, no markdown fences):\n")
+	b.WriteString("{\"operations\":[...]}\n")
+	return b.String()
+}
+
+// ConsolidateAtoms folds the active atom manifest into a NEW immutable
+// candidate version (Task 14 Step 3): even the single-trajectory flow never
+// mutates the current version directory in place, and the candidate is only
+// a candidate until the DB-authoritative publication coordinator commits
+// it. Uncited atoms are reported, not consumed.
+func (c *Consolidator) ConsolidateAtoms(ctx context.Context, baseVersion int, atoms []AtomManifestEntry) (*AtomConsolidateResult, error) {
+	if err := validateProviderScope(c.scope, ProviderPurposeConsolidate); err != nil {
+		return nil, fmt.Errorf("consolidate atoms: %w", err)
+	}
+	if c.runnerBindingErr != nil {
+		return nil, c.runnerBindingErr
+	}
+	if c.embedderBindingErr != nil {
+		return nil, c.embedderBindingErr
+	}
+	if c.backend == nil {
+		return nil, fmt.Errorf("consolidate atoms: agent backend not configured")
+	}
+	if baseVersion <= 0 {
+		return nil, fmt.Errorf("consolidate atoms: base version required")
+	}
+
+	candidate, err := c.store.CreateVersionFrom(baseVersion, "atom_candidate")
+	if err != nil {
+		return nil, fmt.Errorf("consolidate atoms: create candidate: %w", err)
+	}
+	g, err := LoadGraph(c.store, candidate)
+	if err != nil {
+		return nil, fmt.Errorf("consolidate atoms: load graph v%d: %w", candidate, err)
+	}
+	stats := computeGraphStats(g)
+	prompt := c.buildAtomsPrompt(atoms, stats)
+
+	parsed, _, err := c.runAgent(ctx, prompt)
+	if err != nil {
+		return nil, fmt.Errorf("consolidate atoms: agent: %w", err)
+	}
+	applied, rejected, err := c.applyOperations(g, candidate, CreatorConsolidator, parsed.Operations)
+	if err != nil {
+		return nil, fmt.Errorf("consolidate atoms: apply: %w", err)
+	}
+
+	cited := map[string]bool{}
+	nodeAtoms := map[string][]string{}
+	for _, node := range g.Nodes() {
+		if len(node.AtomRefs) == 0 {
+			continue
+		}
+		nodeAtoms[node.NodeID] = append(nodeAtoms[node.NodeID], node.AtomRefs...)
+		for _, atomID := range node.AtomRefs {
+			cited[atomID] = true
+		}
+	}
+	var uncited []string
+	for _, atom := range atoms {
+		if !cited[atom.AtomID] {
+			uncited = append(uncited, atom.AtomID)
+		}
+	}
+	sort.Strings(uncited)
+
+	if err := persistGraph(c.store, candidate, g); err != nil {
+		return nil, fmt.Errorf("consolidate atoms: persist candidate: %w", err)
+	}
+	return &AtomConsolidateResult{
+		CandidateVersion: candidate, OpsApplied: applied, Rejected: rejected,
+		UncitedAtomIDs: uncited, NodeAtoms: nodeAtoms,
+	}, nil
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/multica-ai/multica/server/internal/memorygraph"
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 )
 
@@ -24,7 +25,7 @@ func stubMaintenanceRunner(t *testing.T) *int32 {
 	t.Helper()
 	var calls int32
 	orig := runResearchMaintenanceRound
-	runResearchMaintenanceRound = func(context.Context, *pgxpool.Pool, string, string, *memorygraph.Store) error {
+	runResearchMaintenanceRound = func(context.Context, *pgxpool.Pool, *service.MemoryProviderPolicyResolver, string, string, *memorygraph.Store) error {
 		atomic.AddInt32(&calls, 1)
 		return nil
 	}
@@ -99,7 +100,7 @@ func TestGraphMemoryResearchMaintenanceTriggerFires(t *testing.T) {
 	dir := researchMaintenanceStore(t, pool, root, 200)
 	calls := stubMaintenanceRunner(t)
 
-	res, err := GraphMemoryJobs(pool, nil).Handler(context.Background(), HandlerInput{})
+	res, err := GraphMemoryJobs(pool, nil, nil).Handler(context.Background(), HandlerInput{})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -115,7 +116,7 @@ func TestGraphMemoryResearchMaintenanceTriggerFires(t *testing.T) {
 	}
 
 	// Second tick within the minimum interval: no second run.
-	if _, err := GraphMemoryJobs(pool, nil).Handler(context.Background(), HandlerInput{}); err != nil {
+	if _, err := GraphMemoryJobs(pool, nil, nil).Handler(context.Background(), HandlerInput{}); err != nil {
 		t.Fatalf("handler 2: %v", err)
 	}
 	if atomic.LoadInt32(calls) != 1 {
@@ -134,7 +135,7 @@ func TestGraphMemoryResearchMaintenanceIdle(t *testing.T) {
 	researchMaintenanceStore(t, pool, root, 0)
 	calls := stubMaintenanceRunner(t)
 
-	res, err := GraphMemoryJobs(pool, nil).Handler(context.Background(), HandlerInput{})
+	res, err := GraphMemoryJobs(pool, nil, nil).Handler(context.Background(), HandlerInput{})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -158,7 +159,7 @@ func TestGraphMemoryResearchMaintenanceSwitchOff(t *testing.T) {
 	researchMaintenanceStore(t, pool, root, 300)
 	calls := stubMaintenanceRunner(t)
 
-	res, err := GraphMemoryJobs(pool, nil).Handler(context.Background(), HandlerInput{})
+	res, err := GraphMemoryJobs(pool, nil, nil).Handler(context.Background(), HandlerInput{})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}

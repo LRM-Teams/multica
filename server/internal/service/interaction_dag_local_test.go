@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -37,7 +38,7 @@ func TestInteractionDAG_RecordLocalSegmentForEvent_RecordsLocalSegment(t *testin
 	msgs := newFakeMessageStore()
 	svc := NewInteractionDAGServiceWithMessages(store, msgs, &fakeArealSegmentClient{}, true)
 
-	taskID := "task-local-1"
+	taskID := util.UUIDToString(testUUID(21))
 	// Seed task messages at seq 1-3 in both stores.
 	store.addTestTaskMessage(taskID, 1)
 	store.addTestTaskMessage(taskID, 2)
@@ -51,10 +52,10 @@ func TestInteractionDAG_RecordLocalSegmentForEvent_RecordsLocalSegment(t *testin
 		map[string]any{"sandbox_ids": []string{"sbx-1"}},
 	)
 	require.NoError(t, err)
-	assert.Equal(t, "multica:task-local-1", segID)
+	assert.Equal(t, "multica:"+util.UUIDToString(testUUID(21)), segID)
 
 	// Session run upserted with deterministic session id.
-	run, ok := store.sessionRuns["multica:task-local-1"]
+	run, ok := store.sessionRuns["multica:"+util.UUIDToString(testUUID(21))]
 	require.True(t, ok, "session run must be upserted")
 	assert.Equal(t, "proj-1", run.ProjectID)
 	assert.Equal(t, taskID, run.AgentRunID)
@@ -63,9 +64,9 @@ func TestInteractionDAG_RecordLocalSegmentForEvent_RecordsLocalSegment(t *testin
 	// Segment snapshot recorded.
 	require.Len(t, store.segmentSnapshots, 1)
 	seg := store.segmentSnapshots[0]
-	assert.Equal(t, "multica:task-local-1", seg.SegmentID)
+	assert.Equal(t, "multica:"+util.UUIDToString(testUUID(21)), seg.SegmentID)
 	assert.Equal(t, "proj-1", seg.ProjectID)
-	assert.Equal(t, taskID, seg.AgentRunID)
+	assert.Equal(t, taskID, util.UUIDToString(seg.AgentRunID))
 	assert.Equal(t, ptrText("issue-1"), seg.IssueID)
 	assert.Equal(t, "task_messages", seg.TrajectorySource)
 	assert.False(t, seg.Trainable)
@@ -103,7 +104,7 @@ func TestInteractionDAG_RecordLocalSegmentForEvent_RepeatCloseIsIdempotent(t *te
 	msgs := newFakeMessageStore()
 	svc := NewInteractionDAGServiceWithMessages(store, msgs, &fakeArealSegmentClient{}, true)
 
-	taskID := "task-idem-1"
+	taskID := util.UUIDToString(testUUID(22))
 	store.addTestTaskMessage(taskID, 1)
 	store.addTestTaskMessage(taskID, 2)
 	msgs.addTaskMessage(taskID, makeFakeTaskMessage(taskID, 1, "user", "", "first", "", ""))
@@ -113,7 +114,7 @@ func TestInteractionDAG_RecordLocalSegmentForEvent_RepeatCloseIsIdempotent(t *te
 		context.Background(), "proj-1", taskID, "issue-1", "delegation", nil,
 	)
 	require.NoError(t, err)
-	assert.Equal(t, "multica:task-idem-1", segID1)
+	assert.Equal(t, "multica:"+util.UUIDToString(testUUID(22)), segID1)
 
 	// Second close: same task.
 	store.addTestTaskMessage(taskID, 3)
@@ -122,7 +123,7 @@ func TestInteractionDAG_RecordLocalSegmentForEvent_RepeatCloseIsIdempotent(t *te
 		context.Background(), "proj-1", taskID, "issue-1", "completion", nil,
 	)
 	require.NoError(t, err)
-	assert.Equal(t, "multica:task-idem-1", segID2, "segment ID must be deterministic on repeat")
+	assert.Equal(t, "multica:"+util.UUIDToString(testUUID(22)), segID2, "segment ID must be deterministic on repeat")
 
 	// The second insert is a new row (idempotency at the caller layer).
 	require.Len(t, store.segmentSnapshots, 2)
@@ -135,7 +136,7 @@ func TestInteractionDAG_RecordLocalSegmentForEvent_NeverIncludesSecrets(t *testi
 	msgs := newFakeMessageStore()
 	svc := NewInteractionDAGServiceWithMessages(store, msgs, &fakeArealSegmentClient{}, true)
 
-	taskID := "task-sec-1"
+	taskID := util.UUIDToString(testUUID(23))
 	store.addTestTaskMessage(taskID, 1)
 	msgs.addTaskMessage(taskID, makeFakeTaskMessage(taskID, 1, "user", "", "hello", "", ""))
 
@@ -189,19 +190,19 @@ func TestInteractionDAG_RecordLocalSegmentForEvent_EmptySequenceRange(t *testing
 	msgs := newFakeMessageStore()
 	svc := NewInteractionDAGServiceWithMessages(store, msgs, &fakeArealSegmentClient{}, true)
 
-	taskID := "task-empty-1"
+	taskID := util.UUIDToString(testUUID(24))
 	// No task messages added to either store.
 
 	segID, _, err := svc.RecordLocalSegmentForEvent(
 		context.Background(), "proj-1", taskID, "issue-1", "delegation", nil,
 	)
 	require.NoError(t, err)
-	assert.Equal(t, "multica:task-empty-1", segID)
+	assert.Equal(t, "multica:"+util.UUIDToString(testUUID(24)), segID)
 
 	require.Len(t, store.segmentSnapshots, 1)
 	seg := store.segmentSnapshots[0]
 	assert.Equal(t, "[]", string(seg.Trajectory))
-	assert.Equal(t, int32(1), seg.StartSeq)
+	assert.Equal(t, int32(0), seg.StartSeq)
 	assert.Equal(t, int32(0), seg.EndSeq)
 }
 
@@ -221,7 +222,7 @@ func TestAssembleAssembledDag_EmitsDualSourceFields(t *testing.T) {
 		SessionID: "areal-sess", ProjectID: "proj-dual", AgentRunID: "areal-run", IssueID: ptrText("areal-issue"),
 	})
 	store.segmentSnapshots = append(store.segmentSnapshots, db.InsertInteractionDAGSegmentWithSnapshotParams{
-		SegmentID: "areal-sess-1", ProjectID: "proj-dual", AgentRunID: "areal-run",
+		SegmentID: "areal-sess-1", ProjectID: "proj-dual", AgentRunID: testUUID(31),
 		IssueID:          ptrText("areal-issue"),
 		TrajectoryID:     pgtype.Int8{Int64: 1, Valid: true},
 		TensorRef:        []byte(`{"input_ids":{"shard_id":"sh-1"}}`),
@@ -234,7 +235,7 @@ func TestAssembleAssembledDag_EmitsDualSourceFields(t *testing.T) {
 	})
 
 	// 2. task_messages segment.
-	taskID := "local-run"
+	taskID := util.UUIDToString(testUUID(25))
 	store.addTestTaskMessage(taskID, 1)
 	msgs.addTaskMessage(taskID, makeFakeTaskMessage(taskID, 1, "user", "", "hi", "", ""))
 	_, _, err := svc.RecordLocalSegmentForEvent(context.Background(), "proj-dual", taskID, "local-issue", "completion", nil)

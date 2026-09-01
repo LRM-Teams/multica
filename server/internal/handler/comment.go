@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/mention"
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -942,12 +943,14 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 	// request, so an agent legitimately commenting on a different issue must
 	// not be blocked by its current task's trigger. Assignment-triggered
 	// tasks (no TriggerCommentID) are also unaffected.
+	var taskForVisibleAction *db.AgentInboxEvent
 	if authorType == "agent" {
 		if taskIDHeader := r.Header.Get("X-Task-ID"); taskIDHeader != "" {
 			taskUUID, parseErr := util.ParseUUID(taskIDHeader)
 			if parseErr == nil {
 				task, err := h.Queries.GetAgentTask(r.Context(), taskUUID)
-				if err == nil && task.IssueID.Valid && uuidToString(task.IssueID) == uuidToString(issue.ID) {
+				if err == nil && task.WorkspaceID == issue.WorkspaceID && task.AgentID == parseUUID(authorID) && task.IssueID.Valid && uuidToString(task.IssueID) == uuidToString(issue.ID) {
+					taskForVisibleAction = &task
 					if task.TriggerCommentID.Valid {
 						if uuidToString(parentID) != uuidToString(task.TriggerCommentID) {
 							writeError(w, http.StatusConflict,
@@ -1022,6 +1025,23 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 			} else {
 				writeError(w, http.StatusInternalServerError, "failed to link attachments")
 			}
+			return
+		}
+	}
+
+	if taskForVisibleAction != nil {
+		if h.TaskService == nil {
+			writeError(w, http.StatusInternalServerError, "task service unavailable")
+			return
+		}
+		if _, err := h.TaskService.RecordVisibleTaskActionTx(
+			r.Context(), qtx, tx, *taskForVisibleAction, service.DAGCloseMessage,
+			comment.ID, comment.Content, issue.ProjectID, pgtype.UUID{}, pgtype.UUID{}, pgtype.UUID{}, "",
+		); err != nil {
+			slog.Warn("record create-comment universal boundary failed", append(logger.RequestAttrs(r),
+				"error", err, "comment_id", uuidToString(comment.ID), "task_id", uuidToString(taskForVisibleAction.ID),
+			)...)
+			writeError(w, http.StatusInternalServerError, "failed to create comment")
 			return
 		}
 	}
@@ -1575,11 +1595,33 @@ func (h *Handler) DeleteComment(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("cancel tasks for deleted trigger comment failed", append(logger.RequestAttrs(r), "error", err, "comment_id", commentId)...)
 	}
 
-	if err := h.Queries.DeleteComment(r.Context(), db.DeleteCommentParams{
+	// Task 8A: the tombstone and the memory retraction fence commit in one
+	// transaction — fencing failure fails the deletion, and a deletion
+	// failure leaves no fence behind.
+	tx, err := h.beginMemoryRetractionTx(r.Context())
+	if err != nil {
+		slog.Warn("begin comment delete transaction failed", append(logger.RequestAttrs(r), "error", err, "comment_id", commentId)...)
+		writeError(w, http.StatusInternalServerError, "failed to delete comment")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	if err := h.fenceMemorySourcesTx(r.Context(), tx, comment.WorkspaceID,
+		[]service.MemorySourceRef{memorySourceRef(comment.WorkspaceID, service.MemorySourceComment, comment.ID)},
+		actorType+":"+actorID, "comment deleted"); err != nil {
+		slog.Warn("fence comment memory sources failed", append(logger.RequestAttrs(r), "error", err, "comment_id", commentId)...)
+		writeError(w, http.StatusInternalServerError, "failed to delete comment")
+		return
+	}
+	if err := db.New(tx).DeleteComment(r.Context(), db.DeleteCommentParams{
 		ID:          comment.ID,
 		WorkspaceID: comment.WorkspaceID,
 	}); err != nil {
 		slog.Warn("delete comment failed", append(logger.RequestAttrs(r), "error", err, "comment_id", commentId)...)
+		writeError(w, http.StatusInternalServerError, "failed to delete comment")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		slog.Warn("commit comment delete failed", append(logger.RequestAttrs(r), "error", err, "comment_id", commentId)...)
 		writeError(w, http.StatusInternalServerError, "failed to delete comment")
 		return
 	}

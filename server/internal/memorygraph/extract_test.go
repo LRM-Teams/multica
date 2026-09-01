@@ -423,7 +423,7 @@ func TestDescriptionExtractionIdentityGuard(t *testing.T) {
 
 	cfg := DefaultConsolidateConfig()
 	cfg.TTVTrajectories = 1
-	c := NewConsolidator(store, nil, cfg, "test", nil, nil)
+	c := NewConsolidator(store, nil, cfg, testConsolidateScope(), nil, nil)
 
 	cleared := *existing
 	em := *existing.Extraction

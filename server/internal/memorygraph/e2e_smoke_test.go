@@ -105,7 +105,10 @@ func TestGraphMemoryE2ESmoke(t *testing.T) {
 		OpBudget:        12,
 		RoundBudget:     4,
 		Timeout:         5 * time.Minute,
-	}, "pi", nil, mg.NewTraceRecorder(store.Root))
+	}, mg.ProviderScope{
+		WorkspaceID: "e2e-workspace", Purpose: mg.ProviderPurposeConsolidate,
+		Provider: "pi", Model: "e2e-model", Region: "test-region", PolicyVersion: "e2e-policy",
+	}, nil, mg.NewTraceRecorder(store.Root))
 	cres, err := consolidator.Consolidate(ctx)
 	if err != nil {
 		t.Fatalf("stage 2: consolidate: %v", err)

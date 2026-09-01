@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -20,6 +21,8 @@ import (
 type fakeOutboxRow struct {
 	id           string
 	trajectoryID string
+	kind         string
+	revision     int
 	proxyKey     string
 	reward       float64
 	status       string
@@ -54,11 +57,13 @@ func (f *fakeOutboxStore) ClaimPending(_ context.Context, limit int) ([]PendingR
 		r.status = "delivering"
 		r.updatedAt = f.now
 		out = append(out, PendingReward{
-			OutboxID:     r.id,
-			TrajectoryID: r.trajectoryID,
-			ProxyKey:     r.proxyKey,
-			Reward:       r.reward,
-			Attempts:     r.attempts,
+			OutboxID:       r.id,
+			TrajectoryID:   r.trajectoryID,
+			RewardKind:     r.kind,
+			RewardRevision: r.revision,
+			ProxyKey:       r.proxyKey,
+			Reward:         r.reward,
+			Attempts:       r.attempts,
 		})
 	}
 	return out, nil
@@ -400,4 +405,130 @@ func TestSetRewardTypedHTTPError(t *testing.T) {
 	if he.Status != http.StatusServiceUnavailable {
 		t.Fatalf("HTTPError.Status = %d, want 503", he.Status)
 	}
+}
+
+// Task 18 (spec 14.1/14.4): while the execution gate reports false, the sink
+// claims nothing and never calls set_reward — the outbox rows stay pending
+// (shadow), and delivery resumes unchanged once the gate opens.
+func TestRewardSinkExecutionGateBlocksDelivery(t *testing.T) {
+	store := &fakeOutboxStore{now: time.Now()}
+	store.rows = append(store.rows, &fakeOutboxRow{
+		id: "gate-row", trajectoryID: "traj-gate", proxyKey: "pk-gate",
+		reward: 0.7, status: "pending",
+	})
+	var gateOpen atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !gateOpen.Load() {
+			t.Errorf("set_reward must not be called while the execution gate is closed: %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+	client := New(srv.URL, "admin-key")
+
+	closed := NewRewardSink(store, client, WithRewardSinkExecutionGate(func(context.Context) (bool, error) {
+		return false, nil
+	}))
+	delivered, err := closed.DeliverOnce(context.Background(), 10)
+	if err != nil || delivered != 0 {
+		t.Fatalf("gated DeliverOnce = (%d, %v), want (0, nil)", delivered, err)
+	}
+	row := store.row("gate-row")
+	if row.status != "pending" {
+		t.Fatalf("gated row status = %q, want pending (shadow keeps rewards durable)", row.status)
+	}
+
+	gateOpen.Store(true)
+	open := NewRewardSink(store, client, WithRewardSinkExecutionGate(func(context.Context) (bool, error) {
+		return true, nil
+	}))
+	delivered, err = open.DeliverOnce(context.Background(), 10)
+	if err != nil || delivered != 1 {
+		t.Fatalf("open DeliverOnce = (%d, %v), want (1, nil)", delivered, err)
+	}
+	if row := store.row("gate-row"); row.status != "delivered" {
+		t.Fatalf("row status after open gate = %q, want delivered", row.status)
+	}
+}
+
+// Task 19 (spec §14.4): delivery identity is (trajectory, reward_kind,
+// revision). Within one claim batch the sink delivers each identity at most
+// once; a replayed duplicate of the same identity is acked without a second
+// set_reward, and a duplicate carrying a different value fails terminally
+// (the immutable ledger guarantees one value per identity — a mismatch is a
+// store-level invariant break, never silently re-delivered).
+func TestRewardSinkDeliversOncePerRevisionIdentity(t *testing.T) {
+	store := &fakeOutboxStore{now: time.Now()}
+	bridge := &setRewardBridge{status: []int{200}, key: sinkTestProxyKey}
+	srv := httptest.NewServer(http.HandlerFunc(bridge.handler))
+	defer srv.Close()
+	sink := NewRewardSink(store, New(srv.URL, testAdminKey),
+		WithRewardSinkMaxAttempts(8),
+		WithRewardSinkBackoff(func(int) time.Duration { return 0 }),
+		WithRewardSinkNow(func() time.Time { return store.now }),
+	)
+	store.rows = append(store.rows,
+		&fakeOutboxRow{
+			id: "ob1", trajectoryID: "t1", kind: "explore", revision: 1,
+			proxyKey: sinkTestProxyKey, reward: 0.5, status: "pending", nextAt: store.now,
+		},
+		&fakeOutboxRow{
+			id: "ob2", trajectoryID: "t1", kind: "explore", revision: 1,
+			proxyKey: sinkTestProxyKey, reward: 0.5, status: "pending", nextAt: store.now,
+		},
+		&fakeOutboxRow{
+			id: "ob3", trajectoryID: "t1", kind: "explore", revision: 2,
+			proxyKey: sinkTestProxyKey, reward: 0.9, status: "pending", nextAt: store.now,
+		},
+	)
+
+	if _, err := sink.DeliverOnce(context.Background(), 10); err != nil {
+		t.Fatalf("DeliverOnce: %v", err)
+	}
+	if got := bridge.calls(); got != 2 {
+		t.Fatalf("set_reward calls = %d, want 2 (identity once + its second revision)", got)
+	}
+	rewards := bridge.rewards()
+	if len(rewards) != 2 || rewards[0] != 0.5 || rewards[1] != 0.9 {
+		t.Fatalf("delivered rewards = %v, want [0.5 0.9]", rewards)
+	}
+	for _, id := range []string{"ob1", "ob2", "ob3"} {
+		if row := store.row(id); row.status != "delivered" {
+			t.Fatalf("row %s status = %q, want delivered", id, row.status)
+		}
+	}
+
+	// A duplicate identity carrying a different value must never reach the
+	// bridge; it fails terminally instead of double-delivering.
+	conflict := &fakeOutboxRow{
+		id: "ob4", trajectoryID: "t2", kind: "explore", revision: 1,
+		proxyKey: sinkTestProxyKey, reward: 0.1, status: "pending", nextAt: store.now,
+	}
+	conflictDupe := &fakeOutboxRow{
+		id: "ob5", trajectoryID: "t2", kind: "explore", revision: 1,
+		proxyKey: sinkTestProxyKey, reward: 0.7, status: "pending", nextAt: store.now,
+	}
+	store.rows = append(store.rows, conflict, conflictDupe)
+	if _, err := sink.DeliverOnce(context.Background(), 10); err != nil {
+		t.Fatalf("DeliverOnce: %v", err)
+	}
+	if got := bridge.calls(); got != 3 {
+		t.Fatalf("set_reward calls = %d, want 3 (one for t2's identity)", got)
+	}
+	if row := store.row("ob4"); row.status != "delivered" {
+		t.Fatalf("first identity row status = %q, want delivered", row.status)
+	}
+	if row := store.row("ob5"); row.status != "failed" {
+		t.Fatalf("conflicting duplicate status = %q, want failed", row.status)
+	}
+	if !strings.Contains(row_lastErr(store, "ob5"), "identity") {
+		t.Fatalf("conflict error = %q, want identity conflict marker", row_lastErr(store, "ob5"))
+	}
+}
+
+func row_lastErr(store *fakeOutboxStore, id string) string {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	return store.row(id).lastErr
 }

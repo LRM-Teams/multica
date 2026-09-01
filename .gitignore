@@ -81,3 +81,6 @@ __pycache__/
 .pytest_cache/
 mf_cli/**/*.pyc
 db_bridge/.env.multica.example
+
+# go build cache (GOCACHE used by local test runs)
+server/.cache/

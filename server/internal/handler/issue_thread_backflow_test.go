@@ -650,9 +650,7 @@ func TestIssueThreadBackflowDoesNotLeakAcrossProjectChannels(t *testing.T) {
 	channelA := seedChannelForTest(t, "backflow-leak-A-"+uuid.NewString(), testUserID)
 	channelB := seedChannelForTest(t, "backflow-leak-B-"+uuid.NewString(), testUserID)
 	for _, ch := range []string{channelA, channelB} {
-		if _, err := testPool.Exec(ctx, `UPDATE channel SET project_id = $1 WHERE id = $2`, projectID, ch); err != nil {
-			t.Fatalf("bind channel %s to project: %v", ch, err)
-		}
+		bindChannelProjectStrings(t, ctx, ch, projectID)
 	}
 
 	// Issue anchored ONLY in channelA, bound to project P.
@@ -721,9 +719,7 @@ func TestIssueThreadBackflowHTTPPathDoesNotLeakAcrossProjectChannels(t *testing.
 	channelA := seedChannelForTest(t, "backflow-leak-http-A-"+uuid.NewString(), testUserID)
 	channelB := seedChannelForTest(t, "backflow-leak-http-B-"+uuid.NewString(), testUserID)
 	for _, ch := range []string{channelA, channelB} {
-		if _, err := testPool.Exec(ctx, `UPDATE channel SET project_id = $1 WHERE id = $2`, projectID, ch); err != nil {
-			t.Fatalf("bind channel %s to project: %v", ch, err)
-		}
+		bindChannelProjectStrings(t, ctx, ch, projectID)
 	}
 
 	// Real source root message in channelA so the thread-backflow path is live.

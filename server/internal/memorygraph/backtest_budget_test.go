@@ -340,7 +340,7 @@ func TestQueryChangeCapsExpandCandidates(t *testing.T) {
 
 func vectorChangeSnapshot(t *testing.T, store *Store, version int, vecs map[string][]float32) changeSnapshot {
 	t.Helper()
-	retr := NewHybridRetriever(store, NewCachedEmbedder(vectorTestEmbeddingProvider{}, store), RetrievalConfig{TopK: 1, BM25Weight: 1})
+	retr := NewHybridRetriever(store, mustCachedEmbedder(t, vectorTestEmbeddingProvider{}, store), RetrievalConfig{TopK: 1, BM25Weight: 1})
 	if err := retr.RebuildForVersion(context.Background(), version); err != nil {
 		t.Fatalf("RebuildForVersion v%d: %v", version, err)
 	}

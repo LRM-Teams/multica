@@ -83,14 +83,7 @@ func TestVoiceCallContextBuilderUsesCanonicalIdentityAndBoundedProjectContext(t 
 	).Scan(&otherProjectID); err != nil {
 		t.Fatalf("create unrelated project: %v", err)
 	}
-	if _, err := testPool.Exec(
-		ctx,
-		`UPDATE channel SET project_id = $2 WHERE id = $1`,
-		dmChannelID,
-		projectID,
-	); err != nil {
-		t.Fatalf("bind voice call project: %v", err)
-	}
+	bindChannelProjectStrings(t, ctx, dmChannelID, projectID)
 	if _, err := testPool.Exec(ctx, `
 		UPDATE agent
 		SET description = '规格驱动的群管理',

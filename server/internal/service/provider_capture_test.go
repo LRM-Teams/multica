@@ -1,6 +1,8 @@
 package service
 
 import (
+	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -9,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/multica-ai/multica/server/internal/util"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 func TestProviderCaptureService_AcceptsTrustedBatchWithoutMutatingWSActivity(t *testing.T) {
@@ -141,4 +144,69 @@ func TestProviderCaptureService_RoutesPostFreezeGapToIdempotentLateAudit(t *test
 	var events int
 	require.NoError(t, h.tx.QueryRow(h.ctx, `SELECT count(*) FROM env_dispatch_run_audit_event WHERE run_id = $1 AND kind = 'late_event'`, run.RunID).Scan(&events))
 	assert.Equal(t, 1, events)
+}
+
+func TestProviderCaptureService_AttachesUniversalOwnedSharedAndAuditCalls(t *testing.T) {
+	ctx := context.Background()
+	h := newUniversalDAGBoundaryHarness(t, ctx)
+	defer h.Close()
+
+	runID := mustUUID(t, universalRunA)
+	runAgentID := mustUUID(t, universalRunAgentA)
+	task := db.AgentInboxEvent{ID: mustUUID(t, universalTaskA), WorkspaceID: h.workspace, ChannelID: h.channel}
+	firstActionID := util.MustParseUUID("70000000-0000-4000-8000-000000000260")
+	secondActionID := util.MustParseUUID("70000000-0000-4000-8000-000000000261")
+	for seq, actionID := range []pgtype.UUID{firstActionID, secondActionID} {
+		input := h.boundaryInput(task, universalDAGBoundaryFixture{
+			kind: DAGBoundaryVisible, closeKind: DAGCloseMessage, endSeq: int32(seq + 1),
+		})
+		input.ActionID = actionID
+		input.ActionKey = "message:" + actionID.String()
+		input.RunID, input.RunAgentID = runID, runAgentID
+		input.ProviderCaptureExpected = true
+		input.ProviderCaptureCorrelationKey = "capture-boundary-universal"
+		if _, err := h.recordBoundary(ctx, input); err != nil {
+			t.Fatalf("record pending universal action %d: %v", seq+1, err)
+		}
+	}
+
+	tx, err := h.conn.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx)
+	capture := TrustedTurnCapture{
+		WorkspaceID: h.workspace, RunID: runID, RunAgentID: runAgentID,
+		Batch: TurnCaptureBatchInput{
+			CaptureBatchID:  util.MustParseUUID("70000000-0000-4000-8000-000000000262"),
+			CaptureBoundary: "capture-boundary-universal",
+		},
+		Calls: []ProviderCallInput{{CallID: "call-a-1", CallOrdinal: 1}, {CallID: "call-a-2", CallOrdinal: 2}},
+		Actions: []VisibleActionInput{
+			{Kind: "message", CanonicalID: firstActionID, Status: "succeeded", ProducerCallID: "call-a-1", ActionOrdinal: 1},
+			{Kind: "message", CanonicalID: secondActionID, Status: "succeeded", ProducerCallID: "call-a-1", ActionOrdinal: 2},
+		},
+	}
+	require.NoError(t, attachUniversalDAGCapture(ctx, db.New(tx), tx, capture, capture.Actions))
+	require.NoError(t, tx.Commit(ctx))
+
+	rows, err := h.conn.Query(ctx, `
+SELECT segment.visible_action_key, link.provider_call_id, link.role, link.ordinal
+FROM interaction_dag_universal_provider_call AS link
+JOIN interaction_dag_segment AS segment ON segment.segment_id=link.segment_id
+WHERE segment.visible_action_key IN ($1,$2)
+ORDER BY segment.generation, link.ordinal, link.role`, "message:"+firstActionID.String(), "message:"+secondActionID.String())
+	require.NoError(t, err)
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var actionKey, callID, role string
+		var ordinal int64
+		require.NoError(t, rows.Scan(&actionKey, &callID, &role, &ordinal))
+		got = append(got, fmt.Sprintf("%s|%s|%s|%d", actionKey, callID, role, ordinal))
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, []string{
+		"message:" + firstActionID.String() + "|call-a-1|owned|1",
+		"message:" + secondActionID.String() + "|call-a-1|shared_producer|1",
+		"message:" + secondActionID.String() + "|call-a-2|audit|2",
+	}, got)
 }

@@ -433,7 +433,7 @@ func TestConsolidateInPlacePersistsTrajectoryTrace(t *testing.T) {
 	cfg := DefaultConsolidateConfig()
 	cfg.TTVTrajectories = 1
 	rec := NewTraceRecorder(store.Root)
-	c := NewConsolidator(store, backend, cfg, "test", nil, rec)
+	c := NewConsolidator(store, backend, cfg, testConsolidateScope(), nil, rec)
 
 	res, err := c.Consolidate(context.Background())
 	if err != nil {
@@ -492,8 +492,8 @@ func TestConsolidateTTTPersistsPerCandidateTraces(t *testing.T) {
 	cfg := DefaultConsolidateConfig()
 	cfg.TTVTrajectories = 2
 	rec := NewTraceRecorder(store.Root)
-	c := NewConsolidator(store, backend, cfg, "test", nil, rec)
-	c.SetRunner(runner)
+	c := NewConsolidator(store, backend, cfg, testConsolidateScope(), nil, rec)
+	c.SetRunner(mustScopedBacktestRunner(t, runner))
 
 	res, err := c.Consolidate(context.Background())
 	if err != nil {
@@ -531,7 +531,7 @@ func TestConsolidatePersistsFailedTrajectory(t *testing.T) {
 	cfg := DefaultConsolidateConfig()
 	cfg.TTVTrajectories = 1
 	rec := NewTraceRecorder(store.Root)
-	c := NewConsolidator(store, backend, cfg, "test", nil, rec)
+	c := NewConsolidator(store, backend, cfg, testConsolidateScope(), nil, rec)
 
 	if _, err := c.Consolidate(context.Background()); err == nil {
 		t.Fatal("Consolidate: expected error")

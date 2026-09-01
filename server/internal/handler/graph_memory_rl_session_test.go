@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/arealrl"
+	"github.com/multica-ai/multica/server/internal/memorygraph"
 	"github.com/multica-ai/multica/server/internal/service"
 )
 
@@ -220,6 +221,24 @@ func TestGraphMemoryRLSessionRequiresOnlineRL(t *testing.T) {
 	}
 }
 
+// mustRewardRecord seeds the immutable ledger revision an EnqueueReward
+// call validates against (Task 19): the outbox only ever delivers values
+// the ledger already recorded as available.
+func mustRewardRecord(t *testing.T, trajectoryID string, revision int, value float64) {
+	t.Helper()
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO graph_memory_reward_record
+		  (workspace_id, trajectory_id, reward_kind, revision, status, value,
+		   components, policy_version, input_manifest_hash)
+		SELECT workspace_id, id, 'explore', $2, 'available', $3, '{}',
+		       $4, $5
+		FROM graph_memory_trajectory WHERE id = $1
+	`, trajectoryID, revision, value,
+		memorygraph.ExploreRewardPolicyVersion, "handler-test-manifest-"+uuid.NewString()); err != nil {
+		t.Fatalf("seed reward record: %v", err)
+	}
+}
+
 func outboxRow(t *testing.T, trajectoryID string) (status string, reward float64, attempts int, lastErr string) {
 	t.Helper()
 	err := testPool.QueryRow(context.Background(), `
@@ -260,23 +279,26 @@ func TestGraphMemoryRewardOutboxEnqueueIdempotent(t *testing.T) {
 	svc := service.NewGraphMemoryRLSessionService(testPool, &fakeRLStarter{}, &fakeRLRemover{})
 	ctx := context.Background()
 	mustOpenRLSession(t, svc, traj0)
+	mustRewardRecord(t, traj0, 1, 0.4)
 
-	if err := svc.EnqueueReward(ctx, traj0, 0.4); err != nil {
+	if err := svc.EnqueueReward(ctx, traj0, "explore", 1, 0.4); err != nil {
 		t.Fatalf("EnqueueReward: %v", err)
 	}
-	if err := svc.EnqueueReward(ctx, traj0, 0.9); err != nil {
-		t.Fatalf("EnqueueReward (duplicate): %v", err)
+	// Replaying the same delivery identity (kind + revision + value) is a
+	// no-op: the outbox holds exactly one row per identity (Task 19).
+	if err := svc.EnqueueReward(ctx, traj0, "explore", 1, 0.4); err != nil {
+		t.Fatalf("EnqueueReward (replay): %v", err)
 	}
 	if n := outboxRowCount(t, traj0); n != 1 {
 		t.Fatalf("outbox rows = %d, want exactly 1", n)
 	}
 	status, reward, _, _ := outboxRow(t, traj0)
 	if status != "pending" || reward != 0.4 {
-		t.Fatalf("row = (%q, %v), want (pending, 0.4) — first write wins", status, reward)
+		t.Fatalf("row = (%q, %v), want (pending, 0.4)", status, reward)
 	}
 
 	// A trajectory without an online session (never opened) rejects enqueue.
-	if err := svc.EnqueueReward(ctx, traj1, 0.1); err == nil {
+	if err := svc.EnqueueReward(ctx, traj1, "explore", 1, 0.1); err == nil {
 		t.Fatal("expected error enqueueing a reward without an online session")
 	}
 }
@@ -290,7 +312,8 @@ func TestGraphMemoryRewardOutboxDeliverClearsKey(t *testing.T) {
 	svc := service.NewGraphMemoryRLSessionService(testPool, &fakeRLStarter{}, &fakeRLRemover{})
 	ctx := context.Background()
 	mustOpenRLSession(t, svc, trajID)
-	if err := svc.EnqueueReward(ctx, trajID, -0.3); err != nil {
+	mustRewardRecord(t, trajID, 1, -0.3)
+	if err := svc.EnqueueReward(ctx, trajID, "explore", 1, -0.3); err != nil {
 		t.Fatalf("EnqueueReward: %v", err)
 	}
 
@@ -344,7 +367,8 @@ func TestGraphMemoryRewardOutboxClaimFencing(t *testing.T) {
 	svc := service.NewGraphMemoryRLSessionService(testPool, &fakeRLStarter{}, &fakeRLRemover{})
 	ctx := context.Background()
 	mustOpenRLSession(t, svc, trajID)
-	if err := svc.EnqueueReward(ctx, trajID, 0.7); err != nil {
+	mustRewardRecord(t, trajID, 1, 0.7)
+	if err := svc.EnqueueReward(ctx, trajID, "explore", 1, 0.7); err != nil {
 		t.Fatalf("EnqueueReward: %v", err)
 	}
 
@@ -409,7 +433,8 @@ func TestGraphMemoryRLSessionReapStale(t *testing.T) {
 		t.Fatal(err)
 	}
 	// traj1: rewarded session (key already cleared by the durable ack).
-	if err := svc.EnqueueReward(ctx, traj1, 0.1); err != nil {
+	mustRewardRecord(t, traj1, 1, 0.1)
+	if err := svc.EnqueueReward(ctx, traj1, "explore", 1, 0.1); err != nil {
 		t.Fatal(err)
 	}
 	claims, err := svc.ClaimPending(ctx, 10)

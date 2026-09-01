@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/multica-ai/multica/server/internal/memorygraph"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // Slice 3.2 (unification spec §4.4): the Agent gateway serves BOTH the
@@ -24,16 +24,10 @@ import (
 
 func gatewayResearchTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
-		t.Skip("integration test requires Postgres at DATABASE_URL")
-	}
-	pool, err := pgxpool.New(context.Background(), dbURL)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	t.Cleanup(pool.Close)
-	return pool
+	// The gateway start path resolves the live-guard publication index
+	// (universal DAG live version), so these fixtures need the fully
+	// migrated faithful schema, not the shared dev database.
+	return bootstrapUniversalDAGProjectionSchema(t)
 }
 
 type gatewayResearchFixture struct {
@@ -54,9 +48,12 @@ func seedGatewayResearchWorkspace(t *testing.T) *gatewayResearchFixture {
 	ctx := context.Background()
 
 	var workspaceID string
+	// Embed is intentionally disabled: the gateway's embed channel then
+	// degrades to BM25 instead of requiring a configured provider.
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO workspace (name, slug, description, issue_prefix)
-		VALUES ('Gateway Research Test', 'gw-research-'||$1, '', 'GWR')
+		INSERT INTO workspace (name, slug, description, issue_prefix, settings)
+		VALUES ('Gateway Research Test', 'gw-research-'||$1, '', 'GWR',
+			'{"memory_provider_policy":{"version":"test","purposes":{"embed":{"enabled":false}}}}')
 		RETURNING id::text`, uuid.NewString()[:8]).Scan(&workspaceID); err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +133,8 @@ func seedGatewayResearchWorkspace(t *testing.T) *gatewayResearchFixture {
 	}
 
 	return &gatewayResearchFixture{
-		pool: pool, gateway: NewGraphMemoryAgentGateway(pool),
+		pool: pool, gateway: NewGraphMemoryAgentGateway(pool,
+			NewMemoryProviderPolicyResolver(db.New(pool), testProviderPolicyConfig(nil))),
 		workspaceID: workspaceID, channelID: channelID, agentID: agentID, root: root,
 	}
 }

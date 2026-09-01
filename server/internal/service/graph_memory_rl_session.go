@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -13,12 +14,108 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/multica-ai/multica/server/internal/arealrl"
+	"github.com/multica-ai/multica/server/internal/memorygraph"
 	"github.com/multica-ai/multica/server/internal/util"
 )
 
 // rewardDeliveryStaleWindow is how long an in-flight outbox delivery may sit
 // before a crashed worker's claim is reclaimable (spec §7, A25).
 const rewardDeliveryStaleWindow = 2 * time.Minute
+
+// ErrRewardRevisionConflict: a replay of the same reward identity (trajectory,
+// kind) under the same judged input manifest carried a different status or
+// value. The immutable record is never overwritten (spec 14.4, A48).
+var ErrRewardRevisionConflict = errors.New("graph memory reward: revision conflict: same identity judged with a different value")
+
+// TrajectoryRewardRecord is one immutable reward revision (Task 19, spec
+// 14.4) as produced by the dive judge path. Value is non-nil only for
+// Status "available"; Components carries the raw judged dimensions so the
+// ledger never needs re-derivation.
+type TrajectoryRewardRecord struct {
+	WorkspaceID       pgtype.UUID
+	TrajectoryID      pgtype.UUID
+	RewardKind        string
+	Status            string // available|unavailable|rejected
+	Value             *float64
+	Components        memorygraph.RewardComponents
+	PolicyVersion     string
+	InputManifestHash string
+}
+
+// RecordTrajectoryRewardTx appends one immutable reward revision on the
+// caller's transaction and returns the revision written (or found). The
+// trajectory row is locked first so per-trajectory writers serialize. A
+// record with the same identity and input manifest hash must replay the
+// same status and value — a differing replay is ErrRewardRevisionConflict
+// and writes nothing; a different input manifest appends the next revision
+// (re-evaluation, spec 14.4: revisions never overwrite consumed history).
+func RecordTrajectoryRewardTx(ctx context.Context, tx pgx.Tx, rec TrajectoryRewardRecord) (int, error) {
+	if rec.RewardKind == "" {
+		return 0, fmt.Errorf("graph memory reward: reward kind required")
+	}
+	available := rec.Status == "available"
+	if available != (rec.Value != nil) {
+		return 0, fmt.Errorf("graph memory reward: status %q requires a %s value", rec.Status, map[bool]string{true: "numeric", false: "nil"}[available])
+	}
+	components, err := json.Marshal(rec.Components)
+	if err != nil {
+		return 0, fmt.Errorf("graph memory reward: components: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		SELECT 1 FROM graph_memory_trajectory WHERE id = $1 FOR UPDATE
+	`, rec.TrajectoryID); err != nil {
+		return 0, fmt.Errorf("graph memory reward: lock trajectory: %w", err)
+	}
+	var (
+		existingRevision int
+		existingStatus   string
+		existingValue    *float64
+		existingHash     string
+	)
+	err = tx.QueryRow(ctx, `
+		SELECT revision, status, value, input_manifest_hash
+		FROM graph_memory_reward_record
+		WHERE trajectory_id = $1 AND reward_kind = $2
+		ORDER BY revision DESC
+		LIMIT 1
+	`, rec.TrajectoryID, rec.RewardKind).Scan(&existingRevision, &existingStatus, &existingValue, &existingHash)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO graph_memory_reward_record
+			  (workspace_id, trajectory_id, reward_kind, revision, status, value, components, policy_version, input_manifest_hash)
+			VALUES ($1, $2, $3, 1, $4, $5, $6, $7, $8)
+		`, rec.WorkspaceID, rec.TrajectoryID, rec.RewardKind, rec.Status, rec.Value, components, rec.PolicyVersion, rec.InputManifestHash); err != nil {
+			return 0, fmt.Errorf("graph memory reward: insert revision 1: %w", err)
+		}
+		return 1, nil
+	case err != nil:
+		return 0, fmt.Errorf("graph memory reward: load latest revision: %w", err)
+	}
+	if existingHash == rec.InputManifestHash {
+		if existingStatus != rec.Status || !sameRewardValue(existingValue, rec.Value) {
+			return existingRevision, fmt.Errorf("%w: trajectory %s kind %s revision %d", ErrRewardRevisionConflict, util.UUIDToString(rec.TrajectoryID), rec.RewardKind, existingRevision)
+		}
+		return existingRevision, nil // idempotent replay of the same judgement
+	}
+	revision := existingRevision + 1
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO graph_memory_reward_record
+		  (workspace_id, trajectory_id, reward_kind, revision, status, value, components, policy_version, input_manifest_hash)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	`, rec.WorkspaceID, rec.TrajectoryID, rec.RewardKind, revision, rec.Status, rec.Value, components, rec.PolicyVersion, rec.InputManifestHash); err != nil {
+		return 0, fmt.Errorf("graph memory reward: insert revision %d: %w", revision, err)
+	}
+	return revision, nil
+}
+
+// sameRewardValue compares two optional reward values for replay equality.
+func sameRewardValue(a, b *float64) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
 
 // RLSessionOpener mirrors arealrl.Client.StartSession (tests substitute
 // fakes).
@@ -186,31 +283,46 @@ func (s *GraphMemoryRLSessionService) beginOpen(ctx context.Context, traj pgtype
 	return gen + 1, reusableOpen{}, nil
 }
 
-// EnqueueReward records the trajectory's terminal reward in the outbox. The
-// first write wins: replays (crash, duplicate grading) never overwrite the
-// durable reward value, so re-delivery is always the same number (A25).
-func (s *GraphMemoryRLSessionService) EnqueueReward(ctx context.Context, trajectoryID string, reward float64) error {
+// EnqueueReward records one reward revision in the delivery outbox, keyed by
+// the delivery identity (trajectory, reward_kind, revision) — replays insert
+// nothing (Task 19, spec 14.4). The immutable record for the identity must
+// exist with status 'available' and carry exactly the given value: an
+// unavailable or unknown reward never enters the outbox (A46: judge failure
+// delivers no numeric 0).
+func (s *GraphMemoryRLSessionService) EnqueueReward(ctx context.Context, trajectoryID, rewardKind string, revision int, reward float64) error {
 	traj, err := parseUUIDColumn("trajectory", trajectoryID)
 	if err != nil {
 		return err
 	}
-	var hasSession bool
+	var (
+		hasSession bool
+		valueMatch bool
+	)
 	if err := s.pool.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM graph_memory_rl_session
-			WHERE trajectory_id = $1 AND status IN ('open', 'rewarded') AND session_id <> ''
-		)
-	`, traj).Scan(&hasSession); err != nil {
-		return fmt.Errorf("graph memory reward outbox: load session: %w", err)
+		SELECT
+		  EXISTS (
+		    SELECT 1 FROM graph_memory_rl_session
+		    WHERE trajectory_id = $1 AND status IN ('open', 'rewarded') AND session_id <> ''
+		  ),
+		  EXISTS (
+		    SELECT 1 FROM graph_memory_reward_record r
+		    WHERE r.trajectory_id = $1 AND r.reward_kind = $2 AND r.revision = $3
+		      AND r.status = 'available' AND r.value = $4
+		  )
+	`, traj, rewardKind, revision, reward).Scan(&hasSession, &valueMatch); err != nil {
+		return fmt.Errorf("graph memory reward outbox: load session/record: %w", err)
 	}
 	if !hasSession {
 		return fmt.Errorf("graph memory reward outbox: trajectory %s has no open online session", trajectoryID)
 	}
+	if !valueMatch {
+		return fmt.Errorf("graph memory reward outbox: trajectory %s has no available %s reward revision %d matching %v", trajectoryID, rewardKind, revision, reward)
+	}
 	if _, err := s.pool.Exec(ctx, `
-		INSERT INTO graph_memory_reward_outbox (workspace_id, trajectory_id, reward)
-		SELECT t.workspace_id, t.id, $2 FROM graph_memory_trajectory t WHERE t.id = $1
-		ON CONFLICT (trajectory_id) DO NOTHING
-	`, traj, reward); err != nil {
+		INSERT INTO graph_memory_reward_outbox (workspace_id, trajectory_id, reward_kind, reward_revision, reward)
+		SELECT t.workspace_id, t.id, $2, $3, $4 FROM graph_memory_trajectory t WHERE t.id = $1
+		ON CONFLICT (trajectory_id, reward_kind, reward_revision) DO NOTHING
+	`, traj, rewardKind, revision, reward); err != nil {
 		return fmt.Errorf("graph memory reward outbox: enqueue: %w", err)
 	}
 	return nil
@@ -230,7 +342,7 @@ func (s *GraphMemoryRLSessionService) ClaimPending(ctx context.Context, limit in
 	defer tx.Rollback(ctx)
 
 	rows, err := tx.Query(ctx, `
-		SELECT o.id, o.trajectory_id, o.reward, o.attempts, s.proxy_key
+		SELECT o.id, o.trajectory_id, o.reward_kind, o.reward_revision, o.reward, o.attempts, s.proxy_key
 		FROM graph_memory_reward_outbox o
 		JOIN graph_memory_rl_session s ON s.trajectory_id = o.trajectory_id
 		WHERE (o.status = 'pending' AND o.next_attempt_at <= now())
@@ -253,7 +365,7 @@ func (s *GraphMemoryRLSessionService) ClaimPending(ctx context.Context, limit in
 			claim    arealrl.PendingReward
 			proxyKey string
 		)
-		if err := rows.Scan(&id, &traj, &claim.Reward, &claim.Attempts, &proxyKey); err != nil {
+		if err := rows.Scan(&id, &traj, &claim.RewardKind, &claim.RewardRevision, &claim.Reward, &claim.Attempts, &proxyKey); err != nil {
 			return nil, fmt.Errorf("graph memory reward outbox: scan claimable: %w", err)
 		}
 		claim.OutboxID = util.UUIDToString(id)
@@ -301,12 +413,16 @@ func (s *GraphMemoryRLSessionService) MarkDelivered(ctx context.Context, outboxI
 		return fmt.Errorf("graph memory reward outbox: outbox row %s is not delivering", outboxID)
 	}
 	if _, err := tx.Exec(ctx, `
-		UPDATE graph_memory_rl_session
-		SET status = CASE WHEN status = 'open' THEN 'rewarded' ELSE status END,
+		UPDATE graph_memory_rl_session s
+		SET status = CASE WHEN s.status = 'open' THEN 'rewarded' ELSE s.status END,
 		    proxy_key = '',
 		    key_cleared_at = COALESCE(key_cleared_at, now()),
 		    updated_at = now()
-		WHERE trajectory_id = (SELECT trajectory_id FROM graph_memory_reward_outbox WHERE id = $1::uuid)
+		WHERE s.trajectory_id = (SELECT trajectory_id FROM graph_memory_reward_outbox WHERE id = $1::uuid)
+		  AND NOT EXISTS (
+		    SELECT 1 FROM graph_memory_reward_outbox o
+		    WHERE o.trajectory_id = s.trajectory_id AND o.status IN ('pending', 'delivering')
+		  )
 	`, outboxID); err != nil {
 		return fmt.Errorf("graph memory reward outbox: clear session key: %w", err)
 	}

@@ -8,10 +8,14 @@
 
 **Tech Stack:** Go 1.26、PostgreSQL 17、sqlc、Chi、现有 memorygraph file store、Pi/AReaL、TypeScript strict、TanStack Query、Vitest、pnpm/Turborepo。
 
+**修订记录：**
+- 2026-08-31（维护者批准）：合并 lrm/dev 后上游已占用迁移号 455–463（并存在两个上游 454）。已实现的 `454_universal_interaction_dag` 与 `464_universal_dag_edge_only_linkage` 保留原号；本计划全部未实施 migration 按原顺延规则整体 +10，由 455–463 改为 465–473（455→465 … 463→473）。spec 未引用迁移号，无需修订。后续实施时若上游再占号，按同一规则再次顺延并更新本文。
+- 2026-09-01（维护者批准 D1 方案 a，规范适配）：合并带入两条上游过渡 seam 写 legacy-shaped segment（`192a16110` memory-agent run、`23db5dfae` LRM-1079 channel conversation），在 canonical 454 下 fail-closed（3 个 service 测试红）。维护者批准 canonical adapter 方案：新增 **Task 3B**（见下），不新增 migration、不改 spec 验收标准；其测试断言按 canonical 语义重写。Task 3B 完成前暂缓 Task 4，以避免与 projection 设计冲突。
+
 ## Global Constraints
 
 - Spec：`docs/superpowers/specs/2026-08-27-universal-interaction-dag-graph-memory-pipeline-spec.zh-CN.md`，Acceptance Criteria 1–68 是本计划唯一产品验收标准。
-- 当前 checkout 最新 migration 是 453；本计划新 migration 使用 454–463，执行前若上游占号必须整体顺延并更新本文。
+- 当前 checkout 最新 migration 是 464；本计划未实施 migration 使用 465–473（2026-08-31 由 455–463 整体顺延，见修订记录），执行前若上游占号必须再次整体顺延并更新本文；已实现的 454/464 保留原号。
 - `interaction_dag_segment/edge` 演进为唯一 live DAG SoT；`interaction_dag_run_segment/causal_edge` 只保留 frozen Mixed-RL projection，不建立长期 dual writer。
 - Canonical Segment range 只使用 `task_messages.seq`；Channel/provider/stream event 不直接推进 cursor。
 - Legacy→Graph 不自动回填；Graph eligibility 使用 `memory_type_at_event`。
@@ -320,11 +324,44 @@ Cover Agent Inbox, issue comment, channel/resident directed message, standalone 
 cd server && go test ./internal/handler ./internal/service -run 'TestUniversalDAG|Test.*TaskMessage' -count=1
 ```
 
+### Task 3B: Canonical adapter for the two post-merge upstream staging seams
+
+（2026-09-01 追加，维护者批准 D1 方案 a「规范适配」。合并带入的两条上游过渡 seam——`192a16110` 的 memory-agent run 记录与 `23db5dfae` 的 LRM-1079 channel conversation 记录——以 legacy-shaped `interaction_dag_segment` 为表征，在 canonical 454 schema 下结构性 fail-closed（`ck_segment_source_valid` 禁止 `memory_agent_run`；`task_owner` CTE 要求真实 Task；channel-scope 伪 project key 无 FK 匹配）。Task 3B 将两者改写为 canonical 表征并恢复其 staging feed，不新增 migration，不改 spec。）
+
+**Files:**
+- Modify: `server/internal/service/graph_memory_agent_run_segment.go`
+- Modify: `server/internal/service/interaction_dag_seams.go`
+- Modify: `server/internal/service/graph_memory_agent_run_segment_test.go`
+- Modify: `server/internal/service/interaction_dag_gating_test.go`
+
+**Steps:**
+
+- [ ] **Step 1: RED — canonical 断言重写**
+
+两个 memory-agent-run 测试与 channel conversation 测试的 legacy 断言（`project_id="channel:<id>"`、`trajectory_source="memory_agent_run"`、segment body 携带 NIMBUS）改为 canonical 断言：segment 存在且 `trajectory_source="task_messages"`、range `[1,1]`、`content_status="pending"`；memory-agent run 侧新增 synthetic Task（`agent_inbox_event`，id=runID，`terminal_outcome="completed"`）与 seq-1 `task_message`（evidence 内容）断言；NIMBUS 证据改由 task_message 与 staging 摘要文件承载。channel conversation 侧断言 seam 零 legacy 写入、仅按 canonical segment id 触发 `SegmentIngestHook`。
+
+- [ ] **Step 2: memory-agent run canonical adapter**
+
+`RecordSubmittedRun` 不再调用 legacy writer（删除 `RecordMemoryAgentRunSegment` 及其 clamp/scope 助手）。新增 `recordCanonicalRunSegment`：单事务内 materialize synthetic Task（`agent_inbox_event`，id=runID，reason=`channel_message`，status=`acked`，`terminal_outcome=completed`，agent=channel 托管 Memory Agent，context 标记 run 溯源；幂等 `ON CONFLICT (id) DO NOTHING`）→ 写入 seq-1 `task_message`（用户 evidence，`user_facing`）→ `UniversalInteractionDAG.RecordBoundaryTx` inbound（打开 [1,1]）→ terminal close（`DAGCloseTerminal`，close 后返回 canonical segment id）。触发器校验链（task/channel ownership、range 精确覆盖、`ck_segment_source_valid`）全部满足；`agent_run_id=runID` 使 `GetInteractionDAGSegmentByAgentRun` 与既有 dedup `SegmentIDForAgentRun` 天然兼容。staging feed 保持 direct-export `IngestChannelRun`，仅将 `SegmentExport.SegmentID` 换为 canonical segment id。
+
+- [ ] **Step 3: channel conversation feed-only adapter**
+
+`maybeRecordChannelConversationSegment` 改为写零路径：canonical segment 已由 Task 3 的 in-transaction terminal close 写入，该 seam 仅负责 staging feed——按 `SegmentIDForAgentRun` 解析 canonical segment id，经 seam message store 读取 `task_messages` 并序列化 allowlisted trajectory（同 `RecordLocalSegmentForEvent` 投影；legacy segment body 永不外露），以 canonical segment id 触发 `fireSegmentIngest`（task 路由自动解析 channel）。进程内按 segment id 去重（staging 不可变写入为跨重启 backstop）；无 canonical segment 时 no-op。project-scoped env-dispatch 路径（Task 4 范围）不动。
+
+- [ ] **Step 4: GREEN 与验证**
+
+```bash
+cd server && go test ./internal/service -run 'TestGraphMemoryRunSegment|TestInteractionDAG_ChannelConversation' -count=1
+cd server && go test ./internal/service -count=1
+```
+
+criteria：上述全部通过；full service suite 仅余 3 个 §7 预存豁免；`go vet`/`gofmt`/`git diff --check` 干净；不触碰 public schema。
+
 ### Task 4: Deterministic Mixed-RL frozen projection
 
 **Files:**
-- Create: `server/migrations/455_universal_dag_projection.up.sql`
-- Create: `server/migrations/455_universal_dag_projection.down.sql`
+- Create: `server/migrations/465_universal_dag_projection.up.sql`
+- Create: `server/migrations/465_universal_dag_projection.down.sql`
 - Modify: `server/pkg/db/queries/interaction_dag.sql`
 - Create: `server/internal/service/interaction_dag_frozen_projector.go`
 - Modify: `server/internal/service/provider_call_ledger.go`
@@ -343,7 +380,7 @@ Test message/reaction/terminal kind, canonical action ID, finalized provider-cal
 
 - [ ] **Step 2: Add mapping migration and sqlc queries**
 
-Migration 455 adds canonical Universal Segment/Edge IDs to frozen projection and unique mapping constraints. Backfill old frozen rows by existing segment ID; mark unmappable rows for explicit audit rather than guessing.
+Migration 465 adds canonical Universal Segment/Edge IDs to frozen projection and unique mapping constraints. Backfill old frozen rows by existing segment ID; mark unmappable rows for explicit audit rather than guessing.
 
 - [ ] **Step 3: Implement projector**
 
@@ -480,8 +517,8 @@ cd server && go test ./internal/service -run 'TestSanitizeTrajectory|TestInterac
 ### Task 7: Stable Memory Atom extraction
 
 **Files:**
-- Create: `server/migrations/456_graph_memory_atom_projection.up.sql`
-- Create: `server/migrations/456_graph_memory_atom_projection.down.sql`
+- Create: `server/migrations/466_graph_memory_atom_projection.up.sql`
+- Create: `server/migrations/466_graph_memory_atom_projection.down.sql`
 - Modify: `server/pkg/db/queries/graph_memory.sql`
 - Create: `server/internal/memorygraph/atom.go`
 - Create: `server/internal/memorygraph/atom_test.go`
@@ -512,7 +549,7 @@ type Atom struct {
 ```
 
 - [ ] **Step 1: Write RED tests** for multiple facts, zero Atom, stable normalized hash, scope inheritance, invalid seq refs, trusted read-only vs mutation/unknown tool, fallback Atom and max budgets.
-- [ ] **Step 2: Implement migration 456** with Atom tables plus `graph_memory_projection_outbox(segment_id,request_hash,route_generation,status,attempts,next_attempt_at,lease_owner,lease_expires_at)` and idempotency constraints.
+- [ ] **Step 2: Implement migration 466** with Atom tables plus `graph_memory_projection_outbox(segment_id,request_hash,route_generation,status,attempts,next_attempt_at,lease_owner,lease_expires_at)` and idempotency constraints.
 - [ ] **Step 3: Implement strict Atomizer JSON contract**; LLM proposes body/kind/seq refs, Server stamps identity/scope/trust and obtains provider/model/region only through Task 4A resolver.
 - [ ] **Step 4: Add one publish transaction** writing sanitized Segment payload + Atoms + Workspace `publish_seq` + durable Graph projection request atomically. If any write fails, none become readable. Task 8 may only claim this request; it may not infer work by scanning files/Atoms.
 - [ ] **Step 5: Validate**
@@ -549,8 +586,8 @@ cd server && go test ./internal/service -run 'TestGraphMemoryProjection|TestGrap
 ### Task 8A: Synchronous retraction fence、reverse provenance 与 default-off read gate
 
 **Files:**
-- Create: `server/migrations/457_memory_retraction_gate.up.sql`
-- Create: `server/migrations/457_memory_retraction_gate.down.sql`
+- Create: `server/migrations/467_memory_retraction_gate.up.sql`
+- Create: `server/migrations/467_memory_retraction_gate.down.sql`
 - Modify: `server/pkg/db/queries/interaction_dag.sql`
 - Modify: `server/pkg/db/queries/graph_memory.sql`
 - Create: `server/internal/service/memory_retraction.go`
@@ -586,7 +623,7 @@ func (g *MemoryReadGate) AuthorizeResolve(ctx context.Context, workspaceID pgtyp
 ```
 
 - [ ] **Step 1: Write RED deletion/property tests** spanning comment/task output, channel cascade, chat session, attachment, issue/project/workspace and env-dispatch cleanup. For each entry point assert business tombstone/delete, retraction registry and all known dependency-node quarantine commit together or all roll back.
-- [ ] **Step 2: Implement migration 457** with one `memory_source_guard` row per canonical source, `retraction_registry`, pre-maintained reverse provenance, `quarantined_pending_recompute`, deletion audit and phase gates. Backfill guards before enabling mutation; future Segment/Atom publish upserts guards. All Atom/v2 Search/Explore/citation routes are DB-default `disabled`; only shadow comparison jobs can run before an approved gate transition.
+- [ ] **Step 2: Implement migration 467** with one `memory_source_guard` row per canonical source, `retraction_registry`, pre-maintained reverse provenance, `quarantined_pending_recompute`, deletion audit and phase gates. Backfill guards before enabling mutation; future Segment/Atom publish upserts guards. All Atom/v2 Search/Explore/citation routes are DB-default `disabled`; only shadow comparison jobs can run before an approved gate transition.
 - [ ] **Step 3: Replace direct cascade assumptions with canonical source-delete service calls**. In deterministic sorted source-key order, deletion locks guard rows `FOR UPDATE`, writes fences and quarantines the complete currently published reverse-provenance closure before business deletion. `DeleteChannel`, `DeleteChatSession`, `DeleteAttachment`, `DeleteComment`, task cleanup and parent cascade handlers call this in their existing transaction. Workspace bulk delete uses the same set-based procedure. No HTTP success is returned if fencing/quarantine fails.
 - [ ] **Step 4: Fence every reader explicitly**: DB/file/blob/archive/citation/Search/Explore, old Graph version, Graph Memory offline export and Mixed-RL `OfflineTrajectoryService` all call the same registry before resolving body. Frozen NDJSON maps run/provider rows back to Universal Segment/source refs; retracted input returns `content_retracted`, never stored provider payload. Future training selection uses the same check. A helper alone is insufficient unless each resolver test proves invocation.
 - [ ] **Step 5: Add fail-closed read gates** requiring retraction-path E2E plus cross-channel/sanitizer canaries. Tasks 9–16 may build and shadow their internals, but external/API/Agent/Consolidation/migration behavior stays unreachable until the required gate row is green.
@@ -641,8 +678,8 @@ cd server && go test ./internal/memorygraph -run 'TestHybridRetriever|TestAtomIn
 ### Task 10: Structured `MemoryRef` 与 Explore plan ledger
 
 **Files:**
-- Create: `server/migrations/458_memory_explore_v2.up.sql`
-- Create: `server/migrations/458_memory_explore_v2.down.sql`
+- Create: `server/migrations/468_memory_explore_v2.up.sql`
+- Create: `server/migrations/468_memory_explore_v2.down.sql`
 - Create: `server/internal/memorygraph/reference.go`
 - Create: `server/internal/memorygraph/reference_test.go`
 - Create: `server/internal/service/memory_explore_plan.go`
@@ -672,7 +709,7 @@ type MemoryExplorePlan struct {
 
 - [ ] **Step 1: Write RED tests** with IDs containing colons/slashes/unicode, forged graph identity, invalid field combinations, replayed start, rollover and disabled `memory_explore_v2` gate returning unavailable without persisting a plan.
 - [ ] **Step 2: Implement strict validation/resolvers**; authorization comes from plan, never ref fields, and every resolve rechecks Task 8A retraction registry.
-- [ ] **Step 3: Persist plan/watermarks/budgets** in migration 458; pin all graphs before returning seeds.
+- [ ] **Step 3: Persist plan/watermarks/budgets** in migration 468; pin all graphs before returning seeds.
 - [ ] **Step 4: Validate**
 
 ```bash
@@ -763,8 +800,8 @@ pnpm --filter @multica/core exec vitest run api/graph-memory-schemas.test.ts
 ### Task 14: Atom coverage ledger 与原子 winner publish
 
 **Files:**
-- Create: `server/migrations/459_graph_memory_publication_coverage.up.sql`
-- Create: `server/migrations/459_graph_memory_publication_coverage.down.sql`
+- Create: `server/migrations/469_graph_memory_publication_coverage.up.sql`
+- Create: `server/migrations/469_graph_memory_publication_coverage.down.sql`
 - Modify: `server/internal/memorygraph/consolidate.go`
 - Modify: `server/internal/memorygraph/consolidate_test.go`
 - Modify: `server/internal/memorygraph/backtest.go`
@@ -785,7 +822,7 @@ pnpm --filter @multica/core exec vitest run api/graph-memory-schemas.test.ts
 - Produces: one DB-authoritative publication transaction containing Graph generation pointer, immutable file manifest hash, node→Atom provenance, coverage ledger, active index generation and outcome. File-store `current` is only a recoverable cache/projection and never reader authority.
 
 - [ ] **Step 1: Write RED tests** for partial Segment coverage, loser/no-switch/failure non-consumption, disabled gate, immutable candidate preparation, crash before file fsync, after file prepare/before DB commit, after DB commit/before cache pointer, replay, concurrent multi-process readers, and source deletion exactly between file prepare and publication commit. Assert either publication aborts or subsequent deletion atomically quarantines the newly published node; deleted body is never visible.
-- [ ] **Step 2: Implement migration 459** with DB-authoritative `graph_memory_publication` current-generation CAS plus coverage/provenance/index/outcome tables.
+- [ ] **Step 2: Implement migration 469** with DB-authoritative `graph_memory_publication` current-generation CAS plus coverage/provenance/index/outcome tables.
 - [ ] **Step 3: Change Consolidator input** from all staging files to active Atom manifest; prompt requires explicit `atom_refs`; even non-TTT flow always writes a new immutable candidate version rather than mutating current files in place.
 - [ ] **Step 4: Implement publication coordinator**: write/fsync complete immutable version/index first. In deterministic source-key order, the PostgreSQL publication transaction locks every Atom/source/evidence `memory_source_guard` `FOR KEY SHARE`, rechecks current ACL/scope/retraction and candidate manifest, inserts complete reverse provenance, then CAS-publishes generation + file manifest hash + all ledgers. Deletion takes `FOR UPDATE` on the same keys/order: delete-first makes publication abort; publish-first makes deletion wait and then quarantine the new closure. Search the repository for every `CurrentVersion`, `LoadCurrent`, file `current` pointer and Graph resolver; migrate each production reader and pin it in a test. File-store `current` updates only after commit and is rebuildable.
 - [ ] **Step 5: Change triggers** to new active Atom/query/age counts; no historical staging replay. Scheduler cannot claim when `atom_consolidation` gate is disabled.
@@ -832,8 +869,8 @@ cd server && go test ./internal/service ./internal/memorygraph ./internal/handle
 ### Task 16: Online channel-owned Graph migration
 
 **Files:**
-- Create: `server/migrations/460_graph_memory_channel_migration.up.sql`
-- Create: `server/migrations/460_graph_memory_channel_migration.down.sql`
+- Create: `server/migrations/470_graph_memory_channel_migration.up.sql`
+- Create: `server/migrations/470_graph_memory_channel_migration.down.sql`
 - Modify: `server/pkg/db/queries/graph_memory.sql`
 - Create: `server/internal/service/graph_memory_channel_migration.go`
 - Create: `server/internal/service/graph_memory_channel_migration_test.go`
@@ -852,7 +889,7 @@ cd server && go test ./internal/service ./internal/memorygraph ./internal/handle
 - Produces: migration generation, single write owner, source watermark, redirect ledger and safe dual-read plan.
 
 - [ ] **Step 1: Write RED tests** for settings A→B rebind, agent-goal bootstrap bind, unbind, standalone→Project, concurrent CAS rebind, direct SQL writer rejection, disabled migration gate, new writes during copy, worker crash/replay, no old Project/other channel copy, daily nodes, cross-scope edge drop, query/backtest non-copy, old citation redirect and deletion through both old/new refs.
-- [ ] **Step 2: Implement migration 460** with state/redirect/ref tables, CAS generation and a DB trigger/constraint that rejects `channel.project_id` changes unless the same transaction has inserted/updated the matching binding generation + migration state row. This protects against accidental future direct writers.
+- [ ] **Step 2: Implement migration 470** with state/redirect/ref tables, CAS generation and a DB trigger/constraint that rejects `channel.project_id` changes unless the same transaction has inserted/updated the matching binding generation + migration state row. This protects against accidental future direct writers.
 - [ ] **Step 3: Move every production binding writer into `ChannelProjectBindingService`**. `SetChannelProject` and `agent_goal_bootstrap.go` both call it. In one PostgreSQL transaction lock channel row, verify expected old binding, capture source watermark, CAS route generation, create migration generation, switch single write owner and update `channel.project_id`; rollback all on conflict. Repo-wide search `project_id` channel UPDATEs and pin the zero-bypass result in a structural test.
 - [ ] **Step 4: Copy channel-owned artifacts by watermark** behind green migration gate; add blob refs rather than bytes; tombstone old searchable projection. Safe dual-read still calls Task 8A fence and deduplicates by canonical ID.
 - [ ] **Step 5: Validate**
@@ -865,8 +902,8 @@ cd server && go test ./internal/service ./internal/handler ./internal/scheduler 
 ### Task 17: Versioned retention、encrypted archive 与 sweep
 
 **Files:**
-- Create: `server/migrations/461_memory_retention_archive.up.sql`
-- Create: `server/migrations/461_memory_retention_archive.down.sql`
+- Create: `server/migrations/471_memory_retention_archive.up.sql`
+- Create: `server/migrations/471_memory_retention_archive.down.sql`
 - Modify: `server/pkg/db/queries/graph_memory.sql`
 - Create: `server/internal/service/memory_retention.go`
 - Create: `server/internal/service/memory_retention_test.go`
@@ -899,7 +936,7 @@ func (s *MemoryRetentionService) SweepDue(ctx context.Context, limit int) (int, 
 ```
 
 - [ ] **Step 1: Write RED policy/migration tests** for bootstrap 90d/365d/30d, Workspace shortening, attempted platform-cap extension, CAS policy version, pre-policy data semantics and policy rollback.
-- [ ] **Step 2: Implement migration 461** with versioned Workspace policy, archive manifest/key envelope, restore lease/audit and sweep cursor. Existing rows bind to explicit bootstrap version; no default silently lengthens retention.
+- [ ] **Step 2: Implement migration 471** with versioned Workspace policy, archive manifest/key envelope, restore lease/audit and sweep cursor. Existing rows bind to explicit bootstrap version; no default silently lengthens retention.
 - [ ] **Step 3: Implement encrypted archive creation** before hot trajectory expiry, verify ciphertext/hash, then retire hot body. Archive bytes share Task 8A fence and Workspace-scoped key envelope; no plaintext cache crosses Workspace.
 - [ ] **Step 4: Implement restore** requiring current ACL, explicit reason, short TTL and object-scoped audit; restored bytes are stream/lease-only and never written back to Search/index.
 - [ ] **Step 5: Implement idempotent sweeps** for 90-day hot trajectory, one-year archive and 30-day full trace; release blob refs and cryptographically erase only after zero legal refs. A shortened Workspace policy creates an audited migration job that recomputes `due_at` for existing eligible rows and new rows; it never extends any row beyond its originally bound platform cap.
@@ -918,8 +955,8 @@ cd server && go test ./internal/service ./internal/handler ./internal/scheduler 
 ### Task 18: Training grants、selection manifest 与 deletion ledger
 
 **Files:**
-- Create: `server/migrations/462_interaction_dag_training_governance.up.sql`
-- Create: `server/migrations/462_interaction_dag_training_governance.down.sql`
+- Create: `server/migrations/472_interaction_dag_training_governance.up.sql`
+- Create: `server/migrations/472_interaction_dag_training_governance.down.sql`
 - Modify: `server/pkg/db/queries/interaction_dag.sql`
 - Create: `server/internal/service/interaction_dag_training.go`
 - Create: `server/internal/service/interaction_dag_training_test.go`
@@ -945,7 +982,7 @@ cd server && go test ./internal/service ./internal/handler ./internal/scheduler 
 - Produces grant-bound manifests and CAS states `eligible→selected→exported→execution_started→consumed`, plus `retracted|revoked`; pooled and tenant purposes remain separate.
 
 - [ ] **Step 1: Write RED integration tests**: ordinary source Task never opens AReaL; source publishes and receives reward before selection; existing Workspace pending_owner_ack, new Workspace tenant default, pooled opt-in, global kill switch, CAS conflict, revoke before execution, delete after consume, derivative/retracted/unavailable exclusion, duplicate/Workspace cap and replay. Exercise Graph Memory export, Mixed-RL `OfflineTrajectoryService`, evolution training handler and AReaL execution; raw NDJSON routes return disabled/manifest_required without a valid manifest.
-- [ ] **Step 2: Implement migration 462** with grant, policy, manifest, manifest item, execution identity/transitions and deletion/unlearning ledger. Backfill existing Workspace as pending_owner_ack; direct legacy export/session rows are closed until reselected.
+- [ ] **Step 2: Implement migration 472** with grant, policy, manifest, manifest item, execution identity/transitions and deletion/unlearning ledger. Backfill existing Workspace as pending_owner_ack; direct legacy export/session rows are closed until reselected.
 - [ ] **Step 3: Implement post-publish selection/delivery service**. Manifest fixes source Segment/hash/sanitizer/scope/reward/grant; every transition rechecks grant, global switch, current fence and reward status with exactly-once CAS.
 - [ ] **Step 4: Convert online training to manifest-backed delayed execution**. `MaybeOpenTrainingSession` is a no-op for ordinary source Tasks and may call `StartSession` only for a distinct training execution Task whose immutable manifest/purpose is in context. `RouteTerminalTrainingTask`/`SetReward` applies only to that execution identity. Before reward calibration enables the global switch, no replay task is created and no model update occurs.
 - [ ] **Step 5: Route all exporters/consumers through the service**. Graph Memory and Mixed-RL offline NDJSON can serialize only a manifest export, never select rows directly; AReaL and pooled/tenant consumers require the same manifest. Revoked/retracted export is rejected or enters deletion/unlearning handling.
@@ -960,8 +997,8 @@ cd server && go test ./internal/service ./internal/handler ./internal/arealrl -r
 ### Task 19: Dive unavailable reward、Consolidation delta reward 与 revisions
 
 **Files:**
-- Create: `server/migrations/463_graph_memory_reward_revision.up.sql`
-- Create: `server/migrations/463_graph_memory_reward_revision.down.sql`
+- Create: `server/migrations/473_graph_memory_reward_revision.up.sql`
+- Create: `server/migrations/473_graph_memory_reward_revision.down.sql`
 - Modify: `server/internal/memorygraph/reward.go`
 - Modify: `server/internal/memorygraph/reward_test.go`
 - Modify: `server/internal/service/graph_memory_dive.go`
@@ -977,7 +1014,7 @@ cd server && go test ./internal/service ./internal/handler ./internal/arealrl -r
 - Produces immutable `RewardRecord{Kind,Status,Revision,Components,Value,PolicyVersion,InputManifestHash}` and exactly-once outbox per revision.
 
 - [ ] **Step 1: Write RED tests**: Dive min dimension-rounds; judge failure unavailable/no outbox value; deterministic budget negative; consolidation baseline quality/efficiency delta; hard-gate negative; loser/winner semantics; revision conflict; holdout split.
-- [ ] **Step 2: Implement migration 463** replacing trajectory-unique mutable reward with immutable revisions and delivery identity.
+- [ ] **Step 2: Implement migration 473** replacing trajectory-unique mutable reward with immutable revisions and delivery identity.
 - [ ] **Step 3: Change terminal judge failure** from reward 0 to unavailable. Offline export and training selection must exclude unavailable.
 - [ ] **Step 4: Implement consolidation reward components** using absolute costs and stable holdout/safety partition; do not reuse batch-relative min-max cost as RL reward.
 - [ ] **Step 5: Preserve exactly-once effect** in RewardSink by `(trajectory,reward_kind,revision)`.

@@ -615,6 +615,27 @@ export interface GraphMemoryAuditSummary {
   avg_explore_rounds_24h: number;
   judged_queries_24h: number;
   regressions_total: number;
+  /** Bounded aggregate over the server-side ledger; carries no memory content. */
+  ledger: GraphMemoryAuditLedger;
+}
+
+export interface GraphMemoryAuditLedger {
+  recalls_by_status: Record<string, number>;
+  recalls_by_error_kind: Record<string, number>;
+  trajectories_by_status: Record<string, number>;
+  trajectories_by_dive_status: Record<string, number>;
+  avg_rounds: number;
+  p95_rounds: number;
+  graded_trajectories: number;
+  overall_reward_min: number;
+  overall_reward_avg: number;
+  dive_jobs_by_status: Record<string, number>;
+  dive_job_attempts: number;
+  last_failure: { kind: string; message: string };
+  reward_outbox_by_status: Record<string, number>;
+  oldest_pending_age_seconds: number;
+  offline_export_eligible: number;
+  catalog_items: number;
 }
 
 export interface GraphMemoryChannelLineageEntry {
@@ -625,12 +646,22 @@ export interface GraphMemoryChannelLineageEntry {
   valid_to: string;
 }
 
+/** Aggregate migration progress counters only — no atom bodies or actors. */
+export interface GraphMemoryChannelMigration {
+  binding_generation: number;
+  source_watermark: number;
+  phase: string;
+  copied_atoms: number;
+}
+
 export interface GraphMemoryChannelLineage {
   workspace_id: string;
   channel_id: string;
   routing_mode: "standalone" | "project_lineage" | "";
   current: { graph_kind: "project" | "channel"; graph_owner_id: string; generation: number } | null;
   lineage: GraphMemoryChannelLineageEntry[];
+  /** Latest project-rebinding migration; null when the channel never rebound. */
+  migration: GraphMemoryChannelMigration | null;
 }
 
 export interface GraphMemoryConsolidationRun {

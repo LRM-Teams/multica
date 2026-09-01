@@ -17,6 +17,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/pkg/agent"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // Spec §5/§6/§7, acceptance A8/A12/A25/A29: the Dive worker leases a durable
@@ -120,6 +121,24 @@ func defaultTestLimits() service.GraphMemoryLimits {
 	return service.LoadGraphMemoryLimits(func(string) string { return "" })
 }
 
+type graphMemoryTestPolicyReader struct {
+	settings []byte
+}
+
+func (r graphMemoryTestPolicyReader) GetWorkspace(_ context.Context, id pgtype.UUID) (db.Workspace, error) {
+	return db.Workspace{ID: id, Settings: r.settings}, nil
+}
+
+func graphMemoryTestProviderResolver(provider, model string) *service.MemoryProviderPolicyResolver {
+	settings := []byte(fmt.Sprintf(`{"memory_provider_policy":{"version":"test-policy","purposes":{"embed":{"enabled":false},"dive":{"enabled":true,"provider":%q,"model":%q,"region":"test-region"}}}}`, provider, model))
+	return service.NewMemoryProviderPolicyResolver(
+		graphMemoryTestPolicyReader{settings: settings},
+		service.MemoryProviderPolicyResolverConfig{Allow: map[service.MemoryProviderPurpose]service.MemoryProviderPolicyAllowlist{
+			service.ProviderDive: {Providers: []string{provider}, Regions: []string{"test-region"}},
+		}},
+	)
+}
+
 func newTestDiveWorker(t *testing.T, root string, rl *service.GraphMemoryRLSessionService, backend memorygraph.AgentBackend, limits service.GraphMemoryLimits) *service.GraphMemoryDiveWorker {
 	t.Helper()
 	if limits.Defaults == (service.GraphMemoryTunables{}) {
@@ -131,7 +150,8 @@ func newTestDiveWorker(t *testing.T, root string, rl *service.GraphMemoryRLSessi
 		rl,
 		limits,
 		root,
-		func(context.Context, string, string) (memorygraph.AgentBackend, error) {
+		graphMemoryTestProviderResolver("test-provider", "test-dive-model"),
+		func(context.Context, service.ResolvedMemoryProvider) (memorygraph.AgentBackend, error) {
 			return backend, nil
 		},
 	)
@@ -186,8 +206,12 @@ func TestGraphMemoryDiveWorkerEndToEnd(t *testing.T) {
 		t.Fatalf("miss row = %+v, want graded reward −0.3", r2)
 	}
 	r3 := read(errID)
-	if r3.diveStatus != "bypassed" || r3.reward == nil || *r3.reward != 0 {
-		t.Fatalf("error row = %+v, want bypassed/reward 0", r3)
+	// Task 19: the bypassed run carries the deterministic negative, never a
+	// neutral 0 (rounds 0 fixture run, default round weight).
+	wantBypass := memorygraph.DeterministicViolationReward(0.1, 0)
+	if r3.diveStatus != "bypassed" || r3.reward == nil ||
+		*r3.reward < wantBypass-1e-9 || *r3.reward > wantBypass+1e-9 {
+		t.Fatalf("error row = %+v, want bypassed/deterministic %v", r3, wantBypass)
 	}
 	if status := recallStatus(t, recallID); status != "completed" {
 		t.Fatalf("recall status = %s, want completed", status)
@@ -280,8 +304,10 @@ func TestGraphMemoryDiveWorkerPinnedVersionMissing(t *testing.T) {
 		if err := rows.Scan(&reward, &ds); err != nil {
 			t.Fatal(err)
 		}
-		if reward == nil || *reward != 0 || ds != "judge_failed" {
-			t.Fatalf("normal run after terminal fail: reward=%v dive_status=%q", reward, ds)
+		// Task 19 (A46): a judge infrastructure failure never synthesizes a
+		// numeric 0; the projection goes unavailable with a NULL value.
+		if reward != nil || ds != "judge_failed" {
+			t.Fatalf("normal run after terminal fail: reward=%v dive_status=%q, want NULL/judge_failed", reward, ds)
 		}
 		n++
 	}
@@ -369,8 +395,12 @@ func TestGraphMemoryDiveWorkerOnlineRLOutbox(t *testing.T) {
 	if missReward < -0.3-1e-9 || missReward > -0.3+1e-9 {
 		t.Fatalf("miss outbox reward = %v, want −0.3", missReward)
 	}
-	if errReward != 0 {
-		t.Fatalf("bypassed outbox reward = %v, want 0", errReward)
+	// The bypassed run carries its deterministic negative (Task 19): the
+	// fixture run ended 'error' with 0 explore rounds, so the violation
+	// floor applies at the default round weight.
+	wantBypass := memorygraph.DeterministicViolationReward(0.1, 0)
+	if errReward < wantBypass-1e-9 || errReward > wantBypass+1e-9 {
+		t.Fatalf("bypassed outbox reward = %v, want deterministic %v", errReward, wantBypass)
 	}
 }
 
@@ -403,74 +433,43 @@ func TestGraphMemoryDiveWorkerNilRLSkipsOutbox(t *testing.T) {
 	}
 }
 
-func TestGraphMemoryDiveWorkerModelOverride(t *testing.T) {
+func TestGraphMemoryDiveWorkerProviderPolicyIgnoresLegacyProfile(t *testing.T) {
 	if testPool == nil {
 		t.Skip("handler test database unavailable")
 	}
 	ctx := context.Background()
-
-	run := func(t *testing.T, model, provider string, allow service.GraphMemoryLimits) (gotModel, gotProvider string) {
-		t.Helper()
-		fx, recallID := mustGraphMemoryDiveFixture(t, "trace-dive-model-"+uuid.NewString()[:8], 2)
-		mustEnqueueReadyDive(t, recallID, "found", "miss")
-		foundID := trajectoryIDBySeed(t, recallID, 0)
-		missID := trajectoryIDBySeed(t, recallID, 1)
-		if _, err := testPool.Exec(ctx, `
-			INSERT INTO graph_memory_profile (workspace_id, memory_type, dive_model, dive_provider)
-			VALUES ($1, 'graph', $2, $3)
-		`, fx.workspaceID, model, provider); err != nil {
-			t.Fatal(err)
-		}
-		root := t.TempDir()
-		mustSeedPinnedGraph(t, root, fx)
-		backend := &scriptedDiveBackend{output: diveScoresJSON(foundID, missID)}
-		var seenModel, seenProvider string
-		limits := allow
-		if limits.Defaults == (service.GraphMemoryTunables{}) {
-			limits.Defaults = defaultTestLimits().Defaults
-		}
-		w := service.NewGraphMemoryDiveWorker(
-			testPool,
-			service.NewGraphMemoryDiveService(testPool),
-			nil,
-			limits,
-			root,
-			func(_ context.Context, m, p string) (memorygraph.AgentBackend, error) {
-				seenModel, seenProvider = m, p
-				return backend, nil
-			},
-		)
-		if did, err := w.RunOnce(ctx, "worker-model"); err != nil || !did {
-			t.Fatalf("RunOnce: did=%v err=%v", did, err)
-		}
-		return seenModel, seenProvider
+	fx, recallID := mustGraphMemoryDiveFixture(t, "trace-dive-policy-"+uuid.NewString()[:8], 2)
+	mustEnqueueReadyDive(t, recallID, "found", "miss")
+	foundID := trajectoryIDBySeed(t, recallID, 0)
+	missID := trajectoryIDBySeed(t, recallID, 1)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO graph_memory_profile (workspace_id, memory_type, dive_model, dive_provider)
+		VALUES ($1, 'graph', 'legacy-model', 'legacy-provider')
+	`, fx.workspaceID); err != nil {
+		t.Fatal(err)
 	}
-
-	t.Run("within allow-list", func(t *testing.T) {
-		limits := defaultTestLimits()
-		limits.DiveModels = []string{"gpt-dive"}
-		limits.DiveProviders = []string{"pi"}
-		m, p := run(t, "gpt-dive", "pi", limits)
-		if m != "gpt-dive" || p != "pi" {
-			t.Fatalf("factory got (%q, %q), want (gpt-dive, pi)", m, p)
-		}
-	})
-	t.Run("outside allow-list fails closed", func(t *testing.T) {
-		limits := defaultTestLimits()
-		limits.DiveModels = []string{"gpt-dive"}
-		limits.DiveProviders = []string{"pi"}
-		m, p := run(t, "evil-model", "pi", limits)
-		if m != "" || p != "" {
-			t.Fatalf("factory got (%q, %q), want empty default", m, p)
-		}
-	})
-	t.Run("empty allow-list fails closed", func(t *testing.T) {
-		limits := defaultTestLimits()
-		m, p := run(t, "gpt-dive", "pi", limits)
-		if m != "" || p != "" {
-			t.Fatalf("empty allow-list factory got (%q, %q), want empty default", m, p)
-		}
-	})
+	root := t.TempDir()
+	mustSeedPinnedGraph(t, root, fx)
+	backend := &scriptedDiveBackend{output: diveScoresJSON(foundID, missID)}
+	var seen service.ResolvedMemoryProvider
+	worker := service.NewGraphMemoryDiveWorker(
+		testPool,
+		service.NewGraphMemoryDiveService(testPool),
+		nil,
+		defaultTestLimits(),
+		root,
+		graphMemoryTestProviderResolver("approved-provider", "approved-model"),
+		func(_ context.Context, policy service.ResolvedMemoryProvider) (memorygraph.AgentBackend, error) {
+			seen = policy
+			return backend, nil
+		},
+	)
+	if did, err := worker.RunOnce(ctx, "worker-policy"); err != nil || !did {
+		t.Fatalf("RunOnce: did=%v err=%v", did, err)
+	}
+	if seen.Provider != "approved-provider" || seen.Model != "approved-model" || seen.Region != "test-region" || seen.PolicyVersion != "test-policy" {
+		t.Fatalf("factory received non-policy identity: %+v", seen)
+	}
 }
 
 func TestGraphMemoryDiveWorkerFencedComplete(t *testing.T) {

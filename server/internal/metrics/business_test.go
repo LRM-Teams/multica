@@ -294,3 +294,52 @@ func exerciseEvent(m *BusinessMetrics, name string, props map[string]any) {
 	}
 	m.IncForEvent(analytics.Event{Name: name, Properties: props})
 }
+
+// Shadow gate observability (Task 21): canary results, gate phases and
+// audited transitions carry only closed-set labels — never workspace ids,
+// memory content, or free-form error text.
+func TestShadowGateMetricsUseBoundedLabels(t *testing.T) {
+	m := NewBusinessMetrics()
+
+	m.RecordShadowGateCanary("sequence_gap", true)
+	m.RecordShadowGateCanary("sanitizer_fail_open", false)
+	m.RecordShadowGateCanary("free-form-noise", true)
+	m.SetShadowGatePhase("workspace", "atoms", "enabled")
+	m.SetShadowGatePhase("global", "reward_shadow", "shadow")
+	m.RecordShadowGateTransition("atoms", "shadow", "enabled", "manual")
+
+	if got := testutil.ToFloat64(m.shadowGateCanary.WithLabelValues("sequence_gap")); got != 1 {
+		t.Fatalf("green sequence canary gauge = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(m.shadowGateCanary.WithLabelValues("sanitizer_fail_open")); got != 0 {
+		t.Fatalf("red sanitizer canary gauge = %v, want 0", got)
+	}
+	if got := testutil.ToFloat64(m.shadowGateCanary.WithLabelValues("other")); got != 1 {
+		t.Fatalf("unknown canary name must normalize to other, got %v", got)
+	}
+	if got := testutil.ToFloat64(m.shadowGatePhase.WithLabelValues("workspace", "atoms")); got != 2 {
+		t.Fatalf("enabled phase gauge = %v, want ordinal 2", got)
+	}
+	if got := testutil.ToFloat64(m.shadowGatePhase.WithLabelValues("global", "reward_shadow")); got != 1 {
+		t.Fatalf("shadow phase gauge = %v, want ordinal 1", got)
+	}
+	if got := testutil.ToFloat64(m.shadowGateTransitions.WithLabelValues("atoms", "shadow", "enabled", "manual")); got != 1 {
+		t.Fatalf("manual transition counter = %v, want 1", got)
+	}
+
+	family := GatherForTest(t, m)["multica_shadow_gate_canary_ok"]
+	if family == nil {
+		t.Fatal("shadow gate canary metric family missing")
+	}
+	for _, metric := range family.Metric {
+		if len(metric.Label) != 1 || metric.Label[0].GetName() != "canary" {
+			t.Fatalf("canary metric labels = %+v, want exactly [canary]", metric.Label)
+		}
+	}
+
+	// Metrics-less deployments (nil receiver) must not panic.
+	var nilMetrics *BusinessMetrics
+	nilMetrics.RecordShadowGateCanary("sequence_gap", true)
+	nilMetrics.SetShadowGatePhase("workspace", "atoms", "enabled")
+	nilMetrics.RecordShadowGateTransition("atoms", "shadow", "enabled", "manual")
+}

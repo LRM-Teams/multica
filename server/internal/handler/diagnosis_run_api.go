@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/service"
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -145,13 +146,14 @@ func (d diagnosisRunAPIDeps) getSegmentMessages(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusInternalServerError, "segment_lookup_error")
 		return
 	}
-	if segment.ProjectID != run.ProjectID {
+	if segment.ContentStatus == "legacy_unverified" ||
+		!segment.ProjectIDAtEvent.Valid || util.UUIDToString(segment.ProjectIDAtEvent) != run.ProjectID {
 		writeError(w, http.StatusNotFound, "unknown_segment")
 		return
 	}
 	target := service.DiagnosisSegmentTarget{
 		SegmentID:  req.SegmentID,
-		AgentRunID: segment.AgentRunID,
+		AgentRunID: util.UUIDToString(segment.AgentRunID),
 		StartSeq:   segment.StartSeq,
 		EndSeq:     segment.EndSeq,
 	}

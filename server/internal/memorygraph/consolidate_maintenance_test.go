@@ -62,7 +62,7 @@ func maintenanceFixture(t *testing.T) (*Store, *fakeConsolidateBackend, *Consoli
 	}}
 	cfg := DefaultConsolidateConfig()
 	cfg.TTVTrajectories = 1
-	c := NewConsolidator(store, backend, cfg, "test", nil, nil)
+	c := NewConsolidator(store, backend, cfg, testConsolidateScope(), nil, nil)
 	c.SetWorkingSetBuilder(NewWorkingSetBuilder(store, RetrievalSignals{}, nil, DefaultWorkingSetConfig(), 8))
 	return store, backend, c
 }
@@ -148,7 +148,7 @@ func TestMaintenanceRoundIdleNoAgentCall(t *testing.T) {
 	}}
 	cfg := DefaultConsolidateConfig()
 	cfg.TTVTrajectories = 1
-	c := NewConsolidator(store, backend, cfg, "test", nil, nil)
+	c := NewConsolidator(store, backend, cfg, testConsolidateScope(), nil, nil)
 	c.SetWorkingSetBuilder(NewWorkingSetBuilder(store, RetrievalSignals{}, nil, DefaultWorkingSetConfig(), 8))
 
 	res, err := c.MaintenanceRound(context.Background())
@@ -225,7 +225,7 @@ func TestMaintenanceRoundEpistemicSupersedeOnly(t *testing.T) {
 	}}
 	cfg := DefaultConsolidateConfig()
 	cfg.TTVTrajectories = 1
-	c := NewConsolidator(store, backend, cfg, "test", nil, nil)
+	c := NewConsolidator(store, backend, cfg, testConsolidateScope(), nil, nil)
 	c.SetWorkingSetBuilder(NewWorkingSetBuilder(store, RetrievalSignals{}, nil, DefaultWorkingSetConfig(), 8))
 
 	res, err := c.MaintenanceRound(context.Background())

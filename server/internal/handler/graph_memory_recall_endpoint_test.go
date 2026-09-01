@@ -32,7 +32,7 @@ type countingRecallSeeder struct {
 	ids   []string
 }
 
-func (c *countingRecallSeeder) Seeds(_ context.Context, _ string, _ int, _ string, _ memorygraph.GraphView) ([]string, error) {
+func (c *countingRecallSeeder) Seeds(_ context.Context, _, _ string, _ int, _ string, _ memorygraph.GraphView) ([]string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.calls++
@@ -55,9 +55,7 @@ func mustGraphMemoryRecallEndpointFixture(t *testing.T, root string) recallLedge
 	}
 	fx := mustGraphMemoryRecallFixture(t)
 	mustGraphMemoryGraphDir(t, root, util.UUIDToString(fx.workspaceID), memorygraph.GraphDirKindProject, fx.projectID)
-	if _, err := testPool.Exec(context.Background(), `UPDATE channel SET project_id = $2 WHERE id = $1`, fx.channelID, fx.projectID); err != nil {
-		t.Fatal(err)
-	}
+	bindChannelProject(t, context.Background(), fx.channelID, fx.projectID)
 	mustGraphMemoryTaskScope(t, fx.taskID, "channel_id", fx.channelID)
 	mustGraphMemoryGraphProfile(t, fx.workspaceID, false, 4)
 	return fx

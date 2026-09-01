@@ -192,6 +192,100 @@ func (s *Store) VersionDir(v int) string {
 	return filepath.Join(s.versionsDir(), fmt.Sprintf("v%d", v))
 }
 
+// VersionDigest returns the deterministic content identity of one version
+// directory: "sha256:<hex>" over every file's bytes in sorted relative-path
+// order. The Task 14 publication transaction records this digest and
+// rechecks it inside the commit, so any post-prepare mutation of a
+// candidate version is detected before the generation becomes readable.
+func (s *Store) VersionDigest(v int) (string, error) {
+	root := s.VersionDir(v)
+	var files []string
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		files = append(files, path)
+		return nil
+	})
+	if err != nil {
+		return "", fmt.Errorf("walk version %d: %w", v, err)
+	}
+	if len(files) == 0 {
+		return "", fmt.Errorf("version %d has no files to digest", v)
+	}
+	sort.Strings(files)
+	hasher := sha256.New()
+	for _, path := range files {
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return "", fmt.Errorf("relative path %s: %w", path, err)
+		}
+		hasher.Write([]byte(rel))
+		hasher.Write([]byte{0})
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("read %s: %w", path, err)
+		}
+		hasher.Write(data)
+		hasher.Write([]byte{0})
+	}
+	return "sha256:" + hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+// SyncVersion fsyncs every file of version v and then the version directory
+// entries, making a fully written candidate durable before the Task 14
+// publication transaction records it. A crash before this returns leaves no
+// durable DB state either — the caller only commits after this succeeds.
+func (s *Store) SyncVersion(v int) error {
+	root := s.VersionDir(v)
+	var dirs []string
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			dirs = append(dirs, path)
+			return nil
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		if err := file.Sync(); err != nil {
+			file.Close()
+			return err
+		}
+		if err := file.Close(); err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("fsync version %d: %w", v, err)
+	}
+	sort.Strings(dirs)
+	for _, dir := range dirs {
+		handle, err := os.Open(dir)
+		if err != nil {
+			return err
+		}
+		if err := handle.Sync(); err != nil {
+			handle.Close()
+			return err
+		}
+		if err := handle.Close(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // CreateVersionFrom deep-copies nodes/ and edges/ from parentV into a new
 // version and writes a fresh manifest with ParentVersion set. The new version
 // is fully written before it returns; the caller must SwitchCurrent to make
@@ -518,6 +612,49 @@ func (s *Store) ListQueryLogWindows() ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return listIDFiles(s.queryLogDir(), ".jsonl")
+}
+
+// SweepQueryLogWindows deletes every query-log window whose NEWEST entry
+// predates the cutoff (Task 17 trace retention). A window with no readable
+// entries is treated as its file's oldest possible age and deleted only
+// when the file's modification time predates the cutoff. Returns the count
+// of deleted windows; deleting zero windows is a no-op, not an error.
+func (s *Store) SweepQueryLogWindows(cutoff time.Time) (int, error) {
+	windows, err := s.ListQueryLogWindows()
+	if err != nil {
+		return 0, err
+	}
+	if len(windows) == 0 {
+		return 0, nil
+	}
+	deleted := 0
+	for _, window := range windows {
+		path := s.queryLogPath(window)
+		entries := []*QueryLogEntry{}
+		newest := time.Time{}
+		if err := readJSONL(path, &entries); err == nil {
+			for _, e := range entries {
+				if e != nil && e.Timestamp.After(newest) {
+					newest = e.Timestamp
+				}
+			}
+		}
+		if !newest.IsZero() {
+			if !newest.Before(cutoff) {
+				continue
+			}
+		} else {
+			info, statErr := os.Stat(path)
+			if statErr != nil || !info.ModTime().Before(cutoff) {
+				continue
+			}
+		}
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return deleted, fmt.Errorf("sweep query log %s: %w", window, err)
+		}
+		deleted++
+	}
+	return deleted, nil
 }
 
 // UpdateQueryLogEntry finds the entry with the given trace id in the window

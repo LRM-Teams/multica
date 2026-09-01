@@ -19,6 +19,41 @@ type FullBacktestRunner interface {
 	RunExplore(ctx context.Context, version int, query string) (rounds int, found bool, err error)
 }
 
+// ScopedFullBacktestRunner binds an external backtest runner to the same
+// resolved consolidation identity as the candidate trajectory.
+type ScopedFullBacktestRunner struct {
+	runner FullBacktestRunner
+	scope  ProviderScope
+}
+
+func newScopedFullBacktestRunner(runner FullBacktestRunner, scope ProviderScope) (*ScopedFullBacktestRunner, error) {
+	if runner == nil {
+		return nil, fmt.Errorf("backtest: runner is required")
+	}
+	if err := validateProviderScope(scope, ProviderPurposeConsolidate); err != nil {
+		return nil, err
+	}
+	return &ScopedFullBacktestRunner{runner: runner, scope: scope}, nil
+}
+
+func providerScopeIdentityEqual(a, b ProviderScope) bool {
+	return a.WorkspaceID == b.WorkspaceID &&
+		a.Provider == b.Provider &&
+		a.Model == b.Model &&
+		a.Region == b.Region &&
+		a.PolicyVersion == b.PolicyVersion
+}
+
+func (r *ScopedFullBacktestRunner) RunExplore(ctx context.Context, version int, query string) (int, bool, error) {
+	if r == nil || r.runner == nil {
+		return 0, false, fmt.Errorf("backtest: scoped runner is not configured")
+	}
+	if err := validateProviderScope(r.scope, ProviderPurposeConsolidate); err != nil {
+		return 0, false, err
+	}
+	return r.runner.RunExplore(ctx, version, query)
+}
+
 // DefaultBacktestBaselineRounds is the n of the n-hop coverage check when a
 // backtest query carries no recorded baseline rounds (legacy regression
 // entries predate the baseline_rounds field, design Q13/A2).
@@ -46,10 +81,13 @@ type BacktestConfig struct {
 	// ColdStart disables statistical recall and rounds-regression gates while
 	// the adjacent query-log window is too small to provide a trustworthy baseline.
 	ColdStart bool
-	Runner    FullBacktestRunner
+	// Scope is the resolved consolidation identity for this evaluation. It is
+	// required when a confirmer is used without a runner.
+	Scope  ProviderScope
+	Runner *ScopedFullBacktestRunner
 	// Confirmer semantically verifies a replacement node when deterministic
 	// historical-node matching cannot satisfy an authoritative item.
-	Confirmer BacktestConfirmer
+	Confirmer *ScopedBacktestConfirmer
 	// MaxConfirmationCandidates caps semantic checks per item (default 200).
 	MaxConfirmationCandidates int
 	// RequireFullBacktest rejects a candidate when no runner is configured.
@@ -59,6 +97,33 @@ type BacktestConfig struct {
 // BacktestConfirmer semantically confirms that node fully expresses statement.
 type BacktestConfirmer interface {
 	ConfirmNode(ctx context.Context, statement string, node *Node) (bool, error)
+}
+
+// ScopedBacktestConfirmer binds semantic confirmation to the resolved
+// consolidation identity.
+type ScopedBacktestConfirmer struct {
+	confirmer BacktestConfirmer
+	scope     ProviderScope
+}
+
+func NewScopedBacktestConfirmer(confirmer BacktestConfirmer, scope ProviderScope) (*ScopedBacktestConfirmer, error) {
+	if confirmer == nil {
+		return nil, fmt.Errorf("backtest: confirmer is required")
+	}
+	if err := validateProviderScope(scope, ProviderPurposeConsolidate); err != nil {
+		return nil, err
+	}
+	return &ScopedBacktestConfirmer{confirmer: confirmer, scope: scope}, nil
+}
+
+func (c *ScopedBacktestConfirmer) ConfirmNode(ctx context.Context, statement string, node *Node) (bool, error) {
+	if c == nil || c.confirmer == nil {
+		return false, fmt.Errorf("backtest: scoped confirmer is not configured")
+	}
+	if err := validateProviderScope(c.scope, ProviderPurposeConsolidate); err != nil {
+		return false, err
+	}
+	return c.confirmer.ConfirmNode(ctx, statement, node)
 }
 
 // normalized fills zero/negative fields with defaults.
@@ -106,8 +171,12 @@ type BacktestQuery struct {
 
 // QueryBacktestStat records the per-query outcome on one candidate.
 type QueryBacktestStat struct {
-	TraceID          string            `json:"trace_id,omitempty"`
-	Query            string            `json:"query"`
+	TraceID string `json:"trace_id,omitempty"`
+	Query   string `json:"query"`
+	// Partition is the stable fnv-1a evaluation/holdout/safety split of the
+	// query's trace (spec §14.4): rewards read the evaluation partition only;
+	// holdout and safety stay out of every reward and gate signal.
+	Partition        string            `json:"partition,omitempty"`
 	BaselineRounds   int               `json:"baseline_rounds"` // n: rounds the original query needed
 	BaselineFound    bool              `json:"baseline_found"`  // baseline-side pass
 	Covered          bool              `json:"covered"`         // all ground truth within the n-hop hit neighborhood
@@ -156,6 +225,83 @@ type CandidateStats struct {
 	EmbedBytes   int     `json:"embed_bytes"`
 	EdgeChurn    int     `json:"edge_churn"`
 	Cost         float64 `json:"cost"`
+
+	// Consolidation reward (spec §14.3, Task 19): computed from the
+	// candidate's OWN absolute stats over the evaluation partition — never
+	// SelectWinner's batch-relative cost. Shadow-recorded on the
+	// select_version op-log entry for offline calibration; no model update
+	// (spec §14.4). A hard-gate failure carries the deterministic negative.
+	Reward              float64          `json:"reward"`
+	RewardComponents    RewardComponents `json:"reward_components,omitempty"`
+	RewardPolicyVersion string           `json:"reward_policy_version,omitempty"`
+}
+
+// ConsolidationRewardInputFromStats derives the §14.3 reward input from one
+// candidate's own backtest record: every aggregate reads the evaluation
+// partition only (holdout/safety never influence a reward), costs stay
+// absolute, and the baseline aggregates use the recorded baseline-side
+// signals. With no evaluation queries (cold windows) the deltas are zero,
+// leaving the absolute efficiency costs.
+func ConsolidationRewardInputFromStats(c *CandidateStats) ConsolidationRewardInput {
+	in := ConsolidationRewardInput{
+		Passed:          c.Passed,
+		GateFailures:    c.GateFailures,
+		CandidateRounds: c.MeanRounds,
+		EmbedBytes:      c.EmbedBytes,
+		ChangedNodes:    c.ChangedNodes,
+		EdgeChurn:       c.EdgeChurn,
+	}
+	if len(c.Queries) == 0 {
+		return in
+	}
+	var eval, evalFound, evalBaseFound, evalCovered, evalRegressed int
+	var candRounds, baseRounds float64
+	for i := range c.Queries {
+		q := &c.Queries[i]
+		switch q.Partition {
+		case "holdout":
+			in.HoldoutQueries++
+			continue
+		case "safety":
+			in.SafetyQueries++
+			continue
+		case "":
+			// Unstated rows (older records) default to evaluation.
+		}
+		in.EvaluationQueries++
+		if q.Skipped {
+			// Budget-audit row: never measured, so it carries no signal and
+			// stays out of the recall/regression denominators (mirrors
+			// recallRates excluding skipped rows from statistics).
+			continue
+		}
+		eval++
+		if q.Found {
+			evalFound++
+		}
+		if q.BaselineFound {
+			evalBaseFound++
+		}
+		if q.Covered {
+			evalCovered++
+		}
+		if q.Regressed {
+			evalRegressed++
+		}
+		candRounds += q.Rounds
+		baseRounds += float64(q.BaselineRounds)
+	}
+	in.Queries = eval
+	in.Regressions = evalRegressed
+	if eval > 0 {
+		in.Recall = float64(evalFound) / float64(eval)
+		in.BaselineRecall = float64(evalBaseFound) / float64(eval)
+		in.Coverage = float64(evalCovered) / float64(eval)
+		in.BaselineCoverage = in.BaselineRecall
+		in.CandidateRounds = candRounds / float64(eval)
+		in.BaselineRounds = baseRounds / float64(eval)
+	}
+	return in
 }
 
 // backtestWindowBounds returns the adjacent graph-version interval used by a
@@ -294,6 +440,38 @@ func NewBacktester(store *Store, cfg BacktestConfig) *Backtester {
 	return &Backtester{store: store, cfg: cfg.normalized()}
 }
 
+func (b *Backtester) validateProviderBindings() error {
+	var expected *ProviderScope
+	if b.cfg.Scope != (ProviderScope{}) {
+		if err := validateProviderScope(b.cfg.Scope, ProviderPurposeConsolidate); err != nil {
+			return err
+		}
+		expected = &b.cfg.Scope
+	}
+	if b.cfg.Runner != nil {
+		if err := validateProviderScope(b.cfg.Runner.scope, ProviderPurposeConsolidate); err != nil {
+			return err
+		}
+		if expected != nil && !providerScopeIdentityEqual(*expected, b.cfg.Runner.scope) {
+			return fmt.Errorf("backtest: runner scope identity does not match evaluation scope identity")
+		}
+		expected = &b.cfg.Runner.scope
+	}
+	if b.cfg.Confirmer == nil {
+		return nil
+	}
+	if err := validateProviderScope(b.cfg.Confirmer.scope, ProviderPurposeConsolidate); err != nil {
+		return err
+	}
+	if expected == nil {
+		return fmt.Errorf("backtest: confirmer scope identity requires an evaluation scope identity")
+	}
+	if !providerScopeIdentityEqual(*expected, b.cfg.Confirmer.scope) {
+		return fmt.Errorf("backtest: confirmer scope identity does not match evaluation scope identity")
+	}
+	return nil
+}
+
 // EvaluateCandidate runs the backtest and hard gates for one candidate.
 func (b *Backtester) EvaluateCandidate(ctx context.Context, version, parentVersion int, queries []*BacktestQuery) CandidateStats {
 	stats := CandidateStats{Version: version, Passed: true}
@@ -303,6 +481,10 @@ func (b *Backtester) EvaluateCandidate(ctx context.Context, version, parentVersi
 	}
 	if b.cfg.RequireFullBacktest && b.cfg.Runner == nil {
 		fail("full_backtest_runner_required")
+	}
+	if err := b.validateProviderBindings(); err != nil {
+		fail("%v", err)
+		return stats
 	}
 	g, err := LoadGraph(b.store, version)
 	if err != nil {
@@ -428,7 +610,7 @@ func stableItemMissID(item BacktestItem, index int) string {
 func (b *Backtester) evalQuery(ctx context.Context, retr *HybridRetriever, g *Graph, version int, q *BacktestQuery) QueryBacktestStat {
 	n := baselineRounds(q.BaselineRounds)
 	items := resolveBacktestItems(q)
-	stat := QueryBacktestStat{TraceID: q.TraceID, Query: q.Query, BaselineRounds: n, BaselineFound: q.BaselineFound, ItemsTotal: len(items)}
+	stat := QueryBacktestStat{TraceID: q.TraceID, Query: q.Query, Partition: QueryPartition(q.TraceID), BaselineRounds: n, BaselineFound: q.BaselineFound, ItemsTotal: len(items)}
 	hits, err := retr.Search(ctx, q.Query)
 	if err != nil {
 		stat.Regressed = q.BaselineFound

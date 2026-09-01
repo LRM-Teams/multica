@@ -12,6 +12,31 @@ import (
 	"testing"
 )
 
+func testEmbedScope(workspaceID, policyVersion string) ProviderScope {
+	return ProviderScope{
+		WorkspaceID:   workspaceID,
+		Purpose:       ProviderPurposeEmbed,
+		Provider:      "approved",
+		Model:         "test-embed-model",
+		Region:        "us-east-1",
+		PolicyVersion: policyVersion,
+	}
+}
+
+func testEmbedEndpointConfig(baseURL string) OpenAIEmbedderConfig {
+	return OpenAIEmbedderConfig{
+		BaseURL: baseURL, Provider: "approved", Model: "test-embed-model", Region: "us-east-1",
+	}
+}
+
+func mustCachedEmbedder(t *testing.T, inner EmbeddingProvider, store *Store) *CachedEmbedder {
+	t.Helper()
+	emb, err := NewCachedEmbedder(inner, store, testEmbedScope("test-workspace", "test-policy"))
+	if err != nil {
+		t.Fatalf("NewCachedEmbedder: %v", err)
+	}
+	return emb
+}
 func TestHashEmbedderDeterministicAndNormalized(t *testing.T) {
 	h := NewHashEmbedder()
 	if h.Dim() != hashEmbedderDim {
@@ -40,14 +65,11 @@ func TestHashEmbedderDeterministicAndNormalized(t *testing.T) {
 	if math.Abs(norm-1) > 1e-5 {
 		t.Fatalf("vector norm = %f, want 1", norm)
 	}
-	// Token overlap yields positive cosine; unrelated text does not.
-	sim := cosineSimilarity(a[0], HashEmbedText("graph memory retrieval"))
-	if sim <= 0 {
+	if sim := cosineSimilarity(a[0], HashEmbedText("graph memory retrieval")); sim <= 0 {
 		t.Fatalf("cosine with overlapping text = %f, want > 0", sim)
 	}
 }
 
-// countingProvider is a fake EmbeddingProvider recording Embed call counts.
 type countingProvider struct {
 	calls atomic.Int64
 }
@@ -65,7 +87,10 @@ func TestCachedEmbedderSecondEmbedHitsDiskCache(t *testing.T) {
 		t.Fatalf("Init: %v", err)
 	}
 	provider := &countingProvider{}
-	cached := NewCachedEmbedder(provider, store)
+	cached, err := NewCachedEmbedder(provider, store, testEmbedScope("workspace-a", "policy-1"))
+	if err != nil {
+		t.Fatalf("NewCachedEmbedder: %v", err)
+	}
 
 	texts := []string{"alpha beta gamma", "delta epsilon"}
 	first, err := cached.Embed(context.Background(), texts)
@@ -89,12 +114,59 @@ func TestCachedEmbedderSecondEmbedHitsDiskCache(t *testing.T) {
 			}
 		}
 	}
-	// Queries are cached too.
 	if _, err := cached.EmbedQuery(context.Background(), "alpha beta gamma"); err != nil {
 		t.Fatalf("EmbedQuery: %v", err)
 	}
 	if provider.calls.Load() != 1 {
 		t.Fatalf("provider calls after cached query = %d, want 1", provider.calls.Load())
+	}
+}
+
+func TestCachedEmbedderWorkspaceIsolation(t *testing.T) {
+	store := NewStore(filepath.Join(t.TempDir(), "memory_graph"))
+	if err := store.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	provider := &countingProvider{}
+	workspaceA, err := NewCachedEmbedder(provider, store, testEmbedScope("workspace-a", "policy-1"))
+	if err != nil {
+		t.Fatalf("workspace A cache: %v", err)
+	}
+	workspaceB, err := NewCachedEmbedder(provider, store, testEmbedScope("workspace-b", "policy-1"))
+	if err != nil {
+		t.Fatalf("workspace B cache: %v", err)
+	}
+	const identicalPlaintext = "identical sanitized content"
+	if _, err := workspaceA.Embed(context.Background(), []string{identicalPlaintext}); err != nil {
+		t.Fatalf("workspace A Embed: %v", err)
+	}
+	if _, err := workspaceB.Embed(context.Background(), []string{identicalPlaintext}); err != nil {
+		t.Fatalf("workspace B Embed: %v", err)
+	}
+	if provider.calls.Load() != 2 {
+		t.Fatalf("provider calls = %d, want 2 isolated Workspace cache misses", provider.calls.Load())
+	}
+}
+
+func TestCachedEmbedderIgnoresLegacyContentOnlyPath(t *testing.T) {
+	store := NewStore(filepath.Join(t.TempDir(), "memory_graph"))
+	if err := store.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	const text = "legacy cache collision"
+	if err := writeVecFile(store.EmbeddingPath(ComputeContentHash(text)), []float32{99}); err != nil {
+		t.Fatalf("write legacy cache: %v", err)
+	}
+	provider := &countingProvider{}
+	cached, err := NewCachedEmbedder(provider, store, testEmbedScope("workspace-a", "policy-2"))
+	if err != nil {
+		t.Fatalf("NewCachedEmbedder: %v", err)
+	}
+	if _, err := cached.Embed(context.Background(), []string{text}); err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	if provider.calls.Load() != 1 {
+		t.Fatalf("legacy content-only path was reused across policy scope")
 	}
 }
 
@@ -124,17 +196,35 @@ func TestVecFileRoundTrip(t *testing.T) {
 func TestNewOpenAIEmbedderFromEnvUnset(t *testing.T) {
 	t.Setenv(envEmbedBaseURL, "")
 	t.Setenv(envEmbedAPIKey, "")
+	t.Setenv(envEmbedProvider, "")
 	t.Setenv(envEmbedModel, "")
-	_, err := NewOpenAIEmbedderFromEnv()
+	t.Setenv(envEmbedRegion, "")
+	_, err := NewOpenAIEmbedderFromEnv(testEmbedScope("workspace-a", "policy-1"))
 	if !errors.Is(err, ErrEmbedNotConfigured) {
 		t.Fatalf("err = %v, want ErrEmbedNotConfigured", err)
 	}
 }
 
 func TestNewOpenAIEmbedderMalformedBaseURL(t *testing.T) {
-	_, err := NewOpenAIEmbedder(OpenAIEmbedderConfig{BaseURL: "://not-a-url", Model: "m"})
+	_, err := NewOpenAIEmbedder(testEmbedEndpointConfig("://not-a-url"), testEmbedScope("workspace-a", "policy-1"))
 	if err == nil || errors.Is(err, ErrEmbedNotConfigured) {
 		t.Fatalf("err = %v, want malformed-value error", err)
+	}
+}
+
+func TestNoProviderFallbackOpenAIEmbedderRejectsEndpointIdentityMismatch(t *testing.T) {
+	for name, mutate := range map[string]func(*OpenAIEmbedderConfig){
+		"provider": func(cfg *OpenAIEmbedderConfig) { cfg.Provider = "different-provider" },
+		"model":    func(cfg *OpenAIEmbedderConfig) { cfg.Model = "different-model" },
+		"region":   func(cfg *OpenAIEmbedderConfig) { cfg.Region = "different-region" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := testEmbedEndpointConfig("https://example.invalid")
+			mutate(&cfg)
+			if _, err := NewOpenAIEmbedder(cfg, testEmbedScope("workspace-a", "policy-1")); err == nil {
+				t.Fatalf("NewOpenAIEmbedder accepted a different %s from resolved policy", name)
+			}
+		})
 	}
 }
 
@@ -167,11 +257,9 @@ func TestOpenAIEmbedderAgainstTestServer(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	emb, err := NewOpenAIEmbedder(OpenAIEmbedderConfig{
-		BaseURL: srv.URL,
-		APIKey:  "test-key",
-		Model:   "test-embed-model",
-	})
+	cfg := testEmbedEndpointConfig(srv.URL)
+	cfg.APIKey = "test-key"
+	emb, err := NewOpenAIEmbedder(cfg, testEmbedScope("workspace-a", "policy-1"))
 	if err != nil {
 		t.Fatalf("NewOpenAIEmbedder: %v", err)
 	}
@@ -210,7 +298,11 @@ func TestOpenAIEmbedderBatchesAt32(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	emb, err := NewOpenAIEmbedder(OpenAIEmbedderConfig{BaseURL: srv.URL, Model: "m"})
+	scope := testEmbedScope("workspace-a", "policy-1")
+	scope.Model = "m"
+	cfg := testEmbedEndpointConfig(srv.URL)
+	cfg.Model = "m"
+	emb, err := NewOpenAIEmbedder(cfg, scope)
 	if err != nil {
 		t.Fatalf("NewOpenAIEmbedder: %v", err)
 	}

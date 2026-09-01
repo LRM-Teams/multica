@@ -132,6 +132,11 @@ SELECT token_hash FROM deleted_tokens`, workspaceID, userID)
 		if err != nil {
 			return empty, err
 		}
+		for _, task := range result.CancelledTasks {
+			if err := h.TaskService.RecordTerminalTaskBoundaryTx(ctx, qtx, tx, task); err != nil {
+				return empty, err
+			}
+		}
 
 		result.OfflineRuntimeIDs, err = qtx.ForceOfflineRuntimesByIDs(ctx, runtimeIDs)
 		if err != nil {

@@ -44,7 +44,7 @@ var (
 // pinned graph version (spec §3 step 5). Production wires the hybrid
 // retriever; tests inject fakes.
 type GraphMemorySeedRetriever interface {
-	Seeds(ctx context.Context, dir string, version int, query string, view memorygraph.GraphView) ([]string, error)
+	Seeds(ctx context.Context, workspaceID, dir string, version int, query string, view memorygraph.GraphView) ([]string, error)
 }
 
 // Recall task shapes (recovery spec A1): a recall's TaskID resolves against
@@ -266,9 +266,15 @@ func (s *GraphMemoryRecallService) Begin(ctx context.Context, req GraphMemoryRec
 	}); err != nil {
 		return nil, fmt.Errorf("graph memory recall: %w", err)
 	}
-	version, err := memorygraph.NewStore(dir).CurrentVersion()
+	recallStore := memorygraph.NewStore(dir)
+	var version int
+	if wsUUID, wsErr := parseUUIDColumn("workspace_id", req.WorkspaceID); wsErr == nil {
+		version, err = activeGraphVersionForStore(ctx, s.pool, wsUUID, graphKind, ownerID, recallStore)
+	} else {
+		version, err = recallStore.CurrentVersion()
+	}
 	if err != nil {
-		return nil, fmt.Errorf("graph memory recall: current version: %w", err)
+		return nil, fmt.Errorf("graph memory recall: active version: %w", err)
 	}
 
 	view := memorygraph.GraphView{}
@@ -312,7 +318,7 @@ func (s *GraphMemoryRecallService) Begin(ctx context.Context, req GraphMemoryRec
 
 	var seeds []string
 	if s.seeder != nil {
-		seeds, err = s.seeder.Seeds(ctx, dir, version, req.Query, view)
+		seeds, err = s.seeder.Seeds(ctx, req.WorkspaceID, dir, version, req.Query, view)
 		if err != nil {
 			return nil, fmt.Errorf("graph memory recall: seed retrieval: %w", err)
 		}

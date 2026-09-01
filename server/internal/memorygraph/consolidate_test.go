@@ -9,6 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/multica-ai/multica/server/pkg/agent"
 )
 
@@ -126,7 +129,7 @@ func TestConsolidateNonTTTAppliesValidOps(t *testing.T) {
 	}}
 	cfg := DefaultConsolidateConfig()
 	cfg.TTVTrajectories = 1
-	c := NewConsolidator(store, backend, cfg, "test", nil, nil)
+	c := NewConsolidator(store, backend, cfg, testConsolidateScope(), nil, nil)
 
 	res, err := c.Consolidate(context.Background())
 	if err != nil {
@@ -217,7 +220,7 @@ func TestConsolidateNonTTTCycleRejectedBatchContinues(t *testing.T) {
 	}}
 	cfg := DefaultConsolidateConfig()
 	cfg.TTVTrajectories = 1
-	c := NewConsolidator(store, backend, cfg, "test", nil, nil)
+	c := NewConsolidator(store, backend, cfg, testConsolidateScope(), nil, nil)
 
 	res, err := c.Consolidate(context.Background())
 	if err != nil {
@@ -322,8 +325,8 @@ func TestConsolidateTTTSelectsMinCostWinner(t *testing.T) {
 	// Warm mode: the rounds-overflow regression assertion below needs the
 	// statistical gates active despite the single-query window.
 	cfg.Budget = BacktestBudget{B: 16, Epsilon: 0.2, ColdStartThreshold: 1}
-	c := NewConsolidator(store, backend, cfg, "test", nil, nil)
-	c.SetRunner(runner)
+	c := NewConsolidator(store, backend, cfg, testConsolidateScope(), nil, nil)
+	c.SetRunner(mustScopedBacktestRunner(t, runner))
 
 	res, err := c.Consolidate(context.Background())
 	if err != nil {
@@ -493,8 +496,8 @@ func TestConsolidateTTTBudgetUnionMeasurement(t *testing.T) {
 	cfg := DefaultConsolidateConfig()
 	cfg.TTVTrajectories = 2
 	cfg.Budget = BacktestBudget{B: 1, Epsilon: 0.2, ColdStartThreshold: 20}
-	c := NewConsolidator(store, backend, cfg, "test", nil, nil)
-	c.SetRunner(runner)
+	c := NewConsolidator(store, backend, cfg, testConsolidateScope(), nil, nil)
+	c.SetRunner(mustScopedBacktestRunner(t, runner))
 
 	res, err := c.Consolidate(context.Background())
 	if err != nil {
@@ -605,7 +608,7 @@ func TestConsolidateTTTColdStartSkipsRecallGate(t *testing.T) {
 	}}
 	cfg := DefaultConsolidateConfig()
 	cfg.TTVTrajectories = 2
-	c := NewConsolidator(store, backend, cfg, "test", nil, nil)
+	c := NewConsolidator(store, backend, cfg, testConsolidateScope(), nil, nil)
 
 	res, err := c.Consolidate(context.Background())
 	if err != nil {
@@ -676,7 +679,7 @@ func TestConsolidateTTTWindowCountEnablesRecallGate(t *testing.T) {
 	}}
 	cfg := DefaultConsolidateConfig()
 	cfg.TTVTrajectories = 2
-	c := NewConsolidator(store, backend, cfg, "test", nil, nil)
+	c := NewConsolidator(store, backend, cfg, testConsolidateScope(), nil, nil)
 
 	res, err := c.Consolidate(context.Background())
 	if err != nil {
@@ -746,7 +749,7 @@ func TestConsolidateMergeNodeSemantics(t *testing.T) {
 	}}
 	cfg := DefaultConsolidateConfig()
 	cfg.TTVTrajectories = 1
-	c := NewConsolidator(store, backend, cfg, "test", nil, nil)
+	c := NewConsolidator(store, backend, cfg, testConsolidateScope(), nil, nil)
 
 	res, err := c.Consolidate(context.Background())
 	if err != nil {
@@ -828,7 +831,7 @@ func TestConsolidateMergeNodeIntoSurvivor(t *testing.T) {
 	}}
 	cfg := DefaultConsolidateConfig()
 	cfg.TTVTrajectories = 1
-	c := NewConsolidator(store, backend, cfg, "test", nil, nil)
+	c := NewConsolidator(store, backend, cfg, testConsolidateScope(), nil, nil)
 
 	if _, err := c.Consolidate(context.Background()); err != nil {
 		t.Fatalf("Consolidate: %v", err)
@@ -875,7 +878,7 @@ func TestConsolidateMergeNodeRejectsInvalid(t *testing.T) {
 	backend := &fakeConsolidateBackend{respond: func(string, int) string {
 		return consolidateOpsJSON(
 			ConsolidateOp{Op: OpMergeNode, InputNodeIDs: []string{"n1", "ghost"},
-				Node: &Node{NodeID: "r1", Body: "x"}},               // unknown input
+				Node: &Node{NodeID: "r1", Body: "x"}}, // unknown input
 			ConsolidateOp{Op: OpMergeNode, Node: &Node{NodeID: "r2", Body: "x"}}, // no inputs
 			ConsolidateOp{Op: OpMergeNode, InputNodeIDs: []string{"n1"}},         // no result node
 			ConsolidateOp{Op: OpMergeNode, InputNodeIDs: []string{"n1", "nc"},
@@ -885,7 +888,7 @@ func TestConsolidateMergeNodeRejectsInvalid(t *testing.T) {
 	}}
 	cfg := DefaultConsolidateConfig()
 	cfg.TTVTrajectories = 1
-	c := NewConsolidator(store, backend, cfg, "test", nil, nil)
+	c := NewConsolidator(store, backend, cfg, testConsolidateScope(), nil, nil)
 
 	res, err := c.Consolidate(context.Background())
 	if err != nil {
@@ -928,7 +931,7 @@ func TestConsolidateMergeNodeReplayIdempotent(t *testing.T) {
 	}}
 	cfg := DefaultConsolidateConfig()
 	cfg.TTVTrajectories = 1
-	c := NewConsolidator(store, backend, cfg, "test", nil, nil)
+	c := NewConsolidator(store, backend, cfg, testConsolidateScope(), nil, nil)
 
 	res, err := c.Consolidate(context.Background())
 	if err != nil {
@@ -983,7 +986,7 @@ func TestConsolidateMergeNodeRejectsCrossGraphInputs(t *testing.T) {
 	}}
 	cfg := DefaultConsolidateConfig()
 	cfg.TTVTrajectories = 1
-	res, err := NewConsolidator(projectStore, backend, cfg, "test", nil, nil).Consolidate(context.Background())
+	res, err := NewConsolidator(projectStore, backend, cfg, testConsolidateScope(), nil, nil).Consolidate(context.Background())
 	if err != nil {
 		t.Fatalf("Consolidate: %v", err)
 	}
@@ -1011,4 +1014,173 @@ func TestConsolidateMergeNodeRejectsCrossGraphInputs(t *testing.T) {
 	if node := rg.Node("research_node:foreign"); node == nil || node.Epistemic == StatusSuperseded {
 		t.Fatal("research graph was read or mutated by a project consolidation")
 	}
+}
+
+func TestConsolidatorRejectsMismatchedRunnerScopeBeforeBackend(t *testing.T) {
+	base := testConsolidateScope()
+	cases := []struct {
+		name   string
+		mutate func(*ProviderScope)
+	}{
+		{name: "workspace", mutate: func(s *ProviderScope) { s.WorkspaceID = "other-workspace" }},
+		{name: "provider", mutate: func(s *ProviderScope) { s.Provider = "other-provider" }},
+		{name: "model", mutate: func(s *ProviderScope) { s.Model = "other-model" }},
+		{name: "region", mutate: func(s *ProviderScope) { s.Region = "other-region" }},
+		{name: "policy version", mutate: func(s *ProviderScope) { s.PolicyVersion = "other-policy" }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newTestStore(t)
+			backend := &fakeConsolidateBackend{respond: func(string, int) string {
+				return consolidateOpsJSON(ConsolidateOp{Op: OpSubmit})
+			}}
+			cfg := DefaultConsolidateConfig()
+			cfg.TTVTrajectories = 1
+			c := NewConsolidator(store, backend, cfg, base, nil, nil)
+			mismatched := base
+			tc.mutate(&mismatched)
+			runner, err := newScopedFullBacktestRunner(&fakeFullBacktestRunner{}, mismatched)
+			if err != nil {
+				t.Fatalf("newScopedFullBacktestRunner: %v", err)
+			}
+			if err := c.SetRunner(runner); err == nil {
+				t.Fatal("SetRunner accepted a mismatched scope identity")
+			}
+			if _, err := c.Consolidate(context.Background()); err == nil {
+				t.Fatal("Consolidate accepted a runner with a mismatched scope identity")
+			}
+			backend.mu.Lock()
+			calls := backend.calls
+			backend.mu.Unlock()
+			if calls != 0 {
+				t.Fatalf("backend calls = %d, want 0", calls)
+			}
+		})
+	}
+}
+
+func TestConsolidatorRejectsMismatchedEmbedderScopeBeforeBackend(t *testing.T) {
+	base := testConsolidateScope()
+	cases := []struct {
+		name   string
+		mutate func(*ProviderScope)
+	}{
+		{name: "workspace", mutate: func(s *ProviderScope) { s.WorkspaceID = "other-workspace" }},
+		{name: "provider", mutate: func(s *ProviderScope) { s.Provider = "other-provider" }},
+		{name: "model", mutate: func(s *ProviderScope) { s.Model = "other-model" }},
+		{name: "region", mutate: func(s *ProviderScope) { s.Region = "other-region" }},
+		{name: "policy version", mutate: func(s *ProviderScope) { s.PolicyVersion = "other-policy" }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newTestStore(t)
+			backend := &fakeConsolidateBackend{respond: func(string, int) string {
+				return consolidateOpsJSON(ConsolidateOp{Op: OpSubmit})
+			}}
+			cfg := DefaultConsolidateConfig()
+			cfg.TTVTrajectories = 1
+			c := NewConsolidator(store, backend, cfg, base, nil, nil)
+			embedScope := base
+			embedScope.Purpose = ProviderPurposeEmbed
+			tc.mutate(&embedScope)
+			emb, err := NewCachedEmbedder(NewHashEmbedder(), store, embedScope)
+			if err != nil {
+				t.Fatalf("NewCachedEmbedder: %v", err)
+			}
+			if err := c.SetEmbedder(emb); err == nil {
+				t.Fatal("SetEmbedder accepted a mismatched scope identity")
+			}
+			if _, err := c.Consolidate(context.Background()); err == nil {
+				t.Fatal("Consolidate accepted an embedder with a mismatched scope identity")
+			}
+			backend.mu.Lock()
+			calls := backend.calls
+			backend.mu.Unlock()
+			if calls != 0 {
+				t.Fatalf("backend calls = %d, want 0", calls)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Task 14: atom-manifest consolidation
+// ---------------------------------------------------------------------------
+
+// The atom-manifest prompt teaches the generation-2 contract: atom_refs are
+// explicit, coverage is required, and the ops vocabulary is unchanged.
+func TestConsolidateAtomsPromptRequiresAtomRefs(t *testing.T) {
+	store := newTestStore(t)
+	seedGraphNode(t, store, 1, "n-base", "base body")
+	backend := &fakeConsolidateBackend{respond: func(string, int) string {
+		return consolidateOpsJSON()
+	}}
+	c := NewConsolidator(store, backend, DefaultConsolidateConfig(), testConsolidateScope(), nil, nil)
+
+	_, err := c.ConsolidateAtoms(context.Background(), 1, []AtomManifestEntry{
+		{AtomID: "atom-1", SegmentID: "seg-1", Body: "NIMBUS launches in March"},
+	})
+	require.NoError(t, err)
+	prompt := backend.allPrompts()
+	assert.Contains(t, prompt, "atom_refs")
+	assert.Contains(t, prompt, "atom atom-1 (segment seg-1)")
+	assert.Contains(t, prompt, "every atom id must end up cited")
+	assert.Contains(t, prompt, "\"op\":\"add_node\"")
+}
+
+// Even the single-trajectory flow writes a NEW immutable candidate version
+// and never touches the current pointer: publication is the coordinator's
+// decision, not the consolidator's.
+func TestConsolidateAtomsAlwaysWritesImmutableCandidate(t *testing.T) {
+	store := newTestStore(t)
+	seedGraphNode(t, store, 1, "n-base", "base body")
+	backend := &fakeConsolidateBackend{respond: func(string, int) string {
+		return consolidateOpsJSON(ConsolidateOp{Op: OpAddNode, Node: &Node{
+			NodeID: "n-nimbus", Body: "NIMBUS launch facts", AtomRefs: []string{"atom-1"},
+		}})
+	}}
+	c := NewConsolidator(store, backend, DefaultConsolidateConfig(), testConsolidateScope(), nil, nil)
+
+	res, err := c.ConsolidateAtoms(context.Background(), 1, []AtomManifestEntry{
+		{AtomID: "atom-1", SegmentID: "seg-1", Body: "NIMBUS launches in March"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 2, res.CandidateVersion, "candidate must be a fresh version")
+	assert.Equal(t, 1, res.OpsApplied)
+	assert.Empty(t, res.UncitedAtomIDs)
+	assert.Equal(t, []string{"atom-1"}, res.NodeAtoms["n-nimbus"])
+
+	current, err := store.CurrentVersion()
+	require.NoError(t, err)
+	assert.Equal(t, 1, current, "the current pointer must not move during consolidation")
+
+	// The candidate is complete on disk: the node cites its atoms.
+	g, err := LoadGraph(store, res.CandidateVersion)
+	require.NoError(t, err)
+	require.NotNil(t, g.Node("n-nimbus"))
+	assert.Equal(t, []string{"atom-1"}, g.Node("n-nimbus").AtomRefs)
+	// The base version is untouched (immutability).
+	base, err := LoadGraph(store, 1)
+	require.NoError(t, err)
+	assert.Nil(t, base.Node("n-nimbus"))
+}
+
+// Uncited atoms are reported, not consumed: a partial fold leaves the atom
+// visible to the next cycle, and the caller can refuse publication.
+func TestConsolidateAtomsReportsUncitedAtomsWithoutConsuming(t *testing.T) {
+	store := newTestStore(t)
+	seedGraphNode(t, store, 1, "n-base", "base body")
+	backend := &fakeConsolidateBackend{respond: func(string, int) string {
+		return consolidateOpsJSON(ConsolidateOp{Op: OpAddNode, Node: &Node{
+			NodeID: "n-nimbus", Body: "NIMBUS launch facts", AtomRefs: []string{"atom-1"},
+		}})
+	}}
+	c := NewConsolidator(store, backend, DefaultConsolidateConfig(), testConsolidateScope(), nil, nil)
+
+	res, err := c.ConsolidateAtoms(context.Background(), 1, []AtomManifestEntry{
+		{AtomID: "atom-1", SegmentID: "seg-1", Body: "cited"},
+		{AtomID: "atom-2", SegmentID: "seg-2", Body: "left for the next cycle"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"atom-2"}, res.UncitedAtomIDs)
 }

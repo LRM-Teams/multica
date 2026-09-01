@@ -283,4 +283,6 @@ func (h *GraphMemoryIngestHook) agentBackend() memorygraph.AgentBackend {
 	return h.backend
 }
 
-var _ SegmentIngestHook = (*GraphMemoryIngestHook)(nil)
+// Ingest remains the memorygraph Ingester entry used by the channel-run
+// staging recorder; the TaskService terminal-seam wiring that once fired it
+// was removed in Task 22 (staging is fed by the durable publish pipeline).

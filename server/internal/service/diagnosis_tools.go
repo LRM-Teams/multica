@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -78,12 +79,18 @@ func GetInteractionDAG(
 
 	projectIDStr := projectID.String()
 
-	segments, err := store.ListInteractionDAGSegmentsForProject(ctx, projectIDStr)
+	segments, err := store.ListInteractionDAGSegmentsForProject(ctx, db.ListInteractionDAGSegmentsForProjectParams{
+		WorkspaceID: workspaceID,
+		ProjectID:   projectIDStr,
+	})
 	if err != nil {
 		return nil, nil, err
 	}
 
-	edges, err := store.ListInteractionDAGEdgesForProject(ctx, projectIDStr)
+	edges, err := store.ListInteractionDAGEdgesForProject(ctx, db.ListInteractionDAGEdgesForProjectParams{
+		WorkspaceID: workspaceID,
+		ProjectID:   projectIDStr,
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -93,7 +100,7 @@ func GetInteractionDAG(
 	for _, seg := range segments {
 		segmentRows = append(segmentRows, SegmentRow{
 			SegmentID:  seg.SegmentID,
-			AgentRunID: seg.AgentRunID,
+			AgentRunID: util.UUIDToString(seg.AgentRunID),
 			StartSeq:   seg.StartSeq,
 			EndSeq:     seg.EndSeq,
 		})
@@ -129,15 +136,15 @@ func GetSegmentMessages(
 		return nil, err
 	}
 
-	// Parse project ID from segment and verify it belongs to the workspace
-	var projectID pgtype.UUID
-	err = projectID.Scan(segment.ProjectID)
-	if err != nil {
-		return nil, err
+	// Legacy-unverified ranges are not body resolvers. Canonical ownership is
+	// checked from immutable event-time scope rather than the legacy text field.
+	if segment.ContentStatus == "legacy_unverified" ||
+		segment.WorkspaceID != workspaceID || !segment.ProjectIDAtEvent.Valid {
+		return nil, pgx.ErrNoRows
 	}
 
 	_, err = messageStore.GetProjectInWorkspace(ctx, db.GetProjectInWorkspaceParams{
-		ID:          projectID,
+		ID:          segment.ProjectIDAtEvent,
 		WorkspaceID: workspaceID,
 	})
 	if err != nil {
@@ -149,7 +156,7 @@ func GetSegmentMessages(
 
 	// Get messages for the task in the segment's seq range
 	messages, err := messageStore.MessagesForTaskInRange(ctx, db.MessagesForTaskInRangeParams{
-		TaskID: segment.AgentRunID, StartSeq: segment.StartSeq, EndSeq: segment.EndSeq,
+		TaskID: util.UUIDToString(segment.AgentRunID), StartSeq: segment.StartSeq, EndSeq: segment.EndSeq,
 	})
 	if err != nil {
 		return nil, err

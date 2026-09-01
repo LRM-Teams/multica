@@ -11,24 +11,27 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/arealrl"
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // EdgeType values for interaction_dag_edge.type (CHECK-constrained).
 const (
-	EdgeTypeDelegation = "delegation"
-	EdgeTypeMention    = "mention"
-	EdgeTypeCompletion = "completion"
+	EdgeTypeContinues  = "continues"
+	EdgeTypeRespondsTo = "responds_to"
+	EdgeTypeDelegation = "delegates_to"
+	EdgeTypeMention    = "mentions"
 )
 
-// ErrInvalidEdgeType is returned by AddEdge when edgeType is not one of the
-// three allowed EdgeType values.
+// ErrInvalidEdgeType is returned by AddEdge when edgeType is not a canonical
+// interaction_dag_edge type.
 var ErrInvalidEdgeType = errors.New("interaction_dag: invalid edge type")
 
 var validEdgeTypes = map[string]bool{
+	EdgeTypeContinues:  true,
+	EdgeTypeRespondsTo: true,
 	EdgeTypeDelegation: true,
 	EdgeTypeMention:    true,
-	EdgeTypeCompletion: true,
 }
 
 // InteractionDAGStore is the DB seam the InteractionDAGService records
@@ -36,21 +39,25 @@ var validEdgeTypes = map[string]bool{
 type InteractionDAGStore interface {
 	UpsertInteractionDAGSessionRun(ctx context.Context, arg db.UpsertInteractionDAGSessionRunParams) error
 	GetInteractionDAGSessionRun(ctx context.Context, sessionID string) (db.InteractionDagSessionRun, error)
-	InsertInteractionDAGSegmentWithSnapshot(ctx context.Context, arg db.InsertInteractionDAGSegmentWithSnapshotParams) error
-	InsertInteractionDAGEdge(ctx context.Context, arg db.InsertInteractionDAGEdgeParams) error
-	GetInteractionDAGSegmentByAgentRun(ctx context.Context, agentRunID string) (db.GetInteractionDAGSegmentByAgentRunRow, error)
+	InsertInteractionDAGSegmentWithSnapshot(ctx context.Context, arg db.InsertInteractionDAGSegmentWithSnapshotParams) (string, error)
+	GetInteractionDAGSegmentByAgentRun(ctx context.Context, agentRunID pgtype.UUID) (db.GetInteractionDAGSegmentByAgentRunRow, error)
 	GetInteractionDAGSegmentByID(ctx context.Context, segmentID string) (db.GetInteractionDAGSegmentByIDRow, error)
-	GetLastEndSeqForAgentRun(ctx context.Context, agentRunID string) (int32, error)
+	GetLastEndSeqForAgentRun(ctx context.Context, agentRunID pgtype.UUID) (int32, error)
 	GetMaxTaskMessageSeq(ctx context.Context, taskIDText string) (int32, error)
+	AllocateUniversalDAGEdgeSeq(ctx context.Context, workspaceID pgtype.UUID) (int64, error)
+	GetUniversalDAGEdgeTriggerMessageID(ctx context.Context, arg db.GetUniversalDAGEdgeTriggerMessageIDParams) (pgtype.UUID, error)
+	InsertUniversalDAGEdge(ctx context.Context, arg db.InsertUniversalDAGEdgeParams) (db.InteractionDagEdge, error)
+	InsertUniversalDAGEdgeAtomic(ctx context.Context, arg db.InsertUniversalDAGEdgeAtomicParams) (db.InteractionDagEdge, error)
 
-	// Read-only assembly queries (U8 AssembleAssembledDag). Each filters by
-	// project_id; env_snapshot joins through segment (no project_id column).
-	ListInteractionDAGSegmentsForProject(ctx context.Context, projectID string) ([]db.ListInteractionDAGSegmentsForProjectRow, error)
-	ListInteractionDAGEdgesForProject(ctx context.Context, projectID string) ([]db.InteractionDagEdge, error)
+	// Read-only assembly queries resolve the canonical Workspace first and then
+	// filter both Segments and Edge endpoints to the requested project view.
+	GetUniversalDAGProjectWorkspace(ctx context.Context, projectID string) (pgtype.UUID, error)
+	ListInteractionDAGSegmentsForProject(ctx context.Context, arg db.ListInteractionDAGSegmentsForProjectParams) ([]db.ListInteractionDAGSegmentsForProjectRow, error)
+	ListInteractionDAGEdgesForProject(ctx context.Context, arg db.ListInteractionDAGEdgesForProjectParams) ([]db.ListInteractionDAGEdgesForProjectRow, error)
 	ListInteractionDAGSessionRunsForProject(ctx context.Context, projectID string) ([]db.InteractionDagSessionRun, error)
-	ListInteractionDAGEnvSnapshotsForProject(ctx context.Context, projectID string) ([]db.InteractionDagEnvSnapshot, error)
+	ListInteractionDAGEnvSnapshotsForProject(ctx context.Context, arg db.ListInteractionDAGEnvSnapshotsForProjectParams) ([]db.InteractionDagEnvSnapshot, error)
 	InsertInteractionDAGStepReward(ctx context.Context, arg db.InsertInteractionDAGStepRewardParams) error
-	ListInteractionDAGStepRewardsForProject(ctx context.Context, projectID string) ([]db.InteractionDagStepReward, error)
+	ListInteractionDAGStepRewardsForProject(ctx context.Context, arg db.ListInteractionDAGStepRewardsForProjectParams) ([]db.InteractionDagStepReward, error)
 	ListLatestCompletedInteractionDAGDiagnosisTargetsForProject(ctx context.Context, projectID string) ([]db.ListLatestCompletedInteractionDAGDiagnosisTargetsForProjectRow, error)
 }
 
@@ -161,7 +168,11 @@ func (s *InteractionDAGService) SegmentIDForAgentRun(ctx context.Context, agentR
 	if agentRunID == "" {
 		return "", errors.New("interaction_dag: SegmentIDForAgentRun requires agent_run_id")
 	}
-	seg, err := s.store.GetInteractionDAGSegmentByAgentRun(ctx, agentRunID)
+	agentRunUUID, err := util.ParseUUID(agentRunID)
+	if err != nil {
+		return "", fmt.Errorf("interaction_dag: parse agent_run_id: %w", err)
+	}
+	seg, err := s.store.GetInteractionDAGSegmentByAgentRun(ctx, agentRunUUID)
 	if err != nil {
 		return "", err
 	}
@@ -238,7 +249,11 @@ func (s *InteractionDAGService) CloseSegmentForEvent(
 	sandboxIDs, issueSnapshotID, envState := encodeEnvSnapshot(envSnapshot)
 
 	// Calculate the turn range for this segment.
-	lastEndSeq, err := s.store.GetLastEndSeqForAgentRun(ctx, run.AgentRunID)
+	agentRunUUID, err := util.ParseUUID(run.AgentRunID)
+	if err != nil {
+		return "", nil, fmt.Errorf("interaction_dag: parse agent_run_id for session %s: %w", sessionID, err)
+	}
+	lastEndSeq, err := s.store.GetLastEndSeqForAgentRun(ctx, agentRunUUID)
 	if err != nil {
 		return "", nil, fmt.Errorf("interaction_dag: get last end_seq for %s: %w", run.AgentRunID, err)
 	}
@@ -247,16 +262,19 @@ func (s *InteractionDAGService) CloseSegmentForEvent(
 	if err != nil {
 		return "", nil, fmt.Errorf("interaction_dag: get max task_message seq for %s: %w", run.AgentRunID, err)
 	}
+	if endSeq < startSeq {
+		startSeq, endSeq = 0, 0
+	}
 
-	if err := s.store.InsertInteractionDAGSegmentWithSnapshot(ctx, db.InsertInteractionDAGSegmentWithSnapshotParams{
+	insertedSegmentID, err := s.store.InsertInteractionDAGSegmentWithSnapshot(ctx, db.InsertInteractionDAGSegmentWithSnapshotParams{
 		SegmentID:        segmentID,
 		ProjectID:        projectID,
-		AgentRunID:       run.AgentRunID,
+		AgentRunID:       agentRunUUID,
 		IssueID:          run.IssueID, // carry the looked-up issue_id (do not re-derive)
 		TrajectoryID:     pgtype.Int8{Int64: int64(trajectoryID), Valid: true},
 		TensorRef:        tensorRef,
 		TrajectorySource: "areal_tensor",
-		Trainable:        true,
+		Trainable:        false,
 		Trajectory:       []byte("[]"),
 		ClosingEvent:     pgText(closingEvent),
 		StartSeq:         startSeq,
@@ -264,34 +282,44 @@ func (s *InteractionDAGService) CloseSegmentForEvent(
 		SandboxIds:       sandboxIDs,
 		IssueSnapshotID:  issueSnapshotID,
 		EnvState:         envState,
-	}); err != nil {
+	})
+	if err != nil {
 		return "", nil, fmt.Errorf("interaction_dag: insert segment+env_snapshot %s: %w", segmentID, err)
 	}
+	if insertedSegmentID != segmentID {
+		return "", nil, errors.New("interaction_dag: inserted segment identity mismatch")
+	}
 
-	return segmentID, raw, nil
+	// The retained writer creates an untrusted legacy exception. Its exported
+	// body is deliberately not returned to downstream readers or training.
+	return segmentID, nil, nil
 }
 
-// AddEdge records a typed DAG edge between two segments. edgeType must be one
-// of delegation/mention/completion (the interaction_dag_edge.type CHECK values)
-// else ErrInvalidEdgeType is returned. No FK to interaction_dag_segment so an
-// edge can be recorded before both endpoints are known (best-effort); U8's
-// assembly validates integrity.
-func (s *InteractionDAGService) AddEdge(ctx context.Context, projectID, srcSegmentID, dstSegmentID, edgeType string) error {
+// AddEdge records a canonical workspace-scoped edge. Both endpoint segments
+// must already exist in the workspace. Non-continuation edges resolve their
+// durable trigger to the final persisted task message in the source Segment's
+// frozen range; continuation edges have no trigger identity.
+func (s *InteractionDAGService) AddEdge(ctx context.Context, workspaceID pgtype.UUID, srcSegmentID, dstSegmentID, edgeType string) error {
 	if !s.enabled || s.store == nil {
 		return nil
 	}
 	if !validEdgeTypes[edgeType] {
-		return fmt.Errorf("%w: %q (want delegation|mention|completion)", ErrInvalidEdgeType, edgeType)
+		return fmt.Errorf("%w: %q (want continues|responds_to|delegates_to|mentions)", ErrInvalidEdgeType, edgeType)
 	}
-	if projectID == "" || srcSegmentID == "" || dstSegmentID == "" {
-		return errors.New("interaction_dag: AddEdge requires project_id, src_segment_id, dst_segment_id")
+	if !workspaceID.Valid || srcSegmentID == "" || dstSegmentID == "" {
+		return errors.New("interaction_dag: AddEdge requires workspace_id, src_segment_id, dst_segment_id")
 	}
-	return s.store.InsertInteractionDAGEdge(ctx, db.InsertInteractionDAGEdgeParams{
-		ProjectID:    projectID,
+
+	_, err := s.store.InsertUniversalDAGEdgeAtomic(ctx, db.InsertUniversalDAGEdgeAtomicParams{
+		WorkspaceID:  workspaceID,
 		SrcSegmentID: srcSegmentID,
 		DstSegmentID: dstSegmentID,
-		Type:         edgeType,
+		EdgeType:     edgeType,
 	})
+	if err != nil {
+		return fmt.Errorf("interaction_dag: insert canonical edge: %w", err)
+	}
+	return nil
 }
 
 // RecordLocalSegmentForEvent records a non-training segment for an env-dispatch
@@ -333,7 +361,11 @@ func (s *InteractionDAGService) RecordLocalSegmentForEvent(
 	}
 
 	// Compute the sequence range for this segment.
-	lastEndSeq, err := s.store.GetLastEndSeqForAgentRun(ctx, agentRunID)
+	agentRunUUID, err := util.ParseUUID(agentRunID)
+	if err != nil {
+		return "", nil, fmt.Errorf("interaction_dag: parse agent_run_id: %w", err)
+	}
+	lastEndSeq, err := s.store.GetLastEndSeqForAgentRun(ctx, agentRunUUID)
 	if err != nil {
 		return "", nil, fmt.Errorf("interaction_dag: get last end_seq for %s: %w", agentRunID, err)
 	}
@@ -341,6 +373,9 @@ func (s *InteractionDAGService) RecordLocalSegmentForEvent(
 	endSeq, err := s.store.GetMaxTaskMessageSeq(ctx, agentRunID)
 	if err != nil {
 		return "", nil, fmt.Errorf("interaction_dag: get max task_message seq for %s: %w", agentRunID, err)
+	}
+	if endSeq < startSeq {
+		startSeq, endSeq = 0, 0
 	}
 
 	// Read persisted task messages in the range and serialize the allowlisted
@@ -357,10 +392,10 @@ func (s *InteractionDAGService) RecordLocalSegmentForEvent(
 	segmentID := sessionID
 	sandboxIDs, issueSnapshotID, envState := encodeEnvSnapshot(envSnapshot)
 
-	if err := s.store.InsertInteractionDAGSegmentWithSnapshot(ctx, db.InsertInteractionDAGSegmentWithSnapshotParams{
+	insertedSegmentID, err := s.store.InsertInteractionDAGSegmentWithSnapshot(ctx, db.InsertInteractionDAGSegmentWithSnapshotParams{
 		SegmentID:        segmentID,
 		ProjectID:        projectID,
-		AgentRunID:       agentRunID,
+		AgentRunID:       agentRunUUID,
 		IssueID:          pgText(issueID),
 		TrajectoryID:     pgtype.Int8{Valid: false},
 		TensorRef:        nil,
@@ -373,11 +408,16 @@ func (s *InteractionDAGService) RecordLocalSegmentForEvent(
 		SandboxIds:       sandboxIDs,
 		IssueSnapshotID:  issueSnapshotID,
 		EnvState:         envState,
-	}); err != nil {
+	})
+	if err != nil {
 		return "", nil, fmt.Errorf("interaction_dag: insert local segment+env_snapshot %s: %w", segmentID, err)
 	}
+	if insertedSegmentID != segmentID {
+		return "", nil, errors.New("interaction_dag: inserted local segment identity mismatch")
+	}
 
-	return segmentID, json.RawMessage(trajectory), nil
+	// This compatibility row is legacy_unverified; do not surface its body.
+	return segmentID, nil, nil
 }
 
 // localTrajectoryEntry is the allowlisted shape for each task_message entry in a
@@ -396,31 +436,20 @@ type localTrajectoryEntry struct {
 // and output are included; provider keys and runtime configuration are excluded
 // by construction (they are not task_message columns).
 func serializeLocalTrajectory(msgs []db.TaskMessage) []byte {
+	policy := DefaultSanitizerPolicy()
 	entries := make([]localTrajectoryEntry, 0, len(msgs))
 	for _, m := range msgs {
-		tool := ""
-		if m.Tool.Valid {
-			tool = m.Tool.String
-		}
-		content := ""
-		if m.Content.Valid {
-			content = m.Content.String
-		}
-		output := ""
-		if m.Output.Valid {
-			output = m.Output.String
-		}
-		input := ""
-		if len(m.Input) > 0 {
-			input = string(m.Input)
-		}
+		// Compatibility rows pass through the same per-field gates as the
+		// canonical pipeline — redaction, binary rejection, size cap — so no
+		// unredacted pipeline payload is persisted anywhere (spec AC 8).
+		sanitized, _ := sanitizeTaskMessageFields(m, policy)
 		entries = append(entries, localTrajectoryEntry{
-			Seq:     m.Seq,
-			Type:    m.Type,
-			Tool:    tool,
-			Content: content,
-			Input:   input,
-			Output:  output,
+			Seq:     sanitized.Sequence,
+			Type:    sanitized.Type,
+			Tool:    sanitized.Tool,
+			Content: sanitized.Content,
+			Input:   sanitized.Input,
+			Output:  sanitized.Output,
 		})
 	}
 	if len(entries) == 0 {
@@ -484,8 +513,8 @@ type AssembledEnvSnapshot struct {
 	EnvState        json.RawMessage `json:"env_state"`
 }
 
-// AssembledEdge mirrors areal's EdgeSpec. type is one of
-// delegation/mention/completion (the interaction_dag_edge.type CHECK values).
+// AssembledEdge mirrors areal's EdgeSpec. Type uses the canonical Edge enum:
+// continues, responds_to, delegates_to, or mentions.
 // branch_from_segment_id / branch_from_checkpoint_id are branch provenance for
 // change 2 (MCTS); emitted nil for now but the fields are present so the JSON
 // contract is stable when MCTS lands.
@@ -525,11 +554,19 @@ func (s *InteractionDAGService) AssembleAssembledDag(ctx context.Context, projec
 		return AssembledDag{}, errors.New("interaction_dag: AssembleAssembledDag requires project_id")
 	}
 
-	segs, err := s.store.ListInteractionDAGSegmentsForProject(ctx, projectID)
+	workspaceID, err := s.store.GetUniversalDAGProjectWorkspace(ctx, projectID)
 	if err != nil {
-		return AssembledDag{}, fmt.Errorf("interaction_dag: list segments for %s: %w", projectID, err)
+		return AssembledDag{}, fmt.Errorf("interaction_dag: resolve project workspace: %w", err)
 	}
-	edges, err := s.store.ListInteractionDAGEdgesForProject(ctx, projectID)
+	projectScope := db.ListInteractionDAGSegmentsForProjectParams{
+		WorkspaceID: workspaceID,
+		ProjectID:   projectID,
+	}
+	segs, err := s.store.ListInteractionDAGSegmentsForProject(ctx, projectScope)
+	if err != nil {
+		return AssembledDag{}, fmt.Errorf("interaction_dag: list project segments: %w", err)
+	}
+	edges, err := s.store.ListInteractionDAGEdgesForProject(ctx, db.ListInteractionDAGEdgesForProjectParams(projectScope))
 	if err != nil {
 		return AssembledDag{}, fmt.Errorf("interaction_dag: list edges for %s: %w", projectID, err)
 	}
@@ -537,11 +574,11 @@ func (s *InteractionDAGService) AssembleAssembledDag(ctx context.Context, projec
 	if err != nil {
 		return AssembledDag{}, fmt.Errorf("interaction_dag: list session_runs for %s: %w", projectID, err)
 	}
-	snaps, err := s.store.ListInteractionDAGEnvSnapshotsForProject(ctx, projectID)
+	snaps, err := s.store.ListInteractionDAGEnvSnapshotsForProject(ctx, db.ListInteractionDAGEnvSnapshotsForProjectParams(projectScope))
 	if err != nil {
 		return AssembledDag{}, fmt.Errorf("interaction_dag: list env_snapshots for %s: %w", projectID, err)
 	}
-	stepRewards, err := s.store.ListInteractionDAGStepRewardsForProject(ctx, projectID)
+	stepRewards, err := s.store.ListInteractionDAGStepRewardsForProject(ctx, db.ListInteractionDAGStepRewardsForProjectParams(projectScope))
 	if err != nil {
 		return AssembledDag{}, fmt.Errorf("interaction_dag: list step_rewards for %s: %w", projectID, err)
 	}
@@ -584,16 +621,28 @@ func (s *InteractionDAGService) AssembleAssembledDag(ctx context.Context, projec
 			ce := sg.ClosingEvent.String
 			closingEvent = &ce
 		}
+		trustedBody := sg.ContentStatus != "legacy_unverified"
+		trajectoryID := (*int64)(nil)
+		tensorRef := json.RawMessage(nil)
+		trajectory := json.RawMessage("[]")
+		if trustedBody {
+			if sg.TrajectoryID > 0 {
+				value := sg.TrajectoryID
+				trajectoryID = &value
+			}
+			tensorRef = tensorRefOrEmpty(sg.TensorRef)
+			trajectory = json.RawMessage(sg.Trajectory)
+		}
 		seg := AssembledSegment{
 			SegmentID:        sg.SegmentID,
-			AgentRunID:       sg.AgentRunID,
+			AgentRunID:       util.UUIDToString(sg.AgentRunID),
 			IssueID:          issueID,
-			TrajectoryID:     int8Ptr(sg.TrajectoryID),
-			TensorRef:        tensorRefOrEmpty(sg.TensorRef),
+			TrajectoryID:     trajectoryID,
+			TensorRef:        tensorRef,
 			ClosingEvent:     closingEvent,
 			TrajectorySource: sg.TrajectorySource,
-			Trainable:        sg.Trainable,
-			Trajectory:       json.RawMessage(sg.Trajectory),
+			Trainable:        trustedBody && sg.Trainable && sg.TrainableEligible,
+			Trajectory:       trajectory,
 			AssistantTurnSeqs: func() []int32 {
 				if seqs, exists := targetsBySegment[sg.SegmentID]; exists {
 					return seqs

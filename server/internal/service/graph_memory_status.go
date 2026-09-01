@@ -8,6 +8,8 @@ import (
 	"sort"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/multica-ai/multica/server/internal/memorygraph"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -19,10 +21,21 @@ import (
 type GraphMemoryStatusService struct {
 	queries *db.Queries // may be nil in tests
 	root    string      // workspaces root; empty resolves MULTICA_WORKSPACES_ROOT
+	shadow  *ShadowGateService
 }
 
 func NewGraphMemoryStatusService(queries *db.Queries, root string) *GraphMemoryStatusService {
 	return &GraphMemoryStatusService{queries: queries, root: root}
+}
+
+// NewGraphMemoryStatusServiceWithPool adds the Task 21 shadow-gate phases
+// and canary evidence to the governance view (nil pool keeps it file-only).
+func NewGraphMemoryStatusServiceWithPool(pool *pgxpool.Pool, queries *db.Queries, root string) *GraphMemoryStatusService {
+	var shadow *ShadowGateService
+	if pool != nil {
+		shadow = NewShadowGateService(pool)
+	}
+	return &GraphMemoryStatusService{queries: queries, root: root, shadow: shadow}
 }
 
 // GraphMemoryGraphStatus is the per-physical-graph view: versions/current
@@ -48,6 +61,11 @@ type GraphMemoryStatus struct {
 	ScopedWriterReady bool                     `json:"scoped_writer_ready"`
 	EmptyStart        bool                     `json:"empty_start"`
 	Graphs            []GraphMemoryGraphStatus `json:"graphs"`
+	// Task 21 rollout health: the workspace's shadow gates (plus the global
+	// training gates) and the six named canaries' latest verdicts. Omitted on
+	// schemas without the gate registry or a configured pool.
+	ShadowGates    []ShadowGateStatus   `json:"shadow_gates,omitempty"`
+	ShadowCanaries []ShadowCanaryResult `json:"shadow_canaries,omitempty"`
 }
 
 // graphConsolidationStateFile mirrors the scheduler's state file name
@@ -87,7 +105,18 @@ func (s *GraphMemoryStatusService) Status(ctx context.Context, workspaceID strin
 		if err := store.Init(); err != nil {
 			return
 		}
+		// Reader authority mirrors production: the DB publication index wins;
+		// the file current pointer is only the legacy-scope fallback.
 		g.CurrentVersion, _ = store.CurrentVersion()
+		if s.queries != nil {
+			if ws, wsErr := util.ParseUUID(workspaceID); wsErr == nil {
+				if owner, ownerErr := util.ParseUUID(ownerID); ownerErr == nil {
+					if _, version, _, found, pubErr := activeGraphPublicationRow(ctx, s.queries, ws, string(kind), owner); pubErr == nil && found {
+						g.CurrentVersion = version
+					}
+				}
+			}
+		}
 		g.Versions, _ = store.ListVersions()
 		sort.Ints(g.Versions)
 		if segs, err := store.ListStagingSegments(); err == nil {
@@ -111,7 +140,33 @@ func (s *GraphMemoryStatusService) Status(ctx context.Context, workspaceID strin
 		st.Graphs = append(st.Graphs, g)
 		st.EmptyStart = false
 	})
+	s.populateShadowHealth(ctx, workspaceID, st)
 	return st, nil
+}
+
+// populateShadowHealth attaches the Task 21 rollout view (gate phases and
+// canary verdicts) when the DB-backed gate service is configured. Pre-474
+// schemas surface no gates rather than failing the whole status view.
+func (s *GraphMemoryStatusService) populateShadowHealth(ctx context.Context, workspaceID string, st *GraphMemoryStatus) {
+	if s.shadow == nil {
+		return
+	}
+	ws, err := util.ParseUUID(workspaceID)
+	if err != nil {
+		return
+	}
+	if gates, err := s.shadow.ListGates(ctx, ws); err == nil {
+		st.ShadowGates = gates
+	}
+	if canaries, err := s.shadow.EvaluateEvidence(ctx, ws); err == nil {
+		ordered := make([]ShadowCanaryResult, 0, len(AllShadowCanaries()))
+		for _, canary := range AllShadowCanaries() {
+			if result, ok := canaries[canary]; ok {
+				ordered = append(ordered, result)
+			}
+		}
+		st.ShadowCanaries = ordered
+	}
 }
 
 // forEachWorkspaceGraph walks the canonical per-workspace layout

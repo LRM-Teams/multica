@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/messageparts"
+	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -398,7 +399,10 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 			return
 		}
 	}
-	result, err := h.createAgentTransportMessage(r.Context(), source, target, content, parts, attachmentIDs, clientMessageID, seenUpToSeq, initiatorID, req.ContinueAnyway, nil, kindHint)
+	afterInsert := func(ctx context.Context, tx pgx.Tx, message ChannelMessageResponse) error {
+		return h.recordAgentTransportVisibleMessageTx(ctx, tx, source, target, message)
+	}
+	result, err := h.createAgentTransportMessage(r.Context(), source, target, content, parts, attachmentIDs, clientMessageID, seenUpToSeq, initiatorID, req.ContinueAnyway, afterInsert, kindHint)
 	if err != nil {
 		var freshnessHold *agentTransportFreshnessHoldError
 		if errors.As(err, &freshnessHold) {
@@ -1284,6 +1288,114 @@ func (h *Handler) agentAgentDMChannelMatches(ctx context.Context, workspaceID, c
 }
 
 // agentTransportMessageAfterInsert runs inside the Message insert transaction.
+
+func (h *Handler) resolveAgentTransportTaskTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	source agentTransportSource,
+	target agentTransportTarget,
+) (db.AgentInboxEvent, bool, error) {
+	var taskID pgtype.UUID
+	err := tx.QueryRow(ctx, `
+		SELECT event.id
+		FROM agent_inbox_event event
+		LEFT JOIN channel_agent_session session
+		  ON session.chat_session_id = event.chat_session_id
+		WHERE event.workspace_id = $1
+		  AND event.agent_id = $2
+		  AND event.status = 'draining'
+		  AND (event.channel_id = $3 OR session.channel_id = $3)
+		ORDER BY event.started_at DESC NULLS LAST, event.created_at DESC, event.id DESC
+		LIMIT 1
+		FOR UPDATE OF event`,
+		source.origin.workspaceID,
+		source.origin.agentID,
+		parseUUID(target.channel.ID),
+	).Scan(&taskID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return db.AgentInboxEvent{}, false, nil
+	}
+	if err != nil {
+		return db.AgentInboxEvent{}, false, fmt.Errorf("resolve transport task: %w", err)
+	}
+	task, err := h.Queries.WithTx(tx).GetAgentTask(ctx, taskID)
+	if err != nil {
+		return db.AgentInboxEvent{}, false, fmt.Errorf("load transport task: %w", err)
+	}
+	return task, true, nil
+}
+
+func (h *Handler) resolveAgentTransportProviderCaptureTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	source agentTransportSource,
+	target agentTransportTarget,
+) (pgtype.UUID, pgtype.UUID, string, error) {
+	var runID, runAgentID pgtype.UUID
+	var correlationKey string
+	err := tx.QueryRow(ctx, `
+		SELECT run.run_id, run_agent.run_agent_id, run_agent.capture_boundary
+		FROM env_dispatch_run run
+		JOIN env_dispatch_run_agent run_agent ON run_agent.run_id = run.run_id
+		WHERE run.workspace_id = $1
+		  AND run.local_channel_id = $2
+		  AND run_agent.execution_agent_id = $3
+		  AND run.status IN ('running', 'quiet_candidate')
+		  AND run_agent.settled_at IS NULL
+		ORDER BY run.created_at DESC, run.run_id DESC
+		LIMIT 1`,
+		source.origin.workspaceID,
+		parseUUID(target.channel.ID),
+		source.origin.agentID,
+	).Scan(&runID, &runAgentID, &correlationKey)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return pgtype.UUID{}, pgtype.UUID{}, "", nil
+	}
+	if err != nil {
+		return pgtype.UUID{}, pgtype.UUID{}, "", fmt.Errorf("resolve transport provider capture: %w", err)
+	}
+	return runID, runAgentID, correlationKey, nil
+}
+
+func (h *Handler) recordAgentTransportVisibleMessageTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	source agentTransportSource,
+	target agentTransportTarget,
+	message ChannelMessageResponse,
+) error {
+	task, found, err := h.resolveAgentTransportTaskTx(ctx, tx, source, target)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return nil
+	}
+	projectID := pgtype.UUID{}
+	if target.channel.ProjectID != nil {
+		projectID = parseUUID(*target.channel.ProjectID)
+	}
+	runID, runAgentID, correlationKey, err := h.resolveAgentTransportProviderCaptureTx(ctx, tx, source, target)
+	if err != nil {
+		return err
+	}
+	_, err = h.TaskService.RecordVisibleTaskActionTx(
+		ctx,
+		h.Queries.WithTx(tx),
+		tx,
+		task,
+		service.DAGCloseMessage,
+		parseUUID(message.ID),
+		message.Content,
+		projectID,
+		parseUUID(target.channel.ID),
+		runID,
+		runAgentID,
+		correlationKey,
+	)
+	return err
+}
+
 // It is intentionally limited to durable database state: realtime delivery and
 // all other effects remain after the transaction commits.
 type agentTransportMessageAfterInsert func(context.Context, pgx.Tx, ChannelMessageResponse) error
@@ -1539,9 +1651,14 @@ func (h *Handler) findAgentChannelMessageByClientIDWithExec(ctx context.Context,
 func (h *Handler) addAgentTransportCanonicalReaction(ctx context.Context, source agentTransportSource, message ChannelMessageResponse, emoji string) (ChannelReactionResponse, bool, error) {
 	channelID := parseUUID(message.ChannelID)
 	messageID := parseUUID(message.ID)
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return ChannelReactionResponse{}, false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
 	var id, returnedMessageID, actorID pgtype.UUID
 	var createdAt pgtype.Timestamptz
-	err := h.DB.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		INSERT INTO channel_message_reaction (channel_message_id, workspace_id, actor_type, actor_id, emoji)
 		SELECT cm.id, cm.workspace_id, 'agent', $3, $4
 		FROM channel_message cm
@@ -1554,8 +1671,10 @@ func (h *Handler) addAgentTransportCanonicalReaction(ctx context.Context, source
 		RETURNING id, channel_message_id, actor_id, created_at`,
 		messageID, channelID, source.origin.agentID, emoji, source.origin.workspaceID,
 	).Scan(&id, &returnedMessageID, &actorID, &createdAt)
+	added := true
 	if errors.Is(err, pgx.ErrNoRows) {
-		err = h.DB.QueryRow(ctx, `
+		added = false
+		err = tx.QueryRow(ctx, `
 			SELECT r.id, r.channel_message_id, r.actor_id, r.created_at
 			FROM channel_message_reaction r
 			JOIN channel_message cm ON cm.id = r.channel_message_id
@@ -1572,22 +1691,45 @@ func (h *Handler) addAgentTransportCanonicalReaction(ctx context.Context, source
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ChannelReactionResponse{}, false, errAgentTransportMessageNotFound
 		}
-		if err != nil {
-			return ChannelReactionResponse{}, false, err
-		}
-		reaction := agentTransportCanonicalReactionResponse(channelID, id, returnedMessageID, actorID, emoji, createdAt)
-		return reaction, false, nil
 	}
 	if err != nil {
 		return ChannelReactionResponse{}, false, err
 	}
 	reaction := agentTransportCanonicalReactionResponse(channelID, id, returnedMessageID, actorID, emoji, createdAt)
-	h.publishChannelToMembers(ctx, protocol.EventChannelReactionAdded, message.WorkspaceID, "agent", uuidToString(source.origin.agentID), channelID, map[string]any{
-		"reaction":   reaction,
-		"channel_id": message.ChannelID,
-		"message_id": message.ID,
-	})
-	return reaction, true, nil
+	if added {
+		target := agentTransportTarget{channel: ChannelResponse{ID: message.ChannelID, WorkspaceID: message.WorkspaceID}}
+		task, found, err := h.resolveAgentTransportTaskTx(ctx, tx, source, target)
+		if err != nil {
+			return ChannelReactionResponse{}, false, err
+		}
+		if found {
+			var projectID pgtype.UUID
+			if err := tx.QueryRow(ctx, `SELECT project_id FROM channel WHERE id = $1`, channelID).Scan(&projectID); err != nil {
+				return ChannelReactionResponse{}, false, err
+			}
+			runID, runAgentID, correlationKey, err := h.resolveAgentTransportProviderCaptureTx(ctx, tx, source, target)
+			if err != nil {
+				return ChannelReactionResponse{}, false, err
+			}
+			if _, err := h.TaskService.RecordVisibleTaskActionTx(
+				ctx, h.Queries.WithTx(tx), tx, task, service.DAGCloseReaction, id, emoji,
+				projectID, channelID, runID, runAgentID, correlationKey,
+			); err != nil {
+				return ChannelReactionResponse{}, false, err
+			}
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ChannelReactionResponse{}, false, err
+	}
+	if added {
+		h.publishChannelToMembers(ctx, protocol.EventChannelReactionAdded, message.WorkspaceID, "agent", uuidToString(source.origin.agentID), channelID, map[string]any{
+			"reaction":   reaction,
+			"channel_id": message.ChannelID,
+			"message_id": message.ID,
+		})
+	}
+	return reaction, added, nil
 }
 
 func (h *Handler) removeAgentTransportCanonicalReaction(ctx context.Context, source agentTransportSource, message ChannelMessageResponse, emoji string) (bool, error) {

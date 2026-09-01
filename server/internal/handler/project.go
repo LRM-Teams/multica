@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/logger"
+	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -541,11 +542,29 @@ func (h *Handler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.Queries.DeleteProject(r.Context(), db.DeleteProjectParams{
+	// Task 8A: fence the project's canonical memory sources in the same
+	// transaction as the business delete.
+	tx, err := h.beginMemoryRetractionTx(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to start transaction")
+		return
+	}
+	defer func() { _ = tx.Rollback(r.Context()) }()
+	if err := h.fenceMemorySourcesTx(r.Context(), tx, project.WorkspaceID,
+		[]service.MemorySourceRef{memorySourceRef(project.WorkspaceID, service.MemorySourceProject, project.ID)},
+		"member:"+userID, "project deleted"); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to fence project memory")
+		return
+	}
+	if err := h.Queries.WithTx(tx).DeleteProject(r.Context(), db.DeleteProjectParams{
 		ID:          project.ID,
 		WorkspaceID: project.WorkspaceID,
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete project")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to commit project delete")
 		return
 	}
 	h.publish(protocol.EventProjectDeleted, workspaceID, "member", userID, map[string]any{"project_id": uuidToString(project.ID)})

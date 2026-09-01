@@ -24,10 +24,11 @@ type GraphMemoryConsolidationService struct {
 	queries *db.Queries
 	pool    *pgxpool.Pool
 	root    string
+	policy  *MemoryProviderPolicyResolver
 }
 
-func NewGraphMemoryConsolidationService(queries *db.Queries, pool *pgxpool.Pool, root string) *GraphMemoryConsolidationService {
-	return &GraphMemoryConsolidationService{queries: queries, pool: pool, root: root}
+func NewGraphMemoryConsolidationService(queries *db.Queries, pool *pgxpool.Pool, root string, policy *MemoryProviderPolicyResolver) *GraphMemoryConsolidationService {
+	return &GraphMemoryConsolidationService{queries: queries, pool: pool, root: root, policy: policy}
 }
 
 // ErrGraphNotReady is the stable refusal for non-graph or not-ready
@@ -79,6 +80,17 @@ func (s *GraphMemoryConsolidationService) execute(ctx context.Context, runID pgt
 			return
 		}
 	}
+	workspaceUUID, err := util.ParseUUID(workspaceID)
+	if err != nil {
+		finish("failed", err.Error())
+		return
+	}
+	resolved, err := s.policy.Resolve(ctx, workspaceUUID, ProviderConsolidate)
+	if err != nil {
+		finish("failed", err.Error())
+		return
+	}
+	scope := resolvedMemoryProviderScope(workspaceID, ProviderConsolidate, resolved)
 	coordinator := NewGraphMutationCoordinator(s.pool)
 	failed := false
 	forEachWorkspaceGraph(root, workspaceID, func(kind memorygraph.GraphDirKind, ownerID, dir string) {
@@ -87,7 +99,7 @@ func (s *GraphMemoryConsolidationService) execute(ctx context.Context, runID pgt
 			if err := store.Init(); err != nil {
 				return err
 			}
-			backend, err := graphMemoryPIBackend()
+			backend, err := graphMemoryPIBackend(resolved)
 			if err != nil {
 				return err
 			}
@@ -95,7 +107,7 @@ func (s *GraphMemoryConsolidationService) execute(ctx context.Context, runID pgt
 			if !tttEnabled {
 				cfg.TTVTrajectories = 1
 			}
-			c := memorygraph.NewConsolidator(store, backend, cfg, "pi",
+			c := memorygraph.NewConsolidator(store, backend, cfg, scope,
 				memorygraph.NewOpLogger(store), memorygraph.NewTraceRecorder(dir))
 			res, err := c.Consolidate(ctx)
 			if err != nil {
@@ -117,16 +129,26 @@ func (s *GraphMemoryConsolidationService) execute(ctx context.Context, runID pgt
 	finish("succeeded", "")
 }
 
-// graphMemoryPIBackend mirrors the scheduler job's pi backend construction
-// (MULTICA_PI_PATH / MULTICA_PI_MODEL env contract).
-func graphMemoryPIBackend() (memorygraph.AgentBackend, error) {
-	path := strings.TrimSpace(os.Getenv("MULTICA_PI_PATH"))
-	if path == "" {
-		path = "pi"
+// graphMemoryPIBackend constructs the exact resolver-selected agent backend.
+func graphMemoryPIBackend(policy ResolvedMemoryProvider) (memorygraph.AgentBackend, error) {
+	cfg := agentpkg.Config{}
+	if policy.Provider == "pi" {
+		path := strings.TrimSpace(os.Getenv("MULTICA_PI_PATH"))
+		if path == "" {
+			path = "pi"
+		}
+		cfg.ExecutablePath = path
 	}
-	backend, err := agentpkg.New("pi", agentpkg.Config{ExecutablePath: path})
+	backend, err := agentpkg.New(policy.Provider, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("pi backend: %w", err)
+		return nil, fmt.Errorf("consolidation backend: %w", err)
 	}
 	return backend, nil
+}
+
+// GraphMemoryWorkspacesRootPath exposes the graph workspaces root for
+// cross-package wiring (handler/scheduler) without duplicating the env
+// resolution.
+func GraphMemoryWorkspacesRootPath() (string, error) {
+	return graphMemoryWorkspacesRoot()
 }

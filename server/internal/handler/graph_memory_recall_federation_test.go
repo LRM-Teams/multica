@@ -26,8 +26,13 @@ func TestGraphMemoryRecallFederatesResearchGraph(t *testing.T) {
 	root := t.TempDir()
 	mustGraphMemoryGraphProfile(t, fx.workspaceID, false, 1)
 
-	// Channel task routed into the project lineage: the primary target.
-	if _, err := testPool.Exec(ctx, `UPDATE channel SET project_id = $2 WHERE id = $1`, fx.channelID, fx.projectID); err != nil {
+	// Channel task routed into the project lineage: the primary target. The
+	// binding goes through the guarded service (universal DAG channel
+	// migration): direct channel.project_id writes fail the check constraint.
+	bindSvc := service.NewChannelProjectBindingService(testPool)
+	if _, err := bindSvc.SetChannelProject(ctx, service.ChannelProjectBindingParams{
+		WorkspaceID: fx.workspaceID, ChannelID: fx.channelID, NewProjectID: fx.projectID, Actor: "federation-test",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	mustGraphMemoryTaskScope(t, fx.taskID, "channel_id", fx.channelID)

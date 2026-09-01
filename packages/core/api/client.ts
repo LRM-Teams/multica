@@ -443,6 +443,12 @@ import {
   GraphMemoryConsolidationRunSchema,
   GraphMemoryConsolidationListSchema,
   EMPTY_GRAPH_MEMORY_CONSOLIDATION_RUN,
+  TrainingGovernanceResponseSchema,
+  EMPTY_TRAINING_GOVERNANCE,
+  TrainingGrantRevokeResponseSchema,
+  TrainingPolicyEnvelopeSchema,
+  MemoryRetentionResponseSchema,
+  EMPTY_MEMORY_RETENTION,
   EvolutionMetricsSchema,
   EvolutionTrainingExampleListSchema,
   EvolutionTrainingExampleSchema,
@@ -458,6 +464,10 @@ import {
   MemoryCuratorProfileSchema,
   GraphMemoryProfileSchema,
   GraphMemoryChannelModeSchema,
+  EMPTY_MEMORY_EXPLORE_V2_SEARCH,
+  MemoryExploreV2SearchResponseSchema,
+  MemoryExploreV2EvidenceSchema,
+  MemoryExploreV2HistorySchema,
   GraphMemoryMessageCitationsSchema,
   StartMemoryCurationRunResponseSchema,
   MemoryCurationBackfillResponseSchema,
@@ -521,6 +531,19 @@ import {
   EMPTY_NOTE_PERIOD_BRIEF_ACTIVE,
   InsertNotePeriodBriefResponseSchema,
   EMPTY_INSERT_NOTE_PERIOD_BRIEF_RESPONSE,
+} from "./schemas";
+import type {
+  MemoryExploreV2SearchResponse,
+  MemoryExploreV2Evidence,
+  MemoryExploreV2History,
+  MemoryRef,
+  TrainingGovernanceResponse,
+  TrainingGrantRevokeResponse,
+  UpdateTrainingGrantRequest,
+  TrainingPolicy,
+  TrainingPolicyPatch,
+  MemoryRetentionResponse,
+  UpdateMemoryRetentionRequest,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -3292,6 +3315,45 @@ export class ApiClient {
     });
   }
 
+  // Memory Explore v2 (plan Task 13). Every request is re-gated server-side;
+  // a disabled workspace answers 503 and these helpers surface the error.
+  async memoryExploreV2Search(
+    workspaceId: string,
+    query: string,
+    channelId: string,
+  ): Promise<MemoryExploreV2SearchResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/memory/explore-v2/search`,
+      { method: "POST", body: JSON.stringify({ query, channel_id: channelId }) },
+    );
+    return parseWithFallback(raw, MemoryExploreV2SearchResponseSchema, EMPTY_MEMORY_EXPLORE_V2_SEARCH, {
+      endpoint: "POST /api/workspaces/{id}/memory/explore-v2/search",
+    });
+  }
+
+  async memoryExploreV2Evidence(
+    workspaceId: string,
+    trajectoryId: string,
+    ref: MemoryRef,
+  ): Promise<MemoryExploreV2Evidence> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/memory/explore-v2/evidence`,
+      { method: "POST", body: JSON.stringify({ trajectory_id: trajectoryId, ref }) },
+    );
+    return parseWithFallback(raw, MemoryExploreV2EvidenceSchema, {
+      ref, segment_id: "", summary: "", publish_seq: 0,
+    }, { endpoint: "POST /api/workspaces/{id}/memory/explore-v2/evidence" });
+  }
+
+  async memoryExploreV2History(workspaceId: string, trajectoryId: string): Promise<MemoryExploreV2History> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/memory/explore-v2/history?trajectory_id=${encodeURIComponent(trajectoryId)}`,
+    );
+    return parseWithFallback(raw, MemoryExploreV2HistorySchema, {
+      trajectory_id: trajectoryId, refs: [],
+    }, { endpoint: "GET /api/workspaces/{id}/memory/explore-v2/history" });
+  }
+
   async getGraphMemoryChannelMode(workspaceId: string, channelId: string): Promise<GraphMemoryChannelMode> {
     const raw = await this.fetch<unknown>(
       `/api/workspaces/${encodeURIComponent(workspaceId)}/graph-memory/channels/${encodeURIComponent(channelId)}/mode`,
@@ -3363,7 +3425,80 @@ export class ApiClient {
     );
     return parseWithFallback(raw, GraphMemoryChannelLineageSchema, {
       workspace_id: workspaceId, channel_id: channelId, routing_mode: "", current: null, lineage: [],
+      migration: null,
     }, { endpoint: "GET /api/workspaces/{id}/graph-memory/channels/{channelId}/lineage" });
+  }
+
+  // Training governance (plan Task 18): owner/admin surfaces. PUT failures
+  // (409 CAS conflicts, 403, 503) must surface as ApiError — no fallback.
+
+  async getTrainingGovernance(workspaceId: string): Promise<TrainingGovernanceResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/training/grant`,
+    );
+    return parseWithFallback(raw, TrainingGovernanceResponseSchema, EMPTY_TRAINING_GOVERNANCE, {
+      endpoint: "GET /api/workspaces/{id}/training/grant",
+    });
+  }
+
+  async updateTrainingGrant(
+    workspaceId: string,
+    request: UpdateTrainingGrantRequest,
+  ): Promise<TrainingGovernanceResponse | TrainingGrantRevokeResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/training/grant`,
+      { method: "PUT", body: JSON.stringify(request) },
+    );
+    // ack/opt_in answer with the governance pair; revoke answers with the
+    // invalidation report — parse by the requested action.
+    if (request.action === "revoke") {
+      return parseWithFallback(raw, TrainingGrantRevokeResponseSchema, {
+        workspace_id: workspaceId, purpose: request.purpose,
+        invalidated: 0, revoked_samples: 0, deletion_ledger_rows: 0,
+      }, { endpoint: "PUT /api/workspaces/{id}/training/grant" });
+    }
+    return parseWithFallback(raw, TrainingGovernanceResponseSchema, EMPTY_TRAINING_GOVERNANCE, {
+      endpoint: "PUT /api/workspaces/{id}/training/grant",
+    });
+  }
+
+  async updateTrainingPolicy(
+    workspaceId: string,
+    patch: TrainingPolicyPatch,
+  ): Promise<TrainingPolicy> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/training/policy`,
+      { method: "PUT", body: JSON.stringify(patch) },
+    );
+    const parsed = parseWithFallback(raw, TrainingPolicyEnvelopeSchema, { policy: EMPTY_TRAINING_GOVERNANCE.policy }, {
+      endpoint: "PUT /api/workspaces/{id}/training/policy",
+    });
+    return parsed.policy;
+  }
+
+  // Memory retention (plan Task 17): versioned CAS policy bounded by caps.
+  // PUT failures (409 version conflict, 422 over-cap) surface as ApiError.
+
+  async getMemoryRetention(workspaceId: string): Promise<MemoryRetentionResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/memory/retention`,
+    );
+    return parseWithFallback(raw, MemoryRetentionResponseSchema, EMPTY_MEMORY_RETENTION, {
+      endpoint: "GET /api/workspaces/{id}/memory/retention",
+    });
+  }
+
+  async updateMemoryRetention(
+    workspaceId: string,
+    request: UpdateMemoryRetentionRequest,
+  ): Promise<MemoryRetentionResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/memory/retention`,
+      { method: "PUT", body: JSON.stringify(request) },
+    );
+    return parseWithFallback(raw, MemoryRetentionResponseSchema, EMPTY_MEMORY_RETENTION, {
+      endpoint: "PUT /api/workspaces/{id}/memory/retention",
+    });
   }
 
   async startGraphMemoryConsolidation(workspaceId: string): Promise<{ id: string; status: string }> {

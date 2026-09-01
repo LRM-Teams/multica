@@ -21,6 +21,7 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/service"
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -244,12 +245,12 @@ func newDiagnosisRunAPITestEnv(t *testing.T) *diagnosisRunAPITestEnv {
 	pager := &fakeDiagnosisRunPager{}
 	dagWriter := newFakeDiagnosisRunDAGWriter()
 	segments := &fakeDiagnosisRunSegmentLookup{segments: map[string]db.GetInteractionDAGSegmentByIDRow{
-		"seg-1": {SegmentID: "seg-1", ProjectID: "project-1", AgentRunID: "task-1", StartSeq: 1, EndSeq: 5},
-		"seg-2": {SegmentID: "seg-2", ProjectID: "project-1", AgentRunID: "task-1", StartSeq: 1, EndSeq: 1},
+		"seg-1": {SegmentID: "seg-1", ProjectIDAtEvent: util.MustParseUUID("22222222-2222-2222-2222-222222222222"), AgentRunID: util.MustParseUUID("11111111-1111-1111-1111-111111111111"), StartSeq: 1, EndSeq: 5, ContentStatus: "published"},
+		"seg-2": {SegmentID: "seg-2", ProjectIDAtEvent: util.MustParseUUID("22222222-2222-2222-2222-222222222222"), AgentRunID: util.MustParseUUID("11111111-1111-1111-1111-111111111111"), StartSeq: 1, EndSeq: 1, ContentStatus: "published"},
 	}}
 	run := middleware.DiagnosisRun{
 		RunID:               "run-1",
-		ProjectID:           "project-1",
+		ProjectID:           "22222222-2222-2222-2222-222222222222",
 		TaskID:              "task-1",
 		TopologyHash:        "topo-1",
 		OrderedSegmentIDs:   []string{"seg-1", "seg-2"},
@@ -366,7 +367,7 @@ func TestDiagnosisRunAPI_RecordStepRewards_Idempotent(t *testing.T) {
 	assert.Equal(t, []int{1, 2}, result.PersistedSeqs)
 	assert.Empty(t, result.Rejected)
 
-	score, _, exists, err := env.dagWriter.GetDiagnosisStepReward(context.Background(), "project-1", "seg-1", 1)
+	score, _, exists, err := env.dagWriter.GetDiagnosisStepReward(context.Background(), env.run.ProjectID, "seg-1", 1)
 	require.NoError(t, err)
 	assert.True(t, exists)
 	assert.Equal(t, 8, score)

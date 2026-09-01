@@ -181,3 +181,43 @@ func graphMemoryLineageResponseFor(t *testing.T, userID, workspaceID, channelID 
 	testHandler.GetGraphMemoryChannelLineage(rec, req)
 	return rec
 }
+
+// Task 16: the lineage surfaces the latest migration binding generation
+// and the copy worker's phase (spec §12 observability).
+func TestGetGraphMemoryChannelLineageShowsMigration(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("test database unavailable")
+	}
+	ctx := context.Background()
+	workspaceID := createGraphMemoryTestWorkspace(t)
+	mustGraphMemoryMember(t, workspaceID, "owner")
+	channelID := createGraphMemoryTestChannel(t, workspaceID)
+	if _, err := service.ResolveChannelRoute(ctx, testPool, workspaceID.String(), channelID.String()); err != nil {
+		t.Fatal(err)
+	}
+	// A channel with no published atoms has watermark 0, so the binding
+	// records the generation without queuing a copy.
+	var projectID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO project (workspace_id, title) VALUES ($1, $2) RETURNING id`,
+		workspaceID, "Lineage migration project").Scan(&projectID); err != nil {
+		t.Fatal(err)
+	}
+	bindChannelProjectStrings(t, ctx, channelID.String(), projectID)
+
+	req := withRouteParams(newRequest(http.MethodGet,
+		"/api/workspaces/"+workspaceID.String()+"/graph-memory/channels/"+channelID.String()+"/lineage", nil),
+		"id", workspaceID.String(), "channelId", channelID.String())
+	rec := httptest.NewRecorder()
+	testHandler.GetGraphMemoryChannelLineage(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("lineage after bind: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"migration":{`) || !strings.Contains(body, `"binding_generation":1`) {
+		t.Fatalf("migration section missing: %s", body)
+	}
+	if strings.Contains(body, `"phase"`) {
+		t.Fatalf("no copy queued at watermark 0, phase must stay absent: %s", body)
+	}
+}

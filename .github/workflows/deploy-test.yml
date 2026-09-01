@@ -231,18 +231,33 @@ jobs:
             sleep 2
           done
           # s89 currently runs Docker Compose 2.32.1, whose `run` command has
-          # no `--pull` flag. Pull explicitly so migrations still execute from
-          # the exact immutable image selected by IMAGE_TAG.
-          compose pull backend
+          # no `--pull` flag. Pull every application image before stopping the
+          # live backend so a slow registry cannot extend the cutover window.
+          compose pull frontend backend
           # Migration 339 removes the retired agent_start_intent table. Stop
           # the old backend before applying migrations so it can never run
           # against the new schema during the coordinated protocol cutover.
+          backend_stopped=false
+          recover_backend() {
+            status=$?
+            trap - EXIT
+            if [ "$backend_stopped" = true ]; then
+              echo "::warning::deploy interrupted after backend stop; starting the selected backend image"
+              compose up -d backend || true
+            fi
+            exit "$status"
+          }
+          trap recover_backend EXIT
+          backend_stopped=true
           compose stop backend
           compose run --rm --no-deps --entrypoint ./migrate backend up
           # These variables expand inside the PostgreSQL container.
           # shellcheck disable=SC2016
           schema_ready="$(compose exec -T postgres sh -ec 'PGPASSWORD="$POSTGRES_PASSWORD" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "SELECT to_regclass('"'"'public.computers'"'"') IS NOT NULL AND to_regclass('"'"'public.computer_workspace_bindings'"'"') IS NOT NULL"')"
           [ "$schema_ready" = t ] || { echo "::error::Computer Workspace binding schema is missing after migration"; exit 1; }
+          compose up -d backend
+          backend_stopped=false
+          trap - EXIT
 
       - name: Roll test application
         run: |
@@ -262,9 +277,7 @@ jobs:
               -f "${bundle}/docker-compose.selfhost.yml" \
               -f "${bundle}/docker-compose.s89.yml" "$@"
           }
-          compose pull frontend backend
           compose up -d frontend
-          compose up -d backend
           compose up -d --no-deps --force-recreate caddy
 
       - name: Verify exact test images and served health

@@ -251,6 +251,45 @@ jobs:
           trap recover_backend EXIT
           backend_stopped=true
           compose stop backend
+          # Migration 476 (universal interaction DAG) is fail-closed by design:
+          # it refuses legacy interaction DAG rows that cannot be classified,
+          # and the test database accumulated such rows under the old dev
+          # schema, so the pending migration would abort every deploy. Keep the
+          # test lane rollable: snapshot the legacy DAG tables into a
+          # quarantine schema (audit trail; nothing is destroyed) and empty the
+          # two tables the classification guard reads, so the migration applies
+          # against a clean slate. The script self-skips once 476 is recorded.
+          compose exec -T postgres sh -ec 'PGPASSWORD="$POSTGRES_PASSWORD" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1' <<'PSQL'
+            \echo === legacy interaction DAG quarantine (before migration 476) ===
+            SELECT to_regclass('public.schema_migrations') IS NOT NULL
+                   AND EXISTS (SELECT 1 FROM public.schema_migrations
+                               WHERE version = '476_universal_interaction_dag') AS migration476_applied
+            \gset
+            \if :migration476_applied
+            \echo migration 476 already applied; nothing to quarantine
+            \quit
+            \endif
+            BEGIN;
+            CREATE SCHEMA IF NOT EXISTS legacy_dag_quarantine;
+            -- Children are snapshotted before the segment delete because their
+            -- foreign keys cascade. Each statement is guarded on table
+            -- existence so the helper also works on databases that never
+            -- carried a given legacy table.
+            SELECT format(
+                     'CREATE TABLE IF NOT EXISTS legacy_dag_quarantine.%1$I AS SELECT now() AS quarantined_at, t.* FROM public.%1$I t WITH NO DATA; INSERT INTO legacy_dag_quarantine.%1$I SELECT now(), t.* FROM public.%1$I t;',
+                     x.tbl)
+            FROM (VALUES ('interaction_dag_segment'), ('interaction_dag_edge'), ('interaction_dag_env_snapshot'),
+                         ('interaction_dag_step_reward'), ('interaction_dag_publish_outbox'),
+                         ('interaction_dag_universal_provider_call')) AS x(tbl)
+            WHERE to_regclass(format('public.%I', x.tbl)) IS NOT NULL
+            \gexec
+            SELECT format('DELETE FROM public.%I;', x.tbl)
+            FROM (VALUES ('interaction_dag_edge'), ('interaction_dag_segment')) AS x(tbl)
+            WHERE to_regclass(format('public.%I', x.tbl)) IS NOT NULL
+            \gexec
+            COMMIT;
+            \echo === quarantine complete ===
+          PSQL
           compose run --rm --no-deps --entrypoint ./migrate backend up
           # These variables expand inside the PostgreSQL container.
           # shellcheck disable=SC2016

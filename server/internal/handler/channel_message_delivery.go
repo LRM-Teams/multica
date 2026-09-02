@@ -113,7 +113,7 @@ func (h *Handler) persistCanonicalMessageDeliveryPlans(ctx context.Context, ch C
 		return fmt.Errorf("begin canonical delivery transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	if err := persistCanonicalMessageDeliveryPlansTx(ctx, tx, ch, message, plans); err != nil {
+	if err := h.persistCanonicalMessageDeliveryPlansTx(ctx, tx, ch, message, plans); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -122,7 +122,7 @@ func (h *Handler) persistCanonicalMessageDeliveryPlans(ctx context.Context, ch C
 	return nil
 }
 
-func persistCanonicalMessageDeliveryPlansTx(ctx context.Context, tx pgx.Tx, ch ChannelResponse, message ChannelMessageResponse, plans []*canonicalMessageDeliveryPlan) error {
+func (h *Handler) persistCanonicalMessageDeliveryPlansTx(ctx context.Context, tx pgx.Tx, ch ChannelResponse, message ChannelMessageResponse, plans []*canonicalMessageDeliveryPlan) error {
 	activity := service.NewEnvDispatchActivityFromQueries(db.New(tx))
 	for _, plan := range plans {
 		delivery, deliveryCreated, err := persistCanonicalMessageDelivery(ctx, tx, ch, message, plan.Recipient)
@@ -142,6 +142,9 @@ func persistCanonicalMessageDeliveryPlansTx(ctx context.Context, tx pgx.Tx, ch C
 		if delivery.Message.Directed {
 			if err := persistGraphMemoryAgentSteeringEvent(ctx, tx, delivery.Message); err != nil {
 				return fmt.Errorf("persist graph memory agent steering event: %w", err)
+			}
+			if err := h.captureDirectedGraphTurnTx(ctx, tx, ch, message, plan.Recipient.ID, delivery.Message.Directed); err != nil {
+				return fmt.Errorf("capture directed graph memory turn: %w", err)
 			}
 		}
 		// A repaired delivery or obligation needs a live notification after the

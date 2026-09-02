@@ -113,7 +113,7 @@ func (h *Handler) persistCanonicalMessageDeliveryPlans(ctx context.Context, ch C
 		return fmt.Errorf("begin canonical delivery transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	if err := persistCanonicalMessageDeliveryPlansTx(ctx, tx, ch, message, plans); err != nil {
+	if err := h.persistCanonicalMessageDeliveryPlansTx(ctx, tx, ch, message, plans); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -122,7 +122,7 @@ func (h *Handler) persistCanonicalMessageDeliveryPlans(ctx context.Context, ch C
 	return nil
 }
 
-func persistCanonicalMessageDeliveryPlansTx(ctx context.Context, tx pgx.Tx, ch ChannelResponse, message ChannelMessageResponse, plans []*canonicalMessageDeliveryPlan) error {
+func (h *Handler) persistCanonicalMessageDeliveryPlansTx(ctx context.Context, tx pgx.Tx, ch ChannelResponse, message ChannelMessageResponse, plans []*canonicalMessageDeliveryPlan) error {
 	activity := service.NewEnvDispatchActivityFromQueries(db.New(tx))
 	for _, plan := range plans {
 		delivery, deliveryCreated, err := persistCanonicalMessageDelivery(ctx, tx, ch, message, plan.Recipient)
@@ -147,6 +147,12 @@ func persistCanonicalMessageDeliveryPlansTx(ctx context.Context, tx pgx.Tx, ch C
 		// A repaired delivery or obligation needs a live notification after the
 		// acceptance boundary; an ordinary complete replay creates neither.
 		plan.Created = deliveryCreated || obligationCreated
+	}
+	// Post-#2295 the channel conversation turn itself has no DAG record;
+	// mint the graph capture anchor for the channel's managed memory agent in
+	// the same transaction (idempotent per message via the partial index).
+	if err := h.captureHumanGraphTurnTx(ctx, tx, ch, message); err != nil {
+		return fmt.Errorf("capture graph memory channel turn: %w", err)
 	}
 	return nil
 }
@@ -297,6 +303,13 @@ func (h *Handler) deliverCanonicalMessageToChannelAgents(ctx context.Context, ch
 	}
 	if err := h.persistCanonicalMessageDeliveryPlans(ctx, ch, message, plans); err != nil {
 		return err
+	}
+	if len(plans) == 0 {
+		// A channel whose only conversational agent is the managed memory
+		// agent produces no delivery plans; the turn still needs its anchor.
+		if err := h.captureGraphTurnStandalone(ctx, ch, message); err != nil {
+			return err
+		}
 	}
 	h.notifyCanonicalMessageDeliveryPlans(ctx, ch, plans)
 	return nil

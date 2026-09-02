@@ -1369,7 +1369,9 @@ func (h *Handler) recordAgentTransportVisibleMessageTx(
 		return err
 	}
 	if !found {
-		return nil
+		// Post-#2295 a managed memory agent's channel reply usually has no
+		// draining task; capture the turn on its own anchor instead.
+		return h.captureGraphAgentReplyTx(ctx, tx, source.origin.workspaceID, source.origin.agentID, target.channel, message)
 	}
 	projectID := pgtype.UUID{}
 	if target.channel.ProjectID != nil {

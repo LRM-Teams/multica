@@ -462,12 +462,18 @@ func seedDAGSegment(t *testing.T, projectID, sessionID, agentRunID string, traje
 	segID := sessionID + "-" + strconv.FormatInt(trajectoryID, 10)
 	if _, err := testPool.Exec(ctx, `
 		WITH seg AS (
-		  INSERT INTO interaction_dag_segment (segment_id, project_id, agent_run_id, trajectory_id, tensor_ref, closing_event)
-		  VALUES ($1, $2, $3, $4, $5, NULL)
+		  INSERT INTO interaction_dag_segment (
+		    segment_id, project_id, project_id_at_event, workspace_id, agent_run_id, generation, trajectory_id, tensor_ref, closing_event,
+		    memory_type_at_event, graph_projection_eligible_at_event, derivative, trainable_eligible,
+		    content_status, provider_capture_status
+		  )
+		  VALUES ($1, $2, $7, (SELECT workspace_id FROM project WHERE id = $6), $3, $4, $4, $5, NULL,
+		    'legacy', false, false, false,
+		    'legacy_unverified', 'not_expected')
 		)
 		INSERT INTO interaction_dag_env_snapshot (segment_id, sandbox_ids, env_state)
 		VALUES ($1, '[]'::jsonb, '{}'::jsonb)
-	`, segID, projectID, agentRunID, trajectoryID, []byte(`{"shard_id":"shard-1"}`)); err != nil {
+	`, segID, projectID, agentRunID, trajectoryID, []byte(`{"shard_id":"shard-1"}`), projectID, projectID); err != nil {
 		t.Fatalf("insert segment+env_snapshot: %v", err)
 	}
 	t.Cleanup(func() {

@@ -52,6 +52,7 @@ var preMigrationHooks = map[string]preMigrationHook{
 	"384_research_message_target_agent_scoped_index":   runAgentDeleteFKIndexesHook,
 	"385_research_message_target_agent_index":          runResearchMessageTargetAgentIndexHook,
 	"425_graph_memory_fk_indexes":                      runAgentDeleteCascadeFKIndexesHook,
+	"490_universal_dag_legacy_backfill":                runUniversalDAGFKIndexesHook,
 }
 
 type concurrentIndexSpec struct {
@@ -175,6 +176,20 @@ func runAgentDeleteCascadeFKIndexesHook(ctx context.Context, pool *pgxpool.Pool)
 	return ensureConcurrentIndexes(ctx, pool, indexes)
 }
 
+// runUniversalDAGFKIndexesHook covers the interaction-DAG references that the
+// 476 universal migration added into the agent/channel delete closures. It is
+// keyed to the tail of the 476-490 block because the columns only exist once
+// 476 has applied; earlier cascade-hook versions run before those tables are
+// shaped and must stay untouched.
+func runUniversalDAGFKIndexesHook(ctx context.Context, pool *pgxpool.Pool) error {
+	indexes := []concurrentIndexSpec{
+		{"idx_interaction_dag_segment_agent_run", `CREATE INDEX CONCURRENTLY idx_interaction_dag_segment_agent_run ON interaction_dag_segment (agent_run_id)`},
+		{"idx_interaction_dag_segment_channel_event", `CREATE INDEX CONCURRENTLY idx_interaction_dag_segment_channel_event ON interaction_dag_segment (channel_id_at_event)`},
+		{"idx_interaction_dag_task_cursor_agent_run", `CREATE INDEX CONCURRENTLY idx_interaction_dag_task_cursor_agent_run ON interaction_dag_task_cursor (agent_run_id)`},
+	}
+	return ensureConcurrentIndexes(ctx, pool, indexes)
+}
+
 func ensureConcurrentIndexes(ctx context.Context, pool *pgxpool.Pool, indexes []concurrentIndexSpec) error {
 	for _, index := range indexes {
 		if relation, optional := agentDeleteIndexOptionalRelations[index.name]; optional {
@@ -192,7 +207,7 @@ func ensureConcurrentIndexes(ctx context.Context, pool *pgxpool.Pool, indexes []
 				SELECT i.indisvalid AND i.indisready
 				FROM pg_class c
 				JOIN pg_index i ON i.indexrelid = c.oid
-				WHERE c.relnamespace = 'public'::regnamespace
+				WHERE c.relnamespace = current_schema()::regnamespace
 				  AND c.relname = $1
 			), false)
 		`, index.name).Scan(&valid); err != nil {

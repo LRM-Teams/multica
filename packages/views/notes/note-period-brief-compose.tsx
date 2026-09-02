@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, Cloud, Laptop, Settings2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Check, Cloud, Folder, Laptop, MonitorSmartphone } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
@@ -10,6 +10,7 @@ import {
   defaultPeriodBriefCollectorIds,
   isPeriodBriefCollectorOnline,
   listOwnedPeriodBriefCollectorAgents,
+  listOwnedPeriodBriefCollectorSlots,
   listPeriodBriefCollectorSlotsNeedingRuntime,
   listPeriodBriefCollectorSlotsNeedingSetup,
   periodBriefCollectorDaemonId,
@@ -33,6 +34,12 @@ import type { NotePeriodBriefWindow } from "@multica/core/types";
 import { agentListOptions } from "@multica/core/workspace/queries";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@multica/ui/components/ui/tooltip";
 import { cn } from "@multica/ui/lib/utils";
 import { useViewingTimezone } from "../common/use-viewing-timezone";
 import { useT } from "../i18n/use-t";
@@ -49,6 +56,42 @@ export type NotePeriodBriefResolved = {
 };
 
 const WINDOW_KINDS: NotePeriodBriefWindow[] = ["day", "week", "month", "custom"];
+
+function CollectorChipIconButton({
+  label,
+  testId,
+  disabled,
+  onClick,
+  children,
+}: {
+  label: string;
+  testId: string;
+  disabled?: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="ghost"
+            className="size-7"
+            disabled={disabled}
+            data-testid={testId}
+            aria-label={label}
+            onClick={onClick}
+          />
+        }
+      >
+        {children}
+      </TooltipTrigger>
+      <TooltipContent side="top">{label}</TooltipContent>
+    </Tooltip>
+  );
+}
 
 export function NotePeriodBriefCompose({
   active,
@@ -135,6 +178,10 @@ export function NotePeriodBriefCompose({
         computers,
       ).filter((slot) => !dismissedMissingKeys.includes(slot.key)),
     [agents, computers, currentUserId, dismissedMissingKeys, runtimes],
+  );
+  const collectorSlots = useMemo(
+    () => listOwnedPeriodBriefCollectorSlots(runtimes, agents, currentUserId, computers),
+    [agents, computers, currentUserId, runtimes],
   );
   const collectorIds = collectorOverride ?? defaultCollectors;
 
@@ -263,6 +310,7 @@ export function NotePeriodBriefCompose({
           {t(($) => $.notes_page.period_brief_collectors_label)}
         </p>
         <div className="max-h-48 space-y-1 overflow-y-auto" data-testid="period-brief-collectors">
+          <TooltipProvider delay={200}>
           {collectorAgents.length === 0 &&
           missingCollectorSlots.length === 0 &&
           waitingRuntimeSlots.length === 0 ? (
@@ -278,6 +326,7 @@ export function NotePeriodBriefCompose({
               const isCloud = agent.runtime_mode === "cloud";
               const RuntimeIcon = isCloud ? Cloud : Laptop;
               const daemonId = periodBriefCollectorDaemonId(agent, runtimes);
+              const slot = collectorSlots.find((item) => item.collector?.id === agent.id);
               return (
                 <div
                   key={agent.id}
@@ -307,31 +356,39 @@ export function NotePeriodBriefCompose({
                     ) : null}
                     {selected ? <Check className="size-3.5 shrink-0 text-primary" /> : null}
                   </button>
-                  {daemonId ? (
-                    <Button
-                      type="button"
-                      size="icon-sm"
-                      variant="ghost"
-                      className="mr-1 size-7 shrink-0"
-                      disabled={busy}
-                      data-testid={`period-brief-collector-roots-${agent.id}`}
-                      aria-label={t(($) => $.notes_page.period_brief_collect_roots_action)}
-                      onClick={() =>
-                        setCollectRootsTarget({
-                          machineId: daemonId,
-                          label: name,
-                          online:
-                            online ||
-                            computers.some(
-                              (computer) =>
-                                computer.daemon_id === daemonId && computer.connected,
-                            ),
-                        })
-                      }
-                    >
-                      <Settings2 className="size-3.5" />
-                    </Button>
-                  ) : null}
+                  <div className="mr-1 flex shrink-0 items-center">
+                    {daemonId ? (
+                      <CollectorChipIconButton
+                        label={t(($) => $.notes_page.period_brief_collect_roots_action)}
+                        testId={`period-brief-collector-roots-${agent.id}`}
+                        disabled={busy}
+                        onClick={() =>
+                          setCollectRootsTarget({
+                            machineId: daemonId,
+                            label: name,
+                            online:
+                              online ||
+                              computers.some(
+                                (computer) =>
+                                  computer.daemon_id === daemonId && computer.connected,
+                              ),
+                          })
+                        }
+                      >
+                        <Folder className="size-3.5" />
+                      </CollectorChipIconButton>
+                    ) : null}
+                    {slot && onConfigureCollector ? (
+                      <CollectorChipIconButton
+                        label={t(($) => $.notes_page.period_brief_collector_rebind_action)}
+                        testId={`period-brief-collector-runtime-${agent.id}`}
+                        disabled={busy}
+                        onClick={() => onConfigureCollector(slot)}
+                      >
+                        <MonitorSmartphone className="size-3.5" />
+                      </CollectorChipIconButton>
+                    ) : null}
+                  </div>
                 </div>
               );
             })}
@@ -394,6 +451,7 @@ export function NotePeriodBriefCompose({
             ))}
             </>
           )}
+          </TooltipProvider>
         </div>
       </div>
       <p className="text-[11px] leading-4 text-muted-foreground">

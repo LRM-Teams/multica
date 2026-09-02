@@ -75,6 +75,7 @@ export function CreateAgentDialog({
   prefill,
   defaultMachineId = null,
   lockComputer = false,
+  labels,
   onClose,
   onCreate,
 }: {
@@ -104,6 +105,7 @@ export function CreateAgentDialog({
     description?: string;
     instructions?: string;
     model?: string;
+    runtime_id?: string;
     lockIdentity?: boolean;
   } | null;
   /** Prefer this group as home when opening on「仅本群」(channel context). */
@@ -112,6 +114,13 @@ export function CreateAgentDialog({
   defaultMachineId?: string | null;
   /** Hide Computer changes — the caller already chose this machine. */
   lockComputer?: boolean;
+  /** Override create-agent chrome when this dialog is reused to bind/repair. */
+  labels?: {
+    title?: string;
+    description?: string;
+    submit?: string;
+    submitting?: string;
+  };
   onClose: () => void;
   // Returns the created Agent so the dialog can run a follow-up
   // setAgentSkills with the IDs the user picked in the form. Pre-skill-
@@ -208,33 +217,29 @@ export function CreateAgentDialog({
     now: Date.now(),
     currentUserId,
   });
-  const [selectedMachineId, setSelectedMachineId] = useState(() => {
-    const templateRuntime = template?.runtime_id
-      ? runtimes.find((r) => r.id === template.runtime_id)
+  const resolvePreferredRuntime = () => {
+    const preferredRuntimeId = template?.runtime_id || prefill?.runtime_id;
+    const runtime = preferredRuntimeId
+      ? runtimes.find((r) => r.id === preferredRuntimeId)
       : undefined;
-    if (
-      templateRuntime &&
-      isRuntimeUsableForUser(templateRuntime, currentUserId, bindableIds)
-    ) {
-      return machineForRuntime(templateRuntime, initialMachines)?.id ?? "";
+    if (runtime && isRuntimeUsableForUser(runtime, currentUserId, bindableIds)) {
+      return runtime;
+    }
+    return undefined;
+  };
+  const [selectedMachineId, setSelectedMachineId] = useState(() => {
+    const preferred = resolvePreferredRuntime();
+    if (preferred) {
+      return machineForRuntime(preferred, initialMachines)?.id ?? "";
     }
     if (defaultMachineId && initialMachines.some((m) => m.id === defaultMachineId)) {
       return defaultMachineId;
     }
     return "";
   });
-  const [selectedRuntimeId, setSelectedRuntimeId] = useState(() => {
-    const templateRuntime = template?.runtime_id
-      ? runtimes.find((r) => r.id === template.runtime_id)
-      : undefined;
-    if (
-      templateRuntime &&
-      isRuntimeUsableForUser(templateRuntime, currentUserId, bindableIds)
-    ) {
-      return templateRuntime.id;
-    }
-    return "";
-  });
+  const [selectedRuntimeId, setSelectedRuntimeId] = useState(
+    () => resolvePreferredRuntime()?.id ?? "",
+  );
 
   const machines = useMemo(
     () => buildRuntimeMachines(runtimes, { now: Date.now(), currentUserId }),
@@ -355,11 +360,12 @@ export function CreateAgentDialog({
     }
   };
 
-  const headerTitle = isDuplicate
-    ? t(($) => $.create_dialog.title_duplicate)
-    : isProposal || isDraft
-      ? t(($) => $.windy.create_agent)
-      : t(($) => $.create_dialog.title_create);
+  const headerTitle = labels?.title
+    ?? (isDuplicate
+      ? t(($) => $.create_dialog.title_duplicate)
+      : isProposal || isDraft
+        ? t(($) => $.windy.create_agent)
+        : t(($) => $.create_dialog.title_create));
 
   return (
     <Dialog open onOpenChange={(v) => { if (!v) onClose(); }}>
@@ -378,9 +384,10 @@ export function CreateAgentDialog({
           )}
           {identityLocked && (
             <DialogDescription className="mt-1 text-xs">
-              {lockComputer
-                ? t(($) => $.create_dialog.description_computer_locked)
-                : t(($) => $.create_dialog.description_identity_locked)}
+              {labels?.description
+                ?? (lockComputer
+                  ? t(($) => $.create_dialog.description_computer_locked)
+                  : t(($) => $.create_dialog.description_identity_locked))}
             </DialogDescription>
           )}
           {(isProposal || isDraft) && (
@@ -537,7 +544,9 @@ export function CreateAgentDialog({
                 : undefined
             }
           >
-            {creating ? t(($) => $.create_dialog.creating) : t(($) => $.create_dialog.create)}
+            {creating
+              ? (labels?.submitting ?? t(($) => $.create_dialog.creating))
+              : (labels?.submit ?? t(($) => $.create_dialog.create))}
           </Button>
         </div>
       </DialogContent>

@@ -584,8 +584,21 @@ export function NoteAssistantBubble({
           currentUserId={currentUser?.id ?? null}
           defaultMachineId={collectorConfigSlot.machineId}
           lockComputer
+          labels={{
+            title: t(($) => $.notes_page.period_brief_collector_setup_title, {
+              label: collectorConfigSlot.label,
+            }),
+            description: t(($) => $.notes_page.period_brief_collector_setup_body),
+            submit: t(($) => $.notes_page.period_brief_collector_setup_save),
+            submitting: t(($) => $.notes_page.period_brief_collector_setup_saving),
+          }}
           prefill={{
             name: collectorConfigSlot.expectedName,
+            runtime_id: collectorConfigSlot.collector?.runtime_id ?? undefined,
+            model:
+              collectorConfigSlot.collector?.model
+              ?? agents.find((agent) => agent.id === collectorConfigSlot.collector?.id)?.model
+              ?? undefined,
             lockIdentity: true,
           }}
           onClose={() => setCollectorConfigSlot(null)}

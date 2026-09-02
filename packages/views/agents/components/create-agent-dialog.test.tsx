@@ -140,6 +140,8 @@ function renderDialog(
     name: string;
     description?: string;
     instructions?: string;
+    model?: string;
+    runtime_id?: string;
     lockIdentity?: boolean;
   } | null,
   lockComputer = false,
@@ -366,6 +368,38 @@ describe("CreateAgentDialog workspace runtime selection", () => {
         model: "claude-sonnet-5",
       }),
     );
+  });
+
+  it("opens a locked Computer on the collector's current runtime and model", () => {
+    const cursor = makeRuntime({
+      id: "rt-cursor",
+      daemon_id: "pc-daemon-aaaa",
+      owner_id: ME,
+      provider: "cursor",
+      name: "Cursor",
+    });
+    const pi = makeRuntime({
+      id: "rt-pi",
+      daemon_id: "pc-daemon-aaaa",
+      owner_id: ME,
+      provider: "pi",
+      name: "Pi",
+    });
+    renderDialog(
+      [cursor, pi],
+      undefined,
+      runtimeMachineKey(pi),
+      {
+        name: "period-collect-aaaa",
+        runtime_id: "rt-pi",
+        model: "composer-2",
+        lockIdentity: true,
+      },
+      true,
+    );
+
+    expect(screen.getByTestId("runtime-picker-trigger")).toHaveTextContent("Pi");
+    expect(screen.getByTestId("create-model")).toHaveTextContent("composer-2");
   });
 
   it("locks the Computer picker when lockComputer is set", () => {

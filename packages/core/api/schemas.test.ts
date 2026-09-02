@@ -7,8 +7,10 @@ import {
   ComputerConnectionListSchema,
   ComputerConnectionSchema,
   ComputerWorkJournalSettingSchema,
+  ComputerCollectRootsSchema,
   EMPTY_COMPUTER_CONNECTION_LIST,
   EMPTY_COMPUTER_WORK_JOURNAL_SETTING,
+  EMPTY_COMPUTER_COLLECT_ROOTS,
   ChannelCreateErrorBodySchema,
   DuplicateIssueErrorBodySchema,
   EMPTY_EVOLUTION_REVIEW_SUBMISSION_LIST,
@@ -1047,6 +1049,22 @@ describe("ComputerConnectionSchema", () => {
         endpoint: "GET /api/computers",
       }),
     ).toEqual(EMPTY_COMPUTER_CONNECTION_LIST);
+  });
+});
+
+describe("ComputerCollectRootsSchema", () => {
+  it("fails closed when roots is missing or the wrong type", () => {
+    expect(ComputerCollectRootsSchema.parse({ roots: ["~/code"] })).toEqual({
+      roots: ["~/code"],
+    });
+    expect(
+      parseWithFallback(
+        { roots: "yes" },
+        ComputerCollectRootsSchema,
+        EMPTY_COMPUTER_COLLECT_ROOTS,
+        { endpoint: "GET /api/computers/:daemonId/collect-roots" },
+      ),
+    ).toEqual(EMPTY_COMPUTER_COLLECT_ROOTS);
   });
 });
 

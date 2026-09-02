@@ -761,6 +761,11 @@ export const ComputerWorkJournalSettingSchema = z.object({
 }).loose();
 export const EMPTY_COMPUTER_WORK_JOURNAL_SETTING = { enabled: false };
 
+export const ComputerCollectRootsSchema = z.object({
+  roots: z.array(z.string()),
+}).loose();
+export const EMPTY_COMPUTER_COLLECT_ROOTS = { roots: [] as string[] };
+
 // ---------------------------------------------------------------------------
 // Schemas for the highest-risk API endpoints — those whose responses drive
 // the issue detail page (timeline, comments, subscribers) and the issues

@@ -18,18 +18,20 @@ const (
 	// Computer control uses Raft 1.0.16 names on the DaemonCore connect
 	// socket. The child does not swap the machine binary; it forwards the
 	// command to Computer Host through the injected Host callback.
-	EventComputerUpgrade         = "computer:upgrade"
-	EventComputerRestart         = "computer:restart"
-	EventComputerUpgradeProgress = "computer:upgrade:progress"
-	EventComputerUpgradeDone     = "computer:upgrade:done"
-	EventComputerRestartDone     = "computer:restart:done"
-	EventComputerWorkDigest      = "computer:work-digest"
-	EventComputerWorkDigestDone  = "computer:work-digest:done"
-	EventComputerWorkJournal     = "computer:work-journal"
-	EventComputerWorkJournalDone = "computer:work-journal:done"
-	EventAgentStartAck           = "agent:start:ack"
-	EventAgentActivity           = "agent:activity"
-	EventAgentSession            = "agent:session"
+	EventComputerUpgrade          = "computer:upgrade"
+	EventComputerRestart          = "computer:restart"
+	EventComputerUpgradeProgress  = "computer:upgrade:progress"
+	EventComputerUpgradeDone      = "computer:upgrade:done"
+	EventComputerRestartDone      = "computer:restart:done"
+	EventComputerWorkDigest       = "computer:work-digest"
+	EventComputerWorkDigestDone   = "computer:work-digest:done"
+	EventComputerWorkJournal      = "computer:work-journal"
+	EventComputerWorkJournalDone  = "computer:work-journal:done"
+	EventComputerCollectRoots     = "computer:collect-roots"
+	EventComputerCollectRootsDone = "computer:collect-roots:done"
+	EventAgentStartAck            = "agent:start:ack"
+	EventAgentActivity            = "agent:activity"
+	EventAgentSession             = "agent:session"
 
 	AgentStatusActive   = "active"
 	AgentStatusInactive = "inactive"
@@ -264,6 +266,32 @@ type ComputerWorkJournalDonePayload struct {
 }
 
 func (p ComputerWorkJournalDonePayload) Validate() error {
+	return validateRequiredIDs(p.RequestID)
+}
+
+// ComputerCollectRootsPayload reads or writes the Computer-local Period Work
+// collect-root file. Set=false is a get; Set=true writes Roots (empty = heuristic).
+type ComputerCollectRootsPayload struct {
+	RequestID string   `json:"requestId"`
+	Set       bool     `json:"set"`
+	Roots     []string `json:"roots"`
+}
+
+func (p ComputerCollectRootsPayload) Validate() error {
+	if err := validateRequiredIDs(p.RequestID); err != nil {
+		return fmt.Errorf("Computer collect roots request identity is required")
+	}
+	return nil
+}
+
+type ComputerCollectRootsDonePayload struct {
+	RequestID string   `json:"requestId"`
+	OK        bool     `json:"ok"`
+	Roots     []string `json:"roots"`
+	Error     string   `json:"error,omitempty"`
+}
+
+func (p ComputerCollectRootsDonePayload) Validate() error {
 	return validateRequiredIDs(p.RequestID)
 }
 

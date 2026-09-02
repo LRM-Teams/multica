@@ -75,6 +75,8 @@ func TestNotePeriodBriefCollectorInstructionNamesLinuxVisibleRoots(t *testing.T)
 	got := notePeriodBriefCollectorInstruction("draft-id", "本周", "2026-08-10T00:00:00Z", "2026-08-17T00:00:00Z")
 	for _, want := range []string{
 		"SCAN_ROOTS",
+		"multica computer collect-roots --print",
+		"<scan-roots>",
 		"HOME symlink children",
 		"~/go",
 		"--all",

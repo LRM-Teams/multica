@@ -18,7 +18,10 @@ import {
   defaultPeriodBriefCollectorIds,
   isPeriodBriefCollectorOnline,
   listOwnedPeriodBriefCollectorSlots,
+  periodBriefCollectorDaemonId,
   periodBriefCollectorNameForSeed,
+  periodBriefMachineDaemonId,
+  periodBriefSlotDaemonId,
   togglePeriodBriefCollectorId,
 } from "./period-brief-collectors";
 import {
@@ -205,6 +208,12 @@ describe("listOwnedPeriodBriefCollectorSlots", () => {
     expect(b?.needsRuntime).toBe(false);
     expect(b?.collector).toBeNull();
     expect(b?.machineId).toBe("local:pc-daemon-BBBB");
+    expect(periodBriefSlotDaemonId(b!, [laptopA, laptopB])).toBe("pc-daemon-BBBB");
+    expect(periodBriefCollectorDaemonId(a!.collector!, [laptopA, laptopB])).toBe(
+      "pc-daemon-AAAA",
+    );
+    expect(periodBriefMachineDaemonId("local:pc-daemon-BBBB")).toBe("pc-daemon-BBBB");
+    expect(periodBriefMachineDaemonId("local:runtime:missing")).toBeNull();
   });
 
   it("does not ask to configure a collector on a connected computer with no runtime", () => {

@@ -45,32 +45,33 @@ func (config WorkspaceDaemonConfig) validate() (WorkspaceDaemonConfig, error) {
 // workspaceDaemonDependencies are machine-wide owners. WorkspaceDaemon keeps
 // their references but never copies their state or changes their lifetime.
 type workspaceDaemonDependencies struct {
-	client                    *Client
-	serverBaseURL             string
-	workspacesRoot            string
-	logger                    *slog.Logger
-	runtimes                  *agentRuntimePool
-	diagnostics               runnerDiagnosticSink
-	openInbox                 inboxCoordinatorFactory
-	runtimeIDs                func() []string
-	ensureResidentRuntime     func(context.Context, string, string, *agent.PiRunIdentity) error
-	configureProviderSession  func(string, string, string) error
-	currentProviderSession    func(string, string) (string, error)
-	recordProviderSession     func(string, string, string)
-	notifyAppInbox            func(context.Context, string, string) error
-	retryAppInboxAcks         func(context.Context, string)
-	mixedRunActivityAck       func(protocol.MixedRunActivityTransitionAckPayload) error
-	mixedRunActivityReplay    func(send func(string, any) error)
-	controlHeartbeatInterval  time.Duration
-	controlHeartbeatPayload   func(string) protocol.DaemonHeartbeatRequestPayload
-	controlHeartbeatAck       func(context.Context, *HeartbeatResponse)
-	controlHeartbeatChanges   func() (<-chan struct{}, func())
-	handleComputerControl     func(context.Context, string, protocol.ComputerUpgradePayload) error
-	handleComputerWorkDigest  func(context.Context, protocol.ComputerWorkDigestPayload) (protocol.WorkDigest, error)
-	handleComputerWorkJournal func(context.Context, protocol.ComputerWorkJournalPayload) (bool, error)
-	setComputerUpgradeEmit    func(func(string, any) error)
-	now                       func() time.Time
-	onTransition              func(agentLifecycleTransition)
+	client                     *Client
+	serverBaseURL              string
+	workspacesRoot             string
+	logger                     *slog.Logger
+	runtimes                   *agentRuntimePool
+	diagnostics                runnerDiagnosticSink
+	openInbox                  inboxCoordinatorFactory
+	runtimeIDs                 func() []string
+	ensureResidentRuntime      func(context.Context, string, string, *agent.PiRunIdentity) error
+	configureProviderSession   func(string, string, string) error
+	currentProviderSession     func(string, string) (string, error)
+	recordProviderSession      func(string, string, string)
+	notifyAppInbox             func(context.Context, string, string) error
+	retryAppInboxAcks          func(context.Context, string)
+	mixedRunActivityAck        func(protocol.MixedRunActivityTransitionAckPayload) error
+	mixedRunActivityReplay     func(send func(string, any) error)
+	controlHeartbeatInterval   time.Duration
+	controlHeartbeatPayload    func(string) protocol.DaemonHeartbeatRequestPayload
+	controlHeartbeatAck        func(context.Context, *HeartbeatResponse)
+	controlHeartbeatChanges    func() (<-chan struct{}, func())
+	handleComputerControl      func(context.Context, string, protocol.ComputerUpgradePayload) error
+	handleComputerWorkDigest   func(context.Context, protocol.ComputerWorkDigestPayload) (protocol.WorkDigest, error)
+	handleComputerWorkJournal  func(context.Context, protocol.ComputerWorkJournalPayload) (bool, error)
+	handleComputerCollectRoots func(context.Context, protocol.ComputerCollectRootsPayload) ([]string, error)
+	setComputerUpgradeEmit     func(func(string, any) error)
+	now                        func() time.Time
+	onTransition               func(agentLifecycleTransition)
 	// rememberGraphProfile caches the server-delivered effective graph
 	// memory profile for this runner's workspace (spec §10). Nil disables.
 	rememberGraphProfile func(memoryType string, exploreAgents, exploreMaxRounds int)
@@ -96,24 +97,25 @@ type WorkspaceDaemon struct {
 	runtimes    *agentRuntimePool
 	diagnostics runnerDiagnosticSink
 
-	runtimeIDs                func() []string
-	ensureResidentRuntime     func(context.Context, string, string, *agent.PiRunIdentity) error
-	configureProviderSession  func(string, string, string) error
-	currentProviderSession    func(string, string) (string, error)
-	recordProviderSession     func(string, string, string)
-	notifyAppInbox            func(context.Context, string, string) error
-	retryAppInboxAcks         func(context.Context, string)
-	mixedRunActivityAck       func(protocol.MixedRunActivityTransitionAckPayload) error
-	mixedRunActivityReplay    func(send func(string, any) error)
-	controlHeartbeatInterval  time.Duration
-	controlHeartbeatPayload   func(string) protocol.DaemonHeartbeatRequestPayload
-	controlHeartbeatAck       func(context.Context, *HeartbeatResponse)
-	controlHeartbeatChanges   func() (<-chan struct{}, func())
-	handleComputerControl     func(context.Context, string, protocol.ComputerUpgradePayload) error
-	handleComputerWorkDigest  func(context.Context, protocol.ComputerWorkDigestPayload) (protocol.WorkDigest, error)
-	handleComputerWorkJournal func(context.Context, protocol.ComputerWorkJournalPayload) (bool, error)
-	setComputerUpgradeEmit    func(func(string, any) error)
-	rememberGraphProfile      func(memoryType string, exploreAgents, exploreMaxRounds int)
+	runtimeIDs                 func() []string
+	ensureResidentRuntime      func(context.Context, string, string, *agent.PiRunIdentity) error
+	configureProviderSession   func(string, string, string) error
+	currentProviderSession     func(string, string) (string, error)
+	recordProviderSession      func(string, string, string)
+	notifyAppInbox             func(context.Context, string, string) error
+	retryAppInboxAcks          func(context.Context, string)
+	mixedRunActivityAck        func(protocol.MixedRunActivityTransitionAckPayload) error
+	mixedRunActivityReplay     func(send func(string, any) error)
+	controlHeartbeatInterval   time.Duration
+	controlHeartbeatPayload    func(string) protocol.DaemonHeartbeatRequestPayload
+	controlHeartbeatAck        func(context.Context, *HeartbeatResponse)
+	controlHeartbeatChanges    func() (<-chan struct{}, func())
+	handleComputerControl      func(context.Context, string, protocol.ComputerUpgradePayload) error
+	handleComputerWorkDigest   func(context.Context, protocol.ComputerWorkDigestPayload) (protocol.WorkDigest, error)
+	handleComputerWorkJournal  func(context.Context, protocol.ComputerWorkJournalPayload) (bool, error)
+	handleComputerCollectRoots func(context.Context, protocol.ComputerCollectRootsPayload) ([]string, error)
+	setComputerUpgradeEmit     func(func(string, any) error)
+	rememberGraphProfile       func(memoryType string, exploreAgents, exploreMaxRounds int)
 
 	residency *agentResidencyStore
 	life      context.Context
@@ -166,38 +168,39 @@ func newWorkspaceDaemon(config WorkspaceDaemonConfig, dependencies workspaceDaem
 	}
 	life, lifeStop := context.WithCancel(context.Background())
 	return &WorkspaceDaemon{
-		config:                    config,
-		client:                    dependencies.client,
-		logger:                    dependencies.logger,
-		serverBaseURL:             dependencies.serverBaseURL,
-		workspacesRoot:            dependencies.workspacesRoot,
-		processes:                 newAgentProcessManager(now, dependencies.onTransition),
-		starts:                    newWorkspaceDaemonProviderStartGate(workspaceDaemonProviderStartConcurrency),
-		activity:                  newAgentActivityProducer(config.DaemonInstanceID, now, nil),
-		inboxes:                   inboxes,
-		runtimes:                  dependencies.runtimes,
-		diagnostics:               dependencies.diagnostics,
-		runtimeIDs:                dependencies.runtimeIDs,
-		ensureResidentRuntime:     dependencies.ensureResidentRuntime,
-		configureProviderSession:  dependencies.configureProviderSession,
-		currentProviderSession:    dependencies.currentProviderSession,
-		recordProviderSession:     dependencies.recordProviderSession,
-		notifyAppInbox:            dependencies.notifyAppInbox,
-		retryAppInboxAcks:         dependencies.retryAppInboxAcks,
-		mixedRunActivityAck:       dependencies.mixedRunActivityAck,
-		mixedRunActivityReplay:    dependencies.mixedRunActivityReplay,
-		rememberGraphProfile:      dependencies.rememberGraphProfile,
-		controlHeartbeatInterval:  dependencies.controlHeartbeatInterval,
-		controlHeartbeatPayload:   dependencies.controlHeartbeatPayload,
-		controlHeartbeatAck:       dependencies.controlHeartbeatAck,
-		controlHeartbeatChanges:   dependencies.controlHeartbeatChanges,
-		handleComputerControl:     dependencies.handleComputerControl,
-		handleComputerWorkDigest:  dependencies.handleComputerWorkDigest,
-		handleComputerWorkJournal: dependencies.handleComputerWorkJournal,
-		setComputerUpgradeEmit:    dependencies.setComputerUpgradeEmit,
-		residency:                 newAgentResidencyStore(now),
-		life:                      life,
-		lifeStop:                  lifeStop,
+		config:                     config,
+		client:                     dependencies.client,
+		logger:                     dependencies.logger,
+		serverBaseURL:              dependencies.serverBaseURL,
+		workspacesRoot:             dependencies.workspacesRoot,
+		processes:                  newAgentProcessManager(now, dependencies.onTransition),
+		starts:                     newWorkspaceDaemonProviderStartGate(workspaceDaemonProviderStartConcurrency),
+		activity:                   newAgentActivityProducer(config.DaemonInstanceID, now, nil),
+		inboxes:                    inboxes,
+		runtimes:                   dependencies.runtimes,
+		diagnostics:                dependencies.diagnostics,
+		runtimeIDs:                 dependencies.runtimeIDs,
+		ensureResidentRuntime:      dependencies.ensureResidentRuntime,
+		configureProviderSession:   dependencies.configureProviderSession,
+		currentProviderSession:     dependencies.currentProviderSession,
+		recordProviderSession:      dependencies.recordProviderSession,
+		notifyAppInbox:             dependencies.notifyAppInbox,
+		retryAppInboxAcks:          dependencies.retryAppInboxAcks,
+		mixedRunActivityAck:        dependencies.mixedRunActivityAck,
+		mixedRunActivityReplay:     dependencies.mixedRunActivityReplay,
+		rememberGraphProfile:       dependencies.rememberGraphProfile,
+		controlHeartbeatInterval:   dependencies.controlHeartbeatInterval,
+		controlHeartbeatPayload:    dependencies.controlHeartbeatPayload,
+		controlHeartbeatAck:        dependencies.controlHeartbeatAck,
+		controlHeartbeatChanges:    dependencies.controlHeartbeatChanges,
+		handleComputerControl:      dependencies.handleComputerControl,
+		handleComputerWorkDigest:   dependencies.handleComputerWorkDigest,
+		handleComputerWorkJournal:  dependencies.handleComputerWorkJournal,
+		handleComputerCollectRoots: dependencies.handleComputerCollectRoots,
+		setComputerUpgradeEmit:     dependencies.setComputerUpgradeEmit,
+		residency:                  newAgentResidencyStore(now),
+		life:                       life,
+		lifeStop:                   lifeStop,
 	}, nil
 }
 
@@ -446,15 +449,16 @@ func (d *Daemon) newWorkspaceDaemon(workspaceID string) (*WorkspaceDaemon, error
 		rememberGraphProfile: func(memoryType string, exploreAgents, exploreMaxRounds int) {
 			d.rememberGraphProfile(workspaceID, memoryType, exploreAgents, exploreMaxRounds)
 		},
-		controlHeartbeatInterval:  d.cfg.HeartbeatInterval,
-		controlHeartbeatPayload:   d.controlPlaneHeartbeatPayload,
-		controlHeartbeatAck:       d.handleWorkspaceDaemonControlAck,
-		controlHeartbeatChanges:   func() (<-chan struct{}, func()) { return nil, func() {} },
-		handleComputerControl:     d.handleComputerControlCommand,
-		handleComputerWorkDigest:  d.handleComputerWorkDigestCommand,
-		handleComputerWorkJournal: d.handleComputerWorkJournalCommand,
-		setComputerUpgradeEmit:    d.setComputerUpgradeEmit,
-		now:                       time.Now,
-		onTransition:              onTransition,
+		controlHeartbeatInterval:   d.cfg.HeartbeatInterval,
+		controlHeartbeatPayload:    d.controlPlaneHeartbeatPayload,
+		controlHeartbeatAck:        d.handleWorkspaceDaemonControlAck,
+		controlHeartbeatChanges:    func() (<-chan struct{}, func()) { return nil, func() {} },
+		handleComputerControl:      d.handleComputerControlCommand,
+		handleComputerWorkDigest:   d.handleComputerWorkDigestCommand,
+		handleComputerWorkJournal:  d.handleComputerWorkJournalCommand,
+		handleComputerCollectRoots: d.handleComputerCollectRootsCommand,
+		setComputerUpgradeEmit:     d.setComputerUpgradeEmit,
+		now:                        time.Now,
+		onTransition:               onTransition,
 	})
 }

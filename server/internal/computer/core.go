@@ -34,17 +34,18 @@ type ComputerCore struct {
 	reconcileInterval time.Duration
 	logger            *slog.Logger
 
-	runtimeMu          sync.RWMutex
-	runtimeSets        map[string]workspaceDaemonRuntimeSet
-	upgrade            *computerMachineUpgrade
-	diagnosticStore    *diagnosticlog.Store
-	diagnosticMu       sync.Mutex
-	diagnosticLoggers  map[string]*diagnosticlog.Logger
-	processIdentity    ComputerIdentity
-	workJournalMu      sync.Mutex
-	workJournalEnabled bool
-	workJournalHome    string
-	workJournalRoot    string
+	runtimeMu               sync.RWMutex
+	runtimeSets             map[string]workspaceDaemonRuntimeSet
+	upgrade                 *computerMachineUpgrade
+	diagnosticStore         *diagnosticlog.Store
+	diagnosticMu            sync.Mutex
+	diagnosticLoggers       map[string]*diagnosticlog.Logger
+	processIdentity         ComputerIdentity
+	workJournalMu           sync.Mutex
+	workJournalEnabled      bool
+	workJournalHome         string
+	workJournalRoot         string
+	periodBriefCollectRoots []string
 }
 
 func (computerCore *ComputerCore) RegisterControlRPCHandlers(registry *LocalControlRegistry) {
@@ -157,6 +158,12 @@ func NewComputerCore(config ComputerCoreConfig) (*ComputerCore, error) {
 			return false, err
 		}
 		return computerCore.WorkJournalEnabled(), nil
+	}
+	callbacks.CollectRoots = func(ctx context.Context, identity WorkspaceDaemonIdentity, command protocol.ComputerCollectRootsPayload) ([]string, error) {
+		if external.CollectRoots != nil {
+			return external.CollectRoots(ctx, identity, command)
+		}
+		return computerCore.ApplyPeriodBriefCollectRoots(command)
 	}
 	callbacks.ComputerUpgrade = func(ctx context.Context, identity WorkspaceDaemonIdentity, raw json.RawMessage) error {
 		if external.ComputerUpgrade != nil {

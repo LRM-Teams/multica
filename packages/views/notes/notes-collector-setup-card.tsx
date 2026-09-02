@@ -14,6 +14,7 @@ export function NotesCollectorSetupCard({
   label,
   reason = "missing-collector",
   onOpenRuntimePicker,
+  onOpenCollectRoots,
   onDismiss,
   className,
 }: {
@@ -21,6 +22,7 @@ export function NotesCollectorSetupCard({
   label: string;
   reason?: "missing-collector" | "missing-runtime";
   onOpenRuntimePicker?: () => void;
+  onOpenCollectRoots?: () => void;
   onDismiss: () => void;
   className?: string;
 }) {
@@ -50,6 +52,18 @@ export function NotesCollectorSetupCard({
         </p>
       </div>
       <div className="flex shrink-0 items-center gap-1">
+        {onOpenCollectRoots ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="h-7 px-2 text-xs"
+            data-testid="period-brief-collector-collect-roots"
+            onClick={onOpenCollectRoots}
+          >
+            {t(($) => $.notes_page.period_brief_collect_roots_action)}
+          </Button>
+        ) : null}
         {waitingForRuntime || !onOpenRuntimePicker ? null : (
           <Button
             type="button"

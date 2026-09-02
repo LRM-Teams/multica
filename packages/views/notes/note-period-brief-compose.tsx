@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, Cloud, Laptop } from "lucide-react";
+import { Check, Cloud, Laptop, Settings2 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
@@ -12,7 +12,9 @@ import {
   listOwnedPeriodBriefCollectorAgents,
   listPeriodBriefCollectorSlotsNeedingRuntime,
   listPeriodBriefCollectorSlotsNeedingSetup,
+  periodBriefCollectorDaemonId,
   periodBriefCollectorLabel,
+  periodBriefSlotDaemonId,
   togglePeriodBriefCollectorId,
   type PeriodBriefCollectorSlot,
 } from "@multica/core/notes/period-brief-collectors";
@@ -35,6 +37,7 @@ import { cn } from "@multica/ui/lib/utils";
 import { useViewingTimezone } from "../common/use-viewing-timezone";
 import { useT } from "../i18n/use-t";
 import { NotesCollectorSetupCard } from "./notes-collector-setup-card";
+import { PeriodBriefCollectRootsDialog } from "./period-brief-collect-roots-dialog";
 
 export type NotePeriodBriefResolved = {
   agentId: string | null;
@@ -98,6 +101,11 @@ export function NotePeriodBriefCompose({
   const [endDate, setEndDate] = useState(defaultCustom.end_date);
   const [collectorOverride, setCollectorOverride] = useState<string[] | null>(null);
   const [dismissedMissingKeys, setDismissedMissingKeys] = useState<string[]>([]);
+  const [collectRootsTarget, setCollectRootsTarget] = useState<{
+    machineId: string;
+    label: string;
+    online: boolean;
+  } | null>(null);
 
   const agentId = resolvePeriodBriefSynthesizerId(agents);
   const collectorAgents = useMemo(
@@ -269,32 +277,62 @@ export function NotePeriodBriefCompose({
               const name = periodBriefCollectorLabel(agent);
               const isCloud = agent.runtime_mode === "cloud";
               const RuntimeIcon = isCloud ? Cloud : Laptop;
+              const daemonId = periodBriefCollectorDaemonId(agent, runtimes);
               return (
-                <button
+                <div
                   key={agent.id}
-                  type="button"
                   className={cn(
-                    "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm hover:bg-muted/70",
+                    "flex w-full items-center gap-1 rounded-lg",
                     selected && "bg-muted text-foreground",
                     !online && "opacity-60",
                   )}
-                  onClick={() =>
-                    setCollectorOverride((current) =>
-                      togglePeriodBriefCollectorId(current ?? defaultCollectors, agent.id),
-                    )
-                  }
-                  disabled={busy}
-                  data-testid={`period-brief-collector-${agent.id}`}
                 >
-                  <RuntimeIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                  <span className="min-w-0 flex-1 truncate">{name}</span>
-                  {!online ? (
-                    <span className="shrink-0 text-[10px] text-muted-foreground">
-                      {t(($) => $.notes_page.period_brief_collector_offline)}
-                    </span>
+                  <button
+                    type="button"
+                    className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm hover:bg-muted/70"
+                    onClick={() =>
+                      setCollectorOverride((current) =>
+                        togglePeriodBriefCollectorId(current ?? defaultCollectors, agent.id),
+                      )
+                    }
+                    disabled={busy}
+                    data-testid={`period-brief-collector-${agent.id}`}
+                  >
+                    <RuntimeIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                    <span className="min-w-0 flex-1 truncate">{name}</span>
+                    {!online ? (
+                      <span className="shrink-0 text-[10px] text-muted-foreground">
+                        {t(($) => $.notes_page.period_brief_collector_offline)}
+                      </span>
+                    ) : null}
+                    {selected ? <Check className="size-3.5 shrink-0 text-primary" /> : null}
+                  </button>
+                  {daemonId ? (
+                    <Button
+                      type="button"
+                      size="icon-sm"
+                      variant="ghost"
+                      className="mr-1 size-7 shrink-0"
+                      disabled={busy}
+                      data-testid={`period-brief-collector-roots-${agent.id}`}
+                      aria-label={t(($) => $.notes_page.period_brief_collect_roots_action)}
+                      onClick={() =>
+                        setCollectRootsTarget({
+                          machineId: daemonId,
+                          label: name,
+                          online:
+                            online ||
+                            computers.some(
+                              (computer) =>
+                                computer.daemon_id === daemonId && computer.connected,
+                            ),
+                        })
+                      }
+                    >
+                      <Settings2 className="size-3.5" />
+                    </Button>
                   ) : null}
-                  {selected ? <Check className="size-3.5 shrink-0 text-primary" /> : null}
-                </button>
+                </div>
               );
             })}
             {missingCollectorSlots.map((slot) => (
@@ -303,6 +341,23 @@ export function NotePeriodBriefCompose({
                 slotKey={slot.key}
                 label={slot.label}
                 onOpenRuntimePicker={() => onConfigureCollector?.(slot)}
+                onOpenCollectRoots={
+                  periodBriefSlotDaemonId(slot, runtimes)
+                    ? () =>
+                        setCollectRootsTarget({
+                          machineId: periodBriefSlotDaemonId(slot, runtimes) ?? "",
+                          label: slot.label,
+                          online:
+                            computers.some(
+                              (computer) =>
+                                computer.daemon_id === periodBriefSlotDaemonId(slot, runtimes) &&
+                                computer.connected,
+                            ) || slot.runtimeIds.some((id) =>
+                              runtimes.some((runtime) => runtime.id === id && runtime.status === "online"),
+                            ),
+                        })
+                    : undefined
+                }
                 onDismiss={() =>
                   setDismissedMissingKeys((current) =>
                     current.includes(slot.key) ? current : [...current, slot.key],
@@ -316,6 +371,20 @@ export function NotePeriodBriefCompose({
                 slotKey={slot.key}
                 label={slot.label}
                 reason="missing-runtime"
+                onOpenCollectRoots={
+                  periodBriefSlotDaemonId(slot, runtimes)
+                    ? () =>
+                        setCollectRootsTarget({
+                          machineId: periodBriefSlotDaemonId(slot, runtimes) ?? "",
+                          label: slot.label,
+                          online: computers.some(
+                            (computer) =>
+                              computer.daemon_id === periodBriefSlotDaemonId(slot, runtimes) &&
+                              computer.connected,
+                          ),
+                        })
+                    : undefined
+                }
                 onDismiss={() =>
                   setDismissedMissingKeys((current) =>
                     current.includes(slot.key) ? current : [...current, slot.key],
@@ -343,6 +412,14 @@ export function NotePeriodBriefCompose({
             {t(($) => $.notes_page.period_brief_cancel)}
           </Button>
         </div>
+      ) : null}
+      {collectRootsTarget ? (
+        <PeriodBriefCollectRootsDialog
+          machineId={collectRootsTarget.machineId}
+          label={collectRootsTarget.label}
+          online={collectRootsTarget.online}
+          onClose={() => setCollectRootsTarget(null)}
+        />
       ) : null}
     </div>
   );

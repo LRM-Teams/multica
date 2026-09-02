@@ -125,6 +125,25 @@ func TestStandaloneDaemonIgnoresConnectSocketUpgrade(t *testing.T) {
 	}
 }
 
+func TestWorkspaceDaemonCollectRootsCommandReadsComputerFile(t *testing.T) {
+	const controlToken = "computer-control-token"
+	computerCore := newComputerControlTestHarness(t, controlToken, computer.ComputerControlCallbacks{})
+	installLiveWorkspaceDaemon(t, computerCore, "workspace-a", 101)
+	serverURL := localComputerControlRPC(t, computerCore.computerCore)
+
+	child := New(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	child.computerControl = newWorkspaceDaemonComputerControl(serverURL, controlToken, liveWorkspaceDaemonIdentity(t, computerCore, "workspace-a", 101))
+	roots, err := child.handleComputerCollectRootsCommand(context.Background(), protocol.ComputerCollectRootsPayload{
+		RequestID: "roots-1",
+	})
+	if err != nil {
+		t.Fatalf("collect roots get: %v", err)
+	}
+	if len(roots) != 0 {
+		t.Fatalf("unset collect roots = %#v", roots)
+	}
+}
+
 func TestWorkspaceDaemonHarvestsWorkDigestFromComputerNotUpgradePayload(t *testing.T) {
 	const controlToken = "computer-control-token"
 	computerCore := newComputerControlTestHarness(t, controlToken, computer.ComputerControlCallbacks{})

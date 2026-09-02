@@ -30,4 +30,20 @@ describe("NotesCollectorSetupCard", () => {
     await user.click(screen.getByTestId("period-brief-collector-missing-dismiss"));
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
+
+  it("can reopen collect-root setup without creating a collector", async () => {
+    const onOpenCollectRoots = vi.fn();
+    const user = userEvent.setup();
+    renderWithI18n(
+      <NotesCollectorSetupCard
+        slotKey="local:pc-a"
+        label="Laptop A"
+        onOpenCollectRoots={onOpenCollectRoots}
+        onDismiss={vi.fn()}
+      />,
+      { locale: "zh-Hans" },
+    );
+    await user.click(screen.getByTestId("period-brief-collector-collect-roots"));
+    expect(onOpenCollectRoots).toHaveBeenCalledTimes(1);
+  });
 });

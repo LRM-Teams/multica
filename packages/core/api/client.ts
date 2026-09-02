@@ -336,6 +336,7 @@ import {
   EMPTY_AGENT_RUNTIME_LIST,
   EMPTY_COMPUTER_CONNECTION_LIST,
   EMPTY_COMPUTER_WORK_JOURNAL_SETTING,
+  EMPTY_COMPUTER_COLLECT_ROOTS,
   EMPTY_AGENT_TEMPLATE_SUMMARY_LIST,
   EMPTY_APP_CONFIG,
   EMPTY_ATTACHMENT,
@@ -367,6 +368,7 @@ import {
   AgentRuntimeListSchema,
   ComputerConnectionListSchema,
   ComputerWorkJournalSettingSchema,
+  ComputerCollectRootsSchema,
   ChannelMessagesPageSchema,
   ChannelThreadMessagesPageSchema,
   ChannelGoalEnvelopeSchema,
@@ -2000,6 +2002,34 @@ export class ApiClient {
       ComputerConnectionListSchema,
       EMPTY_COMPUTER_CONNECTION_LIST,
       { endpoint: "GET /api/computers" },
+    );
+  }
+
+  async getComputerCollectRoots(daemonId: string): Promise<{ roots: string[] }> {
+    const raw = await this.fetch<unknown>(
+      `/api/computers/${encodeURIComponent(daemonId)}/collect-roots`,
+    );
+    return parseWithFallback(
+      raw,
+      ComputerCollectRootsSchema,
+      EMPTY_COMPUTER_COLLECT_ROOTS,
+      { endpoint: "GET /api/computers/:daemonId/collect-roots" },
+    );
+  }
+
+  async patchComputerCollectRoots(
+    daemonId: string,
+    roots: string[],
+  ): Promise<{ roots: string[] }> {
+    const raw = await this.fetch<unknown>(
+      `/api/computers/${encodeURIComponent(daemonId)}/collect-roots`,
+      { method: "PATCH", body: JSON.stringify({ roots }) },
+    );
+    return parseWithFallback(
+      raw,
+      ComputerCollectRootsSchema,
+      EMPTY_COMPUTER_COLLECT_ROOTS,
+      { endpoint: "PATCH /api/computers/:daemonId/collect-roots" },
     );
   }
 

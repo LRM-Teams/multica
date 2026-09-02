@@ -363,6 +363,22 @@ func init() {
 	computerIdentityCmd.AddCommand(computerIdentityAdoptCmd)
 	computerIdentityCmd.AddCommand(computerIdentityFreshCmd)
 	computerCmd.AddCommand(computerIdentityCmd)
+	computerCollectRootsCmd.Flags().Bool("print", false, "Print space-separated collect roots for Period Work recipes")
+	computerCmd.AddCommand(computerCollectRootsCmd)
+}
+
+var computerCollectRootsCmd = &cobra.Command{
+	Use:   "collect-roots",
+	Short: "Print Period Work collect roots for this computer",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		roots, err := computer.ReadPeriodBriefCollectRoots(computer.RootDir(""))
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), computer.FormatPeriodBriefCollectRootsPrint(roots))
+		return nil
+	},
 }
 
 func runWorkspaceDaemonCommand(cmd *cobra.Command, _ []string) error {

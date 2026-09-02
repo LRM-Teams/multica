@@ -167,6 +167,16 @@ func (d *Daemon) handleComputerWorkJournalCommand(ctx context.Context, command p
 	return d.computerControl.client.SetWorkJournalEnabled(ctx, command)
 }
 
+func (d *Daemon) handleComputerCollectRootsCommand(ctx context.Context, command protocol.ComputerCollectRootsPayload) ([]string, error) {
+	if d == nil {
+		return nil, errors.New("DaemonCore is unavailable")
+	}
+	if d.computerControl == nil {
+		return nil, errors.New("ComputerCore callback is unavailable")
+	}
+	return d.computerControl.client.CollectRoots(ctx, command)
+}
+
 func (client *workspaceDaemonComputerControl) reportRuntimeSet(ctx context.Context, runtimes []Runtime, daemonToken, expiresAt string) error {
 	return client.client.ReportRuntimeSet(ctx, runtimes, daemonToken, expiresAt)
 }

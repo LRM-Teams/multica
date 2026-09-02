@@ -29,7 +29,10 @@ honestly.
 Harvest logic is shared. Only root resolution and the denylist are OS-shaped.
 
 Resolve `SCAN_ROOTS` with `references/collect-recipes.md` **before** any
-`find`. If a `<focus>` partition is present (Notes Assistant collect plan),
+`find`. First run `multica computer collect-roots --print` (Computer-local
+file under `~/.multica/computer/`; do not walk `.multica`). Non-empty output
+**replaces** the heuristic table above. Empty output keeps that heuristic.
+If a `<focus>` partition is present (Notes Assistant collect plan),
 **narrow** harvest to those paths / topics / aspects — do not wander the
 whole machine. Prefer **git repositories under those roots** that have commits or
 dirty files **inside the wake `<window>`** (RFC3339 start → end, half-open).
@@ -83,7 +86,8 @@ because a parent directory’s mtime is old.
 ## Required procedure (do in order)
 
 1. **Identify runtime** — hostname, `uname -s`, `$HOME`, `$PWD`, `SCAN_ROOTS`,
-   local vs cloud (best effort).
+   local vs cloud (best effort). Read collect roots with
+   `multica computer collect-roots --print` before any `find`.
 2. **Resolve `SCAN_ROOTS` then discover git roots** under **every** root (see
    recipes). Cap exploration: prefer depth-limited `find`, skip denylist
    dirs (including `.venv` / `venv` / `AppData`), stop after ~40 roots. If

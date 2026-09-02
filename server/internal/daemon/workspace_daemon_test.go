@@ -19,6 +19,15 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
+func TestCollectRootsRequestIDReadsCamelCaseWireName(t *testing.T) {
+	if got := collectRootsRequestID(json.RawMessage(`{"requestId":"req-1"}`), ""); got != "req-1" {
+		t.Fatalf("collectRootsRequestID = %q", got)
+	}
+	if got := collectRootsRequestID(json.RawMessage(`{}`), "parsed"); got != "parsed" {
+		t.Fatalf("prefer parsed request id = %q", got)
+	}
+}
+
 func TestWorkspaceDaemonURLIsScopedWithoutRuntimeIDs(t *testing.T) {
 	got, err := workspaceDaemonURL("https://api.example.com/multica", "workspace-1")
 	if err != nil {

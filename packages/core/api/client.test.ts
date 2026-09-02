@@ -282,6 +282,44 @@ describe("ApiClient", () => {
     );
   });
 
+  it("reads and writes Computer collect roots", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ roots: ["~/code"] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ roots: ["/opt/app"] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.getComputerCollectRoots("computer-1")).resolves.toEqual({
+      roots: ["~/code"],
+    });
+    await expect(client.patchComputerCollectRoots("computer-1", ["/opt/app"])).resolves.toEqual({
+      roots: ["/opt/app"],
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "https://api.example.test/api/computers/computer-1/collect-roots",
+      expect.anything(),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "https://api.example.test/api/computers/computer-1/collect-roots",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ roots: ["/opt/app"] }),
+      }),
+    );
+  });
+
   it("patches Computer Work Journal enablement and fails closed on drift", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(

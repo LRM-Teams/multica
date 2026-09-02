@@ -16,6 +16,7 @@ to these sources.
 | Collector must add `## Work groups` + optional Mermaid (evidence remains required) | ADR 0019 Detail level; this skill `SKILL.md` pack shape; `notePeriodBriefCollectorInstruction` |
 | Product contract | `docs/adr/0019-runtime-agent-collectors-period-brief.md` |
 | Scan roots = first-level project parents (never deep `$HOME` / AppData) ∪ `/workspace` ∪ OS extras; non-git in-window files including office/notes | this skill `SKILL.md`; `references/collect-recipes.md` `SCAN_ROOTS`; `notePeriodBriefCollectorInstruction` |
+| User-declared collect roots on the Computer replace heuristic `SCAN_ROOTS`; empty keeps heuristic | `~/.multica/computer/period-brief-collect-roots.json`; `multica computer collect-roots --print`; `GetComputerCollectRoots` / `PatchComputerCollectRoots`; `<scan-roots>` in `buildNotePeriodBriefCollectorPrompt` |
 | Shared harvest; OS-shaped roots only (Windows volume first-level names, Linux HOME symlink + `/opt` `/srv`, skip AppData/Library) | `references/collect-recipes.md`; this skill Scope + procedure; `notePeriodBriefCollectorInstruction`; `period-work-collector.json`; ADR 0019 2026-09-01 amendment |
 | Cheap git probe first; idle repo = present but unused in window | `references/collect-recipes.md` Per-repo window harvest |
 

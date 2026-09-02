@@ -2235,7 +2235,9 @@ func gateResumeToReusedWorkdir(task *Task, taskCtx *execenv.TaskContextForEnv, e
 // applyForceFreshSession drops any claimed prior provider session when the
 // server marked the wake as a one-shot. Period Brief collectors and the
 // synthesizer carry a self-contained prompt and must not resume a poisoned
-// Pi conversation (OpenAI Responses `input[n].status` 400).
+// Pi conversation (OpenAI Responses `input[n].status` 400). runTask must
+// also pass Task.ForceFreshSession into the resident acquire — clearing
+// PriorSessionID alone leaves the live Pi process in place.
 func applyForceFreshSession(task *Task, taskLog *slog.Logger) {
 	if task == nil || !task.ForceFreshSession {
 		return
@@ -2788,9 +2790,10 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		residentConfig.ResidentOptions.Cwd = agentRootPath
 		residentAgentInstanceID := "resident-" + uuid.NewString()
 		acquireRequest := agentRuntimeAcquireRequest{
-			Identity:      identity,
-			BackendConfig: residentConfig,
-			Factory:       defaultCanonicalRuntimeFactory(provider),
+			Identity:          identity,
+			BackendConfig:     residentConfig,
+			Factory:           defaultCanonicalRuntimeFactory(provider),
+			ForceFreshSession: task.ForceFreshSession,
 			PrepareLaunchEnvironment: func(environment map[string]string) (string, func(), error) {
 				return d.prepareCanonicalAgentProxyLaunch(
 					ctx, environment, task.WorkspaceID, task.RuntimeID, agentID,

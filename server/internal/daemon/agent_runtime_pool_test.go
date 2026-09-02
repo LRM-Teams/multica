@@ -350,6 +350,61 @@ func TestAgentRuntimePoolForceFreshDrainsNextResume(t *testing.T) {
 	}
 }
 
+func TestAgentRuntimePoolForceFreshReplacesLiveProcess(t *testing.T) {
+	pool := newAgentRuntimePool()
+	probe := &canonicalRuntimeFactoryProbe{}
+	env := map[string]string{
+		"PATH":                 "/usr/bin",
+		"MULTICA_SERVER_URL":   "https://multica.example",
+		"MULTICA_WORKSPACE_ID": "workspace-a",
+		"MULTICA_AGENT_ID":     "agent-a",
+		"MULTICA_TASK_ID":      "turn-prior",
+	}
+	first, err := pool.acquire(agentRuntimeAcquireRequest{
+		Identity:           canonicalRuntimeIdentityForTest(t, "model-a", env),
+		CanonicalSessionID: "poisoned-pi-session",
+		Factory:            probe.factory,
+	})
+	if err != nil {
+		t.Fatalf("first acquire: %v", err)
+	}
+	if _, err := first.backend.Execute(context.Background(), "prior", agent.ExecOptions{}); err != nil {
+		t.Fatalf("first Execute: %v", err)
+	}
+	first.release(true)
+	priorBackend := first.backend.(*canonicalSessionBackend).backend
+
+	fresh, err := pool.acquire(agentRuntimeAcquireRequest{
+		Identity: canonicalRuntimeIdentityForTestWithContext(t, "model-a", "chat-fresh", map[string]string{
+			"PATH":                 "/usr/bin",
+			"MULTICA_SERVER_URL":   "https://multica.example",
+			"MULTICA_WORKSPACE_ID": "workspace-a",
+			"MULTICA_AGENT_ID":     "agent-a",
+			"MULTICA_TASK_ID":      "turn-fresh",
+		}),
+		CanonicalSessionID: "must-not-resume",
+		ForceFreshSession:  true,
+		Factory:            probe.factory,
+	})
+	if err != nil {
+		t.Fatalf("force-fresh acquire: %v", err)
+	}
+	defer fresh.release(true)
+	if _, err := fresh.backend.Execute(context.Background(), "synth", agent.ExecOptions{}); err != nil {
+		t.Fatalf("force-fresh Execute: %v", err)
+	}
+	if got := fresh.backend.(*canonicalSessionBackend).backend.(*canonicalRuntimeTestBackend).lastResumeSessionID(); got != "" {
+		t.Fatalf("force-fresh resume = %q, want empty", got)
+	}
+	if fresh.backend.(*canonicalSessionBackend).backend == priorBackend {
+		t.Fatal("force-fresh reused the live resident process")
+	}
+	created, closed := probe.counts()
+	if created != 2 || closed != 1 {
+		t.Fatalf("factory created=%d closed=%d, want 2/1 (replace live process)", created, closed)
+	}
+}
+
 func TestCanonicalSessionBackendStaleResumeFallbackClearsWrapper(t *testing.T) {
 	// runTask sets opts.ResumeSessionID="" on stale resume; wrapper must also
 	// drop its forced id or retry keeps the bad Prior (Barry activation BLOCK).

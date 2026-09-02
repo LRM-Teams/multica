@@ -124,7 +124,11 @@ if ! grep -Fq -- 'compose pull backend' <<<"$deploy_test_workflow"; then
   exit 1
 fi
 
-if ! perl -0ne 'exit(!/compose pull backend\s+# Migration 339.*?compose stop backend\s+compose run --rm --no-deps --entrypoint \.\/migrate backend up/s)' <<<"$deploy_test_workflow"; then
+# Between the stop and the migrate run the lane allows one bounded
+# postgres-only step: the legacy interaction DAG quarantine heredoc. It is
+# still schema work against the stopped stack; application containers must
+# not reappear there.
+if ! perl -0ne 'exit(!/compose pull backend\s+# Migration 339.*?compose stop backend(?:\s*#[^\n]*\n)*(?:\s*compose exec -T postgres[^\n]*<<\x27PSQL\x27.*?^[ \t]*PSQL[ \t]*\n)?\s*compose run --rm --no-deps --entrypoint \.\/migrate backend up/ms)' <<<"$deploy_test_workflow"; then
   echo "Test deployment must stop the old backend before the schema cutover"
   exit 1
 fi

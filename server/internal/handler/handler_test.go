@@ -348,6 +348,23 @@ func handlerTestMissingMigration(ctx context.Context, pool *pgxpool.Pool) (strin
 		return "", fmt.Errorf("find migrations: %w", err)
 	}
 
+	// Only the current schema's own ledger counts as applied. An unqualified
+	// schema_migrations lookup falls through the search path to public, which
+	// CI migrates before running tests, and the suite would then skip
+	// bootstrapping the still-empty disposable schema.
+	var hasLedger bool
+	if err := pool.QueryRow(ctx, `
+		SELECT EXISTS (
+		  SELECT 1 FROM information_schema.tables
+		  WHERE table_schema = current_schema()
+		    AND table_name = 'schema_migrations'
+		)`).Scan(&hasLedger); err != nil {
+		return "", err
+	}
+	if !hasLedger {
+		return migrations.ExtractVersion(files[0]), nil
+	}
+
 	for _, file := range files {
 		version := migrations.ExtractVersion(file)
 		var applied bool

@@ -1,4 +1,4 @@
--- 492 down: drop the skill evolution core ledger.
+-- 493 down: drop the skill evolution core ledger.
 --
 -- Append-only audit tables: down is for pre-enable environments only. A
 -- production rollback disables the writers and readers via the fail-closed

@@ -3,7 +3,7 @@
 package service
 
 // Candidate-plane implementation of the skillevolution.CandidateStore
-// port (migration 492, plan Phase 3 wrap-up): admission carries the
+// port (migration 493, plan Phase 3 wrap-up): admission carries the
 // immutable contract document (replay of the identical candidate is a
 // no-op, the same id under a different contract is a conflict), reads
 // rebuild the record from the contract plus the mutable status columns,

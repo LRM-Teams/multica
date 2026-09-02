@@ -2,7 +2,7 @@
 
 package service
 
-// Migration 492 ledger behavior against the faithful schema: run lifecycle
+// Migration 493 ledger behavior against the faithful schema: run lifecycle
 // through the real coordinator wiring, single-active admission, linear
 // append-only pattern revisions, and workspace-scoped fail-closed reads.
 
@@ -658,7 +658,7 @@ func TestSkillEvolutionLedgerIdempotencyReplaysSamePayloadOnly(t *testing.T) {
 	assert.Equal(t, 2, runs)
 }
 
-// The migration 494 partial unique index fences the evolution key at the
+// The migration 495 partial unique index fences the evolution key at the
 // database level: a second active run in the same lane cannot be inserted
 // even by a writer that skips the store's admission check.
 func TestSkillEvolutionLedgerActiveRunIndexFencesConcurrentWriters(t *testing.T) {

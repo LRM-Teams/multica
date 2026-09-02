@@ -34,7 +34,7 @@ var (
 // EvolutionKey is the agent-scoped identity of one mutation lane (ADR 0021
 // D4): workspace + target agent + task type + environment major version.
 // The workspace scope travels as its own column; Body() is the stored key
-// suffix and must stay byte-identical to the migration 492 generated
+// suffix and must stay byte-identical to the migration 493 generated
 // column (target_agent_id::text || ':' || task_type || ':' ||
 // environment_major_version).
 type EvolutionKey struct {
@@ -48,7 +48,7 @@ func (k EvolutionKey) Body() string {
 }
 
 // CandidateStore is the candidate-plane port of the ledger (migration
-// 492, plan Phase 3 wrap-up): admission is needs_review-only (the
+// 493, plan Phase 3 wrap-up): admission is needs_review-only (the
 // proposer never stamps later lifecycle states), and transitions are
 // CAS'd against the domain lifecycle with the DB terminal guard as the
 // floor.
@@ -65,7 +65,7 @@ type CandidateStore interface {
 	TransitionCandidateStatus(ctx context.Context, workspaceID, candidateID string, from, to CandidateStatus) error
 }
 
-// EvolutionRunRecord is the orchestrator run row of migration 492. Status
+// EvolutionRunRecord is the orchestrator run row of migration 493. Status
 // transitions follow EvolutionRunStatus.CanTransition; terminal statuses
 // are additionally guarded at the DB level.
 type EvolutionRunRecord struct {
@@ -102,7 +102,7 @@ type LedgerStore interface {
 	LatestPatternRevision(ctx context.Context, workspaceID, patternID string) (PatternRecord, error)
 }
 
-// EvaluationStore is the evaluation-plane ledger port (migration 493,
+// EvaluationStore is the evaluation-plane ledger port (migration 494,
 // ADR 0021 D7): manifests and evaluation runs are append-only; the
 // PostgreSQL implementation lives in the service layer next to
 // LedgerStore.
@@ -126,7 +126,7 @@ type EvaluationStore interface {
 	ListEvaluationRunsByCandidate(ctx context.Context, workspaceID, candidateID string) ([]EvaluationRunRecord, error)
 }
 
-// DecisionStore is the approval/deployment/rollback port (migration 494,
+// DecisionStore is the approval/deployment/rollback port (migration 495,
 // ADR 0021 D7). Approvals and rollbacks are append-only; deployments
 // resolve their materialization status by CAS; nothing here grants
 // execution — binding/grant authority stays with the Skill catalog.
@@ -153,7 +153,7 @@ type DecisionStore interface {
 }
 
 // OutboxEvent is one transactionally-published activation side effect
-// (migration 494); dispatchers deliver it at least once and reconcile via
+// (migration 495); dispatchers deliver it at least once and reconcile via
 // the pending slice. ID is the outbox row identity (zero until listed).
 type OutboxEvent struct {
 	ID            int64

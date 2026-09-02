@@ -3,7 +3,7 @@
 package service
 
 // PostgreSQL implementation of the skillevolution.LedgerStore port
-// (migration 492). The domain package owns the contracts and the state
+// (migration 493). The domain package owns the contracts and the state
 // machines; this file owns driver mapping, transactions, and CAS semantics
 // (ADR 0021 D7 package boundary).
 
@@ -22,7 +22,7 @@ import (
 )
 
 // PostgresSkillEvolutionLedger implements skillevolution.LedgerStore over
-// the migration 492 tables.
+// the migration 493 tables.
 type PostgresSkillEvolutionLedger struct {
 	pool *pgxpool.Pool
 }
@@ -41,7 +41,7 @@ func parseLedgerUUID(field, value string) (pgtype.UUID, error) {
 
 // InsertRun persists one queued run. Single-active admission is
 // check-then-insert here: the row-locked read serializes against other
-// admissions through this store, and migration 494 adds the partial unique
+// admissions through this store, and migration 495 adds the partial unique
 // index that fences any writer the check cannot see.
 func (l *PostgresSkillEvolutionLedger) InsertRun(ctx context.Context, run skillevolution.EvolutionRunRecord) error {
 	workspaceID, err := parseLedgerUUID("workspace_id", run.WorkspaceID)

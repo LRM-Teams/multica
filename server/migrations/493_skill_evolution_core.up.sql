@@ -1,12 +1,12 @@
--- 492: Skill evolution core ledger (spec §12.4, ADR 0021).
+-- 493: Skill evolution core ledger (spec §12.4, ADR 0021).
 --
 -- Append-only pattern revisions and candidate artifacts, a stateful
 -- (non-append-only) orchestrator run row whose terminal statuses are
 -- guarded by trigger, and workspace-scoped composite foreign keys so no
 -- ledger row can reference another tenant's run, pattern, candidate, or
--- skill. The evaluation plane (493) and decision/deployment plane (494)
+-- skill. The evaluation plane (494) and decision/deployment plane (495)
 -- build on these tables; the single-active-run partial unique index lands
--- with 494 so pre-494 writers are not fenced by an index they cannot see.
+-- with 495 so pre-495 writers are not fenced by an index they cannot see.
 
 -- Orchestrator run: status transitions follow the Phase 0 state machine in
 -- server/internal/skillevolution/types.go. The trigger below is the

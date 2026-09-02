@@ -1,4 +1,4 @@
--- 493 down: drop the evaluation plane. Only valid for environments where
+-- 494 down: drop the evaluation plane. Only valid for environments where
 -- the evolution feature was never enabled (ADR 0021 D8); production
 -- rollbacks fence writers instead of dropping append-only audit history.
 

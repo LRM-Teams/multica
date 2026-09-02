@@ -124,7 +124,7 @@ type ManualRunCreation struct {
 // CreateManualRun validates a manual admission and produces the queued run
 // record. It refuses incomplete pins, nameless curators, and unexplained
 // creations; single-active enforcement stays with the ledger (the DB fence
-// of migration 494 is the floor, not this function).
+// of migration 495 is the floor, not this function).
 func CreateManualRun(creation ManualRunCreation) (EvolutionRunRecord, error) {
 	for field, value := range map[string]string{
 		"run_id":       creation.RunID,

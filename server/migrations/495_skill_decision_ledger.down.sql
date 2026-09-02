@@ -1,4 +1,4 @@
--- 494 down: drop the decision/deployment plane and its fences. Only valid
+-- 495 down: drop the decision/deployment plane and its fences. Only valid
 -- for environments where the evolution feature was never enabled
 -- (ADR 0021 D8); production rollbacks fence writers instead.
 

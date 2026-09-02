@@ -1,4 +1,4 @@
--- Skill evolution ledger (spec §12.4, ADR 0021; migration 492).
+-- Skill evolution ledger (spec §12.4, ADR 0021; migration 493).
 --
 -- Status transitions are CAS-shaped (the WHERE pins the expected current
 -- status); zero affected rows is a conflict the caller must resolve, never
@@ -23,7 +23,7 @@ ORDER BY created_at DESC;
 
 -- name: ListActiveSkillEvolutionRunsByKey :many
 -- Row-locked for the single-active-run admission check (the partial unique
--- index lands with migration 494; until then this is the serialized gate).
+-- index lands with migration 495; until then this is the serialized gate).
 SELECT * FROM skill_evolution_run
 WHERE workspace_id = $1 AND evolution_key = $2
   AND status IN ('queued', 'snapshotting', 'consolidating_patterns',
@@ -105,7 +105,7 @@ WHERE workspace_id = $1 AND candidate_id = $2 AND version = $3;
 INSERT INTO skill_candidate_pattern (workspace_id, candidate_id, pattern_id)
 VALUES ($1, $2, $3);
 
--- Evaluation plane (migration 493).
+-- Evaluation plane (migration 494).
 
 -- name: InsertSkillAssertionManifest :execrows
 -- ON CONFLICT DO NOTHING backs manifest replay: zero rows means the version
@@ -164,7 +164,7 @@ SELECT * FROM skill_evaluation_assertion_result
 WHERE workspace_id = $1 AND evaluation_id = $2
 ORDER BY assertion_id;
 
--- Decision/deployment plane (migration 494).
+-- Decision/deployment plane (migration 495).
 
 -- name: InsertSkillApproval :execrows
 INSERT INTO skill_approval (
@@ -210,7 +210,7 @@ UPDATE skill_rollback
 SET roll_forward_status = $3
 WHERE workspace_id = $1 AND rollback_id = $2 AND roll_forward_status = $4;
 
--- Idempotency (migration 494). The row-locked read serializes claims
+-- Idempotency (migration 495). The row-locked read serializes claims
 -- through this store; the PK is the hard fence.
 
 -- name: GetSkillEvolutionIdempotency :one
@@ -223,7 +223,7 @@ INSERT INTO skill_evolution_idempotency (
     workspace_id, idempotency_key, request_kind, payload_hash, response
 ) VALUES ($1, $2, $3, $4, $5);
 
--- Outbox / reconciliation (migration 494).
+-- Outbox / reconciliation (migration 495).
 
 -- name: InsertSkillEvolutionOutbox :execrows
 INSERT INTO skill_evolution_outbox (

@@ -1,4 +1,4 @@
--- 493: Skill evaluation plane (spec §12.4, ADR 0021).
+-- 494: Skill evaluation plane (spec §12.4, ADR 0021).
 --
 -- Immutable, versioned assertion manifests; append-only evaluation runs
 -- with per-assertion results; dataset/environment identity and

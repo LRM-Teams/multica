@@ -3,7 +3,7 @@
 package service
 
 // PostgreSQL implementation of the skillevolution.EvaluationStore port
-// (migration 493). Manifests replay idempotently by hash comparison,
+// (migration 494). Manifests replay idempotently by hash comparison,
 // evaluation runs append with their per-assertion results in one
 // transaction, and every read is workspace-scoped (ADR 0021 D7 package
 // boundary).

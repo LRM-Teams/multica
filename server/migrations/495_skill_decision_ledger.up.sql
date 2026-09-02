@@ -1,4 +1,4 @@
--- 494: Skill decision/deployment plane (spec §12.4/§12.9, ADR 0021).
+-- 495: Skill decision/deployment plane (spec §12.4/§12.9, ADR 0021).
 --
 -- Append-only approvals with a decision-shape floor, deployments whose
 -- materialization status is the only mutable field (converged/fenced are

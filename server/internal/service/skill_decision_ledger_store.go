@@ -3,7 +3,7 @@
 package service
 
 // PostgreSQL implementation of the skillevolution.DecisionStore,
-// IdempotencyStore, and OutboxStore ports (migration 494). Approvals
+// IdempotencyStore, and OutboxStore ports (migration 495). Approvals
 // enforce actor isolation against the run's proposer and the evaluation's
 // evaluator; deployments require an unexpired approval; rollbacks only
 // advance their roll-forward status (ADR 0021 D7 package boundary).

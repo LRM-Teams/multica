@@ -192,7 +192,7 @@ func TestRunCoordinatorStartRunRequiresQueued(t *testing.T) {
 	require.Error(t, err)
 }
 
-// The evolution key body matches the migration 492 generated column shape
+// The evolution key body matches the migration 493 generated column shape
 // byte for byte: agent uuid, task type, environment major version.
 func TestRunCoordinatorEvolutionKeyBodyShape(t *testing.T) {
 	key := EvolutionKey{TargetAgentID: "d8c6d824-0000-0000-0000-000000000000", TaskType: "spreadsheet", EnvironmentMajorVersion: "v1"}

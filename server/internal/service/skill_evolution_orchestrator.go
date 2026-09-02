@@ -47,7 +47,7 @@ func NewSkillEvolutionOrchestratorService(pool *pgxpool.Pool, ledger *PostgresSk
 
 // CreateManualRun admits one curator-created run with a complete pinned
 // input set. Concurrent creation under the same evolution key surfaces
-// ErrActiveRunExists — the ledger check and the migration-494 partial
+// ErrActiveRunExists — the ledger check and the migration-495 partial
 // unique index are the fence, this method just routes through them.
 func (s *SkillEvolutionOrchestratorService) CreateManualRun(
 	ctx context.Context, creation skillevolution.ManualRunCreation,

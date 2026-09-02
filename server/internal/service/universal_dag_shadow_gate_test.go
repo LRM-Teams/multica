@@ -40,9 +40,9 @@ func newUniversalDAGShadowGateHarness(t *testing.T) *universalDAGShadowGateHarne
 	require.NoError(t, err, "create graph ledger stubs")
 	for _, name := range []string{
 		"421_graph_memory_rl_session.up.sql",
-		"470_graph_memory_channel_migration.up.sql",
-		"472_interaction_dag_training_governance.up.sql",
-		"474_universal_dag_shadow_gate.up.sql",
+		"485_graph_memory_channel_migration.up.sql",
+		"487_interaction_dag_training_governance.up.sql",
+		"489_universal_dag_shadow_gate.up.sql",
 	} {
 		applyUniversalDAGMigrationFile(t, pub.ctx, pub.conn, name)
 	}

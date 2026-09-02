@@ -566,8 +566,8 @@ func readUniversalDAGMigration454(t *testing.T) (upSQL, downSQL string) {
 		}
 		return string(contents)
 	}
-	return readRequired("454_universal_interaction_dag.up.sql"),
-		readRequired("454_universal_interaction_dag.down.sql")
+	return readRequired("476_universal_interaction_dag.up.sql"),
+		readRequired("476_universal_interaction_dag.down.sql")
 }
 
 func newUniversalDAGMigrationFixture(t *testing.T) *universalDAGMigrationFixture {

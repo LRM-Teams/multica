@@ -14,18 +14,19 @@ import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { toast } from "sonner";
 import { useT } from "../i18n/use-t";
 
-function collectRootsErrorMessage(error: unknown, timeoutCopy: string): string {
-  if (error instanceof ApiError) {
-    const body = error.body;
-    if (
-      body &&
+function isCollectRootsTimeout(error: unknown): boolean {
+  if (!(error instanceof ApiError)) return false;
+  const body = error.body;
+  return Boolean(
+    body &&
       typeof body === "object" &&
       "code" in body &&
-      body.code === "computer_collect_roots_timeout"
-    ) {
-      return timeoutCopy;
-    }
-  }
+      body.code === "computer_collect_roots_timeout",
+  );
+}
+
+function collectRootsErrorMessage(error: unknown, timeoutCopy: string): string {
+  if (isCollectRootsTimeout(error)) return timeoutCopy;
   return error instanceof Error ? error.message : String(error);
 }
 
@@ -65,10 +66,12 @@ export function PeriodBriefCollectRootsDialog({
       })
       .catch((error: unknown) => {
         if (cancelled) return;
-        const timeoutCopy = t(($) => $.notes_page.period_brief_collect_roots_timeout);
-        const message = collectRootsErrorMessage(error, timeoutCopy);
-        setNotice(message === timeoutCopy ? "timeout" : "offline");
-        showErrorToast(message);
+        if (isCollectRootsTimeout(error)) {
+          setNotice("timeout");
+          return;
+        }
+        setNotice("offline");
+        showErrorToast(error instanceof Error ? error.message : String(error));
       });
     return () => {
       cancelled = true;

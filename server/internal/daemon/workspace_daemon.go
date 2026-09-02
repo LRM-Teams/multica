@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -119,6 +120,34 @@ func (runner *WorkspaceDaemon) serveConnection(connection *DaemonConnection, con
 				done.Enabled = enabled
 			}
 			if err := writeFrame(protocol.EventComputerWorkJournalDone, done); err != nil {
+				return err
+			}
+		case protocol.EventComputerCollectRoots:
+			var command protocol.ComputerCollectRootsPayload
+			if json.Unmarshal(message.Payload, &command) != nil || command.Validate() != nil {
+				if requestID := collectRootsRequestID(message.Payload, command.RequestID); requestID != "" {
+					if err := writeFrame(protocol.EventComputerCollectRootsDone, protocol.ComputerCollectRootsDonePayload{
+						RequestID: requestID,
+						Error:     "invalid collect roots request",
+					}); err != nil {
+						return err
+					}
+				}
+				continue
+			}
+			done := protocol.ComputerCollectRootsDonePayload{RequestID: command.RequestID}
+			if runner.handleComputerCollectRoots == nil {
+				done.Error = "collect roots host unavailable"
+			} else if roots, err := runner.handleComputerCollectRoots(connection.ctx, command); err != nil {
+				done.Error = err.Error()
+			} else {
+				done.OK = true
+				done.Roots = roots
+				if done.Roots == nil {
+					done.Roots = []string{}
+				}
+			}
+			if err := writeFrame(protocol.EventComputerCollectRootsDone, done); err != nil {
 				return err
 			}
 		case protocol.EventComputerUpgrade, protocol.EventComputerRestart:
@@ -274,6 +303,17 @@ func (runner *WorkspaceDaemon) serveConnection(connection *DaemonConnection, con
 			}
 		}
 	}
+}
+
+func collectRootsRequestID(raw json.RawMessage, parsed string) string {
+	if id := strings.TrimSpace(parsed); id != "" {
+		return id
+	}
+	var idOnly struct {
+		RequestID string `json:"requestId"`
+	}
+	_ = json.Unmarshal(raw, &idOnly)
+	return strings.TrimSpace(idOnly.RequestID)
 }
 
 func (runner *WorkspaceDaemon) ownsRuntime(runtimeID string) bool {

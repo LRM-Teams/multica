@@ -129,6 +129,7 @@ func (computerCore *ComputerCore) Run(ctx context.Context, config ComputerProces
 	computerCore.upgrade.config.cancel = cancel
 	computerCore.workJournalRoot = config.ResidentRoot
 	computerCore.loadWorkJournalSetting()
+	computerCore.loadPeriodBriefCollectRoots()
 
 	loadDesired := func() []string {
 		ids, loadErr := config.DesiredWorkspaceIDs()

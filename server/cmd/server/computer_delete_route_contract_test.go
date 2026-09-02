@@ -23,6 +23,8 @@ func TestComputerDeleteRoutesExposeOneOperation(t *testing.T) {
 	for _, route := range []string{
 		http.MethodGet + " /api/computers/{daemonId}/work-digest",
 		http.MethodPatch + " /api/computers/{daemonId}/work-journal",
+		http.MethodGet + " /api/computers/{daemonId}/collect-roots",
+		http.MethodPatch + " /api/computers/{daemonId}/collect-roots",
 		http.MethodDelete + " /api/computers/{daemonId}",
 		http.MethodDelete + " /api/runtimes/by-daemon/{daemonId}",
 	} {

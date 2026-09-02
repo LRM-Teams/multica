@@ -42,6 +42,7 @@ type ComputerControlCallbacks struct {
 	ComputerUpgrade func(context.Context, WorkspaceDaemonIdentity, json.RawMessage) error
 	WorkDigest      func(context.Context, WorkspaceDaemonIdentity, protocol.ComputerWorkDigestPayload) (protocol.WorkDigest, error)
 	WorkJournal     func(context.Context, WorkspaceDaemonIdentity, protocol.ComputerWorkJournalPayload) (bool, error)
+	CollectRoots    func(context.Context, WorkspaceDaemonIdentity, protocol.ComputerCollectRootsPayload) ([]string, error)
 	Released        func(WorkspaceDaemonIdentity)
 }
 
@@ -100,6 +101,7 @@ func (control *ComputerControl) RegisterRPCHandlers(registry *LocalControlRegist
 	register(LocalControlRunnerReadyOperation, control.rpcRuntimeSet)
 	register(LocalControlWorkDigestOperation, control.rpcWorkDigest)
 	register(LocalControlWorkJournalOperation, control.rpcWorkJournal)
+	register(LocalControlCollectRootsOperation, control.rpcCollectRoots)
 }
 
 func (control *ComputerControl) rpcWorkDigest(ctx context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
@@ -138,6 +140,30 @@ func (control *ComputerControl) rpcWorkJournal(ctx context.Context, headers map[
 		return nil, err
 	}
 	return map[string]bool{"enabled": enabled}, nil
+}
+
+func (control *ComputerControl) rpcCollectRoots(ctx context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
+	var request struct {
+		Identity WorkspaceDaemonIdentity              `json:"identity"`
+		Command  protocol.ComputerCollectRootsPayload `json:"command"`
+	}
+	if err := json.Unmarshal(raw, &request); err != nil {
+		return nil, err
+	}
+	if err := control.decodeRPCIdentity(headers, raw, &request.Identity); err != nil {
+		return nil, err
+	}
+	if control.callbacks.CollectRoots == nil {
+		return nil, errors.New("Computer collect roots are unavailable")
+	}
+	roots, err := control.callbacks.CollectRoots(ctx, request.Identity, request.Command)
+	if err != nil {
+		return nil, err
+	}
+	if roots == nil {
+		roots = []string{}
+	}
+	return map[string][]string{"roots": roots}, nil
 }
 
 func (control *ComputerControl) rpcRawCallback(_ *LocalControlRegistry, _ string, callback func(context.Context, WorkspaceDaemonIdentity, json.RawMessage) error) LocalControlHandler {
@@ -289,6 +315,25 @@ func (client *ComputerControlClient) SetWorkJournalEnabled(ctx context.Context, 
 		return false, err
 	}
 	return out.Enabled, nil
+}
+
+func (client *ComputerControlClient) CollectRoots(ctx context.Context, command protocol.ComputerCollectRootsPayload) ([]string, error) {
+	if err := command.Validate(); err != nil {
+		return nil, err
+	}
+	var out struct {
+		Roots []string `json:"roots"`
+	}
+	if err := client.post(ctx, LocalControlCollectRootsOperation, struct {
+		Identity WorkspaceDaemonIdentity              `json:"identity"`
+		Command  protocol.ComputerCollectRootsPayload `json:"command"`
+	}{Identity: client.identity, Command: command}, &out); err != nil {
+		return nil, err
+	}
+	if out.Roots == nil {
+		return []string{}, nil
+	}
+	return out.Roots, nil
 }
 
 func (client *ComputerControlClient) ReportRuntimeSet(ctx context.Context, runtimes any, daemonToken, expiresAt string) error {

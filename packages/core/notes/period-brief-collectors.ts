@@ -131,6 +131,42 @@ export function togglePeriodBriefCollectorId(
   return [...selected, agentId];
 }
 
+/** Daemon id used to read/write Computer-local Period Work collect roots. */
+export function periodBriefCollectorDaemonId(
+  agent: Pick<PeriodBriefCollectorCandidate, "runtime_id">,
+  runtimes: readonly PeriodBriefCollectorSlotRuntime[],
+): string | null {
+  const runtime = runtimes.find((item) => item.id === agent.runtime_id);
+  const daemon = runtime?.daemon_id?.trim();
+  return daemon || null;
+}
+
+/** Daemon id for a collector slot, including computers that still need setup. */
+export function periodBriefSlotDaemonId(
+  slot: Pick<PeriodBriefCollectorSlot, "machineId" | "runtimeIds">,
+  runtimes: readonly PeriodBriefCollectorSlotRuntime[] = [],
+): string | null {
+  for (const runtimeId of slot.runtimeIds) {
+    const runtime = runtimes.find((item) => item.id === runtimeId);
+    const daemon = runtime?.daemon_id?.trim();
+    if (daemon) return daemon;
+  }
+  return periodBriefMachineDaemonId(slot.machineId);
+}
+
+export function periodBriefMachineDaemonId(machineId: string): string | null {
+  const trimmed = machineId.trim();
+  const local = /^local:(.+)$/i.exec(trimmed);
+  if (local?.[1] && !local[1].toLowerCase().startsWith("runtime:")) {
+    return local[1];
+  }
+  const cloud = /^cloud:(.+)$/i.exec(trimmed);
+  if (cloud?.[1] && !cloud[1].toLowerCase().startsWith("runtime:")) {
+    return cloud[1];
+  }
+  return null;
+}
+
 /** Label shown in the collector picker (display name already includes 采集 ·). */
 export function periodBriefCollectorLabel(
   agent: Pick<Agent, "display_name" | "name">,

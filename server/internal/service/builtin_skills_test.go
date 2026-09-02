@@ -670,6 +670,8 @@ func TestPeriodWorkCollectSkillCoversOSHarvestAndNoteWrite(t *testing.T) {
 		"MINGW",
 		"do not add HOME as a deep-scan root",
 		"present but idle in window",
+		"multica computer collect-roots --print",
+		"USER_COLLECT_ROOTS",
 	} {
 		if !strings.Contains(recipes, want) {
 			t.Errorf("collect-recipes.md missing %q", want)

@@ -31,6 +31,7 @@ const (
 	LocalControlRunnerReleaseOperation        = "runner:release"
 	LocalControlWorkDigestOperation           = "workspace:work-digest"
 	LocalControlWorkJournalOperation          = "workspace:work-journal"
+	LocalControlCollectRootsOperation         = "workspace:collect-roots"
 )
 
 type localControlOperationSpec struct {
@@ -48,6 +49,7 @@ var localControlOperationSpecs = []localControlOperationSpec{
 	{Name: "runner:start"}, {Name: "runner:stop"}, {Name: "runner:restart"},
 	{Name: LocalControlRunnerDrainOperation}, {Name: LocalControlRunnerReleaseOperation}, {Name: LocalControlRunnerReadyOperation},
 	{Name: LocalControlWorkDigestOperation}, {Name: LocalControlWorkJournalOperation},
+	{Name: LocalControlCollectRootsOperation},
 }
 
 func localControlOperationSpecFor(name string) (localControlOperationSpec, bool) {

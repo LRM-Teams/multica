@@ -4,9 +4,12 @@ Use these on the **runtime OS**. Substitute `$START` / `$END` (RFC3339 from
 the wake `<window>`). Harvest logic is the same on every OS. Only
 `SCAN_ROOTS` resolution and the denylist are OS-shaped.
 
-**Always resolve `SCAN_ROOTS` first.** List first-level project-like
-parents — do not add HOME as a deep-scan root (`AppData` / `Library` live
-there). Container sandboxes keep user work in `/workspace` (or `$PWD`
+**Always resolve `SCAN_ROOTS` first.** Run
+`multica computer collect-roots --print` before any `find`. If that
+command prints paths, those **replace** the heuristic parents — do not
+also add HOME / `/opt` extras. If it prints nothing, list first-level
+project-like parents — do not add HOME as a deep-scan root (`AppData` /
+`Library` live there). Do not walk `.multica` to discover this file. Container sandboxes keep user work in `/workspace` (or `$PWD`
 outside HOME). Linux desktops often keep work off HOME via a symlink,
 GOPATH, or `/opt` / `/srv`. Windows work often lives on another drive
 (`D:\code`) — pick those by **name on the first level of each volume**,
@@ -55,6 +58,15 @@ add_named_project_parents() {
   done
 }
 
+USER_COLLECT_ROOTS=""
+if command -v multica >/dev/null 2>&1; then
+  USER_COLLECT_ROOTS=$(multica computer collect-roots --print 2>/dev/null || true)
+fi
+if [ -n "$USER_COLLECT_ROOTS" ]; then
+  for d in $USER_COLLECT_ROOTS; do
+    add_scan_root "$d"
+  done
+else
 # /workspace and $PWD — not HOME itself.
 add_scan_root /workspace
 pwd_now=$(pwd -P 2>/dev/null || pwd)
@@ -106,6 +118,7 @@ case "$uname_s" in
     done
     ;;
 esac
+fi
 
 echo "SCAN_ROOTS=$SCAN_ROOTS"
 ```

@@ -648,6 +648,32 @@ func (h *Hub) RequestComputerWorkJournal(ctx context.Context, daemonID, workspac
 	return done.Enabled, nil
 }
 
+// RequestComputerCollectRoots reads or writes the Computer-local Period Work
+// collect-root file. Local state stays authoritative.
+func (h *Hub) RequestComputerCollectRoots(ctx context.Context, daemonID, workspaceID string, req protocol.ComputerCollectRootsPayload) ([]string, error) {
+	if err := req.Validate(); err != nil {
+		return nil, err
+	}
+	raw, err := h.requestWorkspaceDaemon(ctx, daemonID, workspaceID, req.RequestID, protocol.EventComputerCollectRoots, req)
+	if err != nil {
+		return nil, err
+	}
+	var done protocol.ComputerCollectRootsDonePayload
+	if err := json.Unmarshal(raw, &done); err != nil {
+		return nil, err
+	}
+	if !done.OK {
+		if strings.TrimSpace(done.Error) == "" {
+			return nil, errors.New("Computer collect roots update failed")
+		}
+		return nil, errors.New(done.Error)
+	}
+	if done.Roots == nil {
+		return []string{}, nil
+	}
+	return done.Roots, nil
+}
+
 func (h *Hub) requestWorkspaceDaemon(ctx context.Context, daemonID, workspaceID, requestID, msgType string, payload any) (json.RawMessage, error) {
 	if h == nil {
 		return nil, ErrComputerOffline
@@ -1572,7 +1598,7 @@ func (c *client) handleFrame(raw []byte) {
 		if err := json.Unmarshal(msg.Payload, &idOnly); err == nil && idOnly.RequestID != "" {
 			c.hub.deliverResponse(idOnly.RequestID, msg.Payload)
 		}
-	case protocol.EventComputerWorkDigestDone, protocol.EventComputerWorkJournalDone:
+	case protocol.EventComputerWorkDigestDone, protocol.EventComputerWorkJournalDone, protocol.EventComputerCollectRootsDone:
 		var done struct {
 			RequestID string `json:"requestId"`
 		}

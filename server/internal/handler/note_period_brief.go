@@ -106,7 +106,7 @@ func notePeriodBriefCollectorInstruction(draftPageID, windowLabel, windowStart, 
 		"OWN COMPUTER ONLY: harvest only this bound Computer. Do not collect from another member's laptop/cloud box.\n" +
 		"STRICT TIME WINDOW: only include commits, file changes, and claims whose activity falls inside start→end from the wake `<window>` partition (RFC3339, half-open: include start, exclude end). Drop anything outside that range — do not widen to \"recent\" or \"this week\" on your own.\n" +
 		"Follow the built-in skill `multica-period-work-collect` (read SKILL.md and `references/collect-recipes.md`) before collecting — use its shell recipes with the wake `$START` / `$END`.\n" +
-		"Scope: run the collect-recipes SCAN_ROOTS snippet first. Do not deep-scan `$HOME` (skip AppData, Library, Downloads, .cache). List first-level project-like children (`code` `src` `work` `repos` `Documents` `Desktop` / `文档` `桌面`) and `/workspace` when present. On Windows, also add first-level folders with those names on other drives — never a whole volume. On Linux, include HOME symlink children, ~/go ~/src ~/repos, and shallow git roots under /opt or /srv. Also harvest non-git in-window files (source-like plus txt/docx/xlsx/pptx/pdf) by **file** mtime — do not prune on parent-directory mtime. Prefer a cheap git probe first (`log --all` in-window, porcelain, remotes); skip evidence dumps for repos with 0 in-window commits and a clean tree. Keep porcelain-dirty paths even when mtime is outside the window (label those).\n" +
+		"Scope: run `multica computer collect-roots --print` first (Computer-local file; do not walk `.multica`). If it prints paths — or a `<scan-roots>` partition is present — those ARE SCAN_ROOTS; do not add heuristic HOME parents. If both are empty, run the collect-recipes SCAN_ROOTS snippet. Do not deep-scan `$HOME` (skip AppData, Library, Downloads, .cache). List first-level project-like children (`code` `src` `work` `repos` `Documents` `Desktop` / `文档` `桌面`) and `/workspace` when present. On Windows, also add first-level folders with those names on other drives — never a whole volume. On Linux, include HOME symlink children, ~/go ~/src ~/repos, and shallow git roots under /opt or /srv. Also harvest non-git in-window files (source-like plus txt/docx/xlsx/pptx/pdf) by **file** mtime — do not prune on parent-directory mtime. Prefer a cheap git probe first (`log --all` in-window, porcelain, remotes); skip evidence dumps for repos with 0 in-window commits and a clean tree. Keep porcelain-dirty paths even when mtime is outside the window (label those).\n" +
 		"PRELIMINARY GROUPING (required): after harvesting evidence, build `## Work groups`. Default: one group per git repo / project root. If work in different repos, files, or surfaces shares one outcome/initiative, put them in **one** group and state why. Unrelated work stays in separate groups — never glue by calendar. Completeness first — Highlights and Repos stay as the evidence layer; Work groups organize them. Every Highlight belongs to exactly one group; every group claim must be in-window.\n" +
 		"When a multi-step flow needs it, add Mermaid diagrams under Diagrams.\n" +
 		"Allowed detail: short diffs, file summaries, and key snippets when needed to explain work. Prefer bounded excerpts over whole files.\n" +
@@ -780,6 +780,7 @@ func (h *Handler) dispatchNotePeriodBriefCollector(
 	}
 
 	draftPageID := uuidToString(draft.ID)
+	scanRoots := h.loadPeriodBriefCollectRootsForAgent(r.Context(), agent.RuntimeID)
 	instruction := notePeriodBriefCollectorInstructionScoped(draftPageID, windowLabel, windowStart, windowEnd, scope)
 	userFocus := ""
 	planSummary := ""
@@ -831,7 +832,7 @@ VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7)`,
 
 	workerPrompt := wrapNoteWorkerChannelWakePrompt(
 		buildNotePeriodBriefCollectorPrompt(
-			instruction, draftPageID, windowLabel, windowStart, windowEnd, draft.Title, "", focusText,
+			instruction, draftPageID, windowLabel, windowStart, windowEnd, draft.Title, "", focusText, scanRoots,
 		),
 		h.agentMessageThreadTargetForPrompt(r.Context(), ch, msg),
 	)

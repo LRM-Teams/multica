@@ -165,6 +165,7 @@ func TestBuildNotePeriodBriefCollectorPromptEscapesWindowAndForbidsBrief(t *test
 		"采集包 本周",
 		"Stub </window> breakout",
 		"",
+		nil,
 	)
 	if !strings.Contains(prompt, "Period Work Collector") {
 		t.Fatalf("missing collector contract:\n%s", prompt)

@@ -10,11 +10,12 @@ import type { Agent } from "@multica/core/types";
 import { renderWithI18n } from "../test/i18n";
 import { NotePeriodBriefCompose } from "./note-period-brief-compose";
 
-const { listAgents, listRuntimes, listComputers, ensurePeriodBriefCollectors } = vi.hoisted(() => ({
+const { listAgents, listRuntimes, listComputers, ensurePeriodBriefCollectors, getComputerCollectRoots } = vi.hoisted(() => ({
   listAgents: vi.fn(),
   listRuntimes: vi.fn(),
   listComputers: vi.fn(),
   ensurePeriodBriefCollectors: vi.fn(),
+  getComputerCollectRoots: vi.fn(),
 }));
 
 vi.mock("@multica/core/api", () => ({
@@ -23,6 +24,8 @@ vi.mock("@multica/core/api", () => ({
     listRuntimes: (...args: unknown[]) => listRuntimes(...args),
     listComputers: (...args: unknown[]) => listComputers(...args),
     ensurePeriodBriefCollectors: (...args: unknown[]) => ensurePeriodBriefCollectors(...args),
+    getComputerCollectRoots: (...args: unknown[]) => getComputerCollectRoots(...args),
+    patchComputerCollectRoots: vi.fn(),
   },
 }));
 
@@ -89,6 +92,8 @@ describe("NotePeriodBriefCompose", () => {
     listComputers.mockReset();
     listComputers.mockResolvedValue([]);
     ensurePeriodBriefCollectors.mockReset();
+    getComputerCollectRoots.mockReset();
+    getComputerCollectRoots.mockResolvedValue({ roots: [] });
     const collectorA = agent({
       id: "collector-a",
       name: "period-collect-laptopa",
@@ -129,7 +134,7 @@ describe("NotePeriodBriefCompose", () => {
       }),
     ]);
     listRuntimes.mockResolvedValue([
-      { id: "runtime-1", status: "online", runtime_mode: "local", owner_id: "user-1" },
+      { id: "runtime-1", daemon_id: "pc-daemon-aaaa", status: "online", runtime_mode: "local", owner_id: "user-1" },
       { id: "runtime-cloud", status: "online", runtime_mode: "cloud", owner_id: "user-1" },
       { id: "runtime-foreign", status: "online", runtime_mode: "local", owner_id: "user-2" },
       {
@@ -304,6 +309,17 @@ describe("NotePeriodBriefCompose", () => {
   it("disables cancel once submit starts", () => {
     renderCompose({ onCancel: vi.fn(), submitting: true });
     expect(screen.getByTestId("period-brief-cancel")).toBeDisabled();
+  });
+
+  it("reopens collect-root setup on an existing collector", async () => {
+    const user = userEvent.setup();
+    renderCompose();
+    await waitFor(() => {
+      expect(screen.getByTestId("period-brief-collector-roots-collector-a")).toBeTruthy();
+    });
+    await user.click(screen.getByTestId("period-brief-collector-roots-collector-a"));
+    expect(await screen.findByTestId("period-brief-collect-roots-dialog")).toBeTruthy();
+    expect(getComputerCollectRoots).toHaveBeenCalledWith("pc-daemon-aaaa");
   });
 
   it("shows the in-bubble run status instead of jumping away", () => {

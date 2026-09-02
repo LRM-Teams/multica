@@ -66,6 +66,17 @@ supersedes: docs/adr/0018-machine-work-journal-period-brief.md
 > for `failed` / `stalled` and for a completed turn that still carried
 > an error string.
 >
+> **Amendment (2026-09-02):** Each owned Computer may declare Period Work
+> collect roots in `~/.multica/computer/period-brief-collect-roots.json`.
+> The Computer file is authoritative. Empty / missing keeps today's
+> heuristic `SCAN_ROOTS`. A non-empty list **replaces** the heuristic —
+> collectors must not add HOME parents, `/opt`, or other extras. The
+> collector setup UI (create and reopen on an existing collector) writes
+> the file through the live Computer; `multica computer collect-roots
+> --print` and the `<scan-roots>` wake partition are how collectors read
+> it. Collectors must not walk `.multica`. denylist, OWN COMPUTER, STRICT
+> WINDOW, and per-run `<focus>` still apply inside those roots.
+>
 > **Amendment (2026-09-01):** “Other visible project dirs” on Linux includes
 > one level of HOME symlink children, common parents (`~/go`, `~/repos`,
 > `~/src/github.com`, …), and shallow git roots under `/opt` / `/srv` /

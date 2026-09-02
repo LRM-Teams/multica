@@ -163,6 +163,34 @@ func TestGraphMemoryAtomizer_ZeroAtomsForIneligibleSegments(t *testing.T) {
 	assert.Empty(t, atoms, "no-value content yields zero atoms")
 }
 
+func TestGraphMemoryAtomizer_CanonicalTextMessagesYieldAtoms(t *testing.T) {
+	// Post-universal-DAG canonical rows: readable channel turns are typed
+	// "text" and tool rows carry their substance outside Content. The
+	// deterministic proposer must extract from the text rows.
+	atomizer := NewGraphMemoryAtomizer(nil)
+	payload := SanitizedTrajectory{
+		SanitizerVersion: interactionDAGSanitizerVersion,
+		Messages: []SanitizedTaskMessage{
+			{Sequence: 1, Type: "tool_use", Tool: "channel_context", Content: ""},
+			{Sequence: 2, Type: "tool_result", Tool: "channel_context", Content: ""},
+			{Sequence: 3, Type: "text", Content: "The deployment owner for HD-PG02 is Dana and the freeze window ends Friday."},
+			{Sequence: 4, Type: "text", Content: "."},
+		},
+	}
+	segment := AtomizerSegment{
+		SegmentID: "seg-atom-text", StartSeq: 1, EndSeq: 4,
+		MemoryTypeAtEvent: "graph", GraphProjectionEligible: true,
+		CloseActionKind: "terminal", ChannelID: "11111111-1111-1111-1111-111111111111",
+	}
+	atoms, err := atomizer.ExtractAtoms(context.Background(), segment, payload)
+	require.NoError(t, err)
+	require.NotEmpty(t, atoms, "canonical text turns must yield atoms")
+	for _, atom := range atoms {
+		assert.Equal(t, "fact", atom.Kind)
+		assert.Contains(t, atom.SourceMessageSeqs, int32(3))
+	}
+}
+
 func TestGraphMemoryAtomizer_FallbackAtomOnExtractorFailure(t *testing.T) {
 	atomizer := NewGraphMemoryAtomizer(&stubAtomProposer{err: errors.New("extractor exploded")})
 	atoms, err := atomizer.ExtractAtoms(context.Background(), atomizerFixtureSegment(), atomizerFixturePayload())

@@ -241,8 +241,9 @@ func TestGraphCaptureGatesLegacyProfileMentionAndAuthor(t *testing.T) {
 		t.Fatalf("legacy workspace anchors = %d, want 0", got)
 	}
 
-	// Graph workspace, human message WITHOUT an agent mention: Directed is
-	// false, so the turn must not mint.
+	// Graph workspace, human message WITHOUT a mention: the managed memory
+	// agent is the conversational counterpart for every human turn, so this
+	// mints exactly like a directed turn.
 	workspaceID, channelID, _ := seedGraphCaptureFixture(t, true)
 	undirected, err := testHandler.insertChannelMessageWithParts(
 		context.Background(), channelID, workspaceID, "user", parseUUID(testUserID), "Tester",
@@ -260,8 +261,8 @@ func TestGraphCaptureGatesLegacyProfileMentionAndAuthor(t *testing.T) {
 	if err := testHandler.deliverCanonicalMessageToChannelAgents(context.Background(), channel, undirected); err != nil {
 		t.Fatalf("deliver undirected message: %v", err)
 	}
-	if got := graphCaptureAnchorCount(t, undirected.ID); got != 0 {
-		t.Fatalf("undirected anchors = %d, want 0", got)
+	if got := graphCaptureAnchorCount(t, undirected.ID); got != 1 {
+		t.Fatalf("undirected anchors = %d, want 1", got)
 	}
 
 	// Graph workspace, agent-authored human-shaped message: agent traffic owns
@@ -289,6 +290,51 @@ func TestGraphCaptureGatesLegacyProfileMentionAndAuthor(t *testing.T) {
 	}
 }
 
+// TestGraphCaptureManagedOnlyChannel mints through the standalone path: with
+// no regular agent members the delivery plan set is empty, and the turn still
+// gets its anchor (the managed memory agent is not a channel_member).
+func TestGraphCaptureManagedOnlyChannel(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	workspaceID, channelID, agentID := seedGraphCaptureFixture(t, true)
+	if _, err := testPool.Exec(ctx, `
+		DELETE FROM channel_member
+		WHERE channel_id = $1 AND member_type = 'agent'`, channelID); err != nil {
+		t.Fatalf("remove agent member: %v", err)
+	}
+	message, err := testHandler.insertChannelMessageWithParts(
+		ctx, channelID, workspaceID, "user", parseUUID(testUserID), "Tester",
+		"talking to the memory agent alone, token "+uuid.NewString()[:8],
+		[]protocol.MessagePart{{Type: protocol.MessagePartTypeText, Text: "talking to the memory agent alone"}},
+		"multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0,
+	)
+	if err != nil {
+		t.Fatalf("insert managed-only Message: %v", err)
+	}
+	channel, found := testHandler.getChannel(ctx, uuidToString(workspaceID), channelID)
+	if !found {
+		t.Fatal("load channel")
+	}
+	if err := testHandler.deliverCanonicalMessageToChannelAgents(ctx, channel, message); err != nil {
+		t.Fatalf("deliver managed-only message: %v", err)
+	}
+	if got := graphCaptureAnchorCount(t, message.ID); got != 1 {
+		t.Fatalf("managed-only anchors = %d, want 1", got)
+	}
+	var anchorAgent string
+	if err := testPool.QueryRow(ctx, `
+		SELECT agent_id::text FROM agent_inbox_event
+		WHERE source_message_id = $1 AND reason = 'graph_capture'`,
+		parseUUID(message.ID)).Scan(&anchorAgent); err != nil {
+		t.Fatalf("load managed-only anchor: %v", err)
+	}
+	if anchorAgent != agentID {
+		t.Fatalf("managed-only anchor agent = %s, want the managed agent %s", anchorAgent, agentID)
+	}
+}
+
 func TestGraphCaptureIdempotentReplay(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -299,7 +345,7 @@ func TestGraphCaptureIdempotentReplay(t *testing.T) {
 	message := sendDirectedGraphCaptureMessage(t, workspaceID, channelID, agentID, fact)
 
 	// Re-deliver the same persisted message: agent_message_delivery replays
-	// (conflict no-op), Directed recomputes true, and the mint must collapse.
+	// (conflict no-op) and the mint must collapse on the unique index.
 	channel, found := testHandler.getChannel(ctx, uuidToString(workspaceID), channelID)
 	if !found {
 		t.Fatal("load channel")

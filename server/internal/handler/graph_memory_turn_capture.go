@@ -28,14 +28,21 @@ import (
 // message text can be replayed through RecordTaskMessageBoundaryTx into a
 // graph/eligible segment. Replays are collapsed by the partial unique index
 // uq_agent_inbox_event_graph_capture_message (one anchor per message+agent).
+//
+// The user-turn gate is channel-level (group channel, human author, active
+// managed memory agent, graph profile), not mention-level: the managed memory
+// agent is not a channel_member and never appears among delivery plan
+// recipients, so mention-directed gates cannot reach it.
 
-// captureDirectedGraphTurnTx records a human's directed channel message (an
-// @mention of the active managed memory agent) as a turn anchor. Delivery
-// persistence calls this inside the message's own transaction, next to the
-// steering-event hook: the directed flag already encodes the
-// mention-of-active-managed-agent gate computed per recipient.
-func (h *Handler) captureDirectedGraphTurnTx(ctx context.Context, tx pgx.Tx, ch ChannelResponse, message ChannelMessageResponse, recipientAgentID pgtype.UUID, directed bool) error {
-	if h == nil || tx == nil || !directed {
+// captureHumanGraphTurnTx records a human channel message as a turn anchor
+// for the channel's managed memory agent. Delivery persistence calls this
+// inside the message's own transaction. The gate is channel-level, not
+// mention-level: the managed memory agent is the conversational counterpart
+// for every human turn in an agent-mode channel, and it never appears in the
+// delivery plan recipients (it is not a channel_member), so a per-recipient
+// Directed gate could never reach it.
+func (h *Handler) captureHumanGraphTurnTx(ctx context.Context, tx pgx.Tx, ch ChannelResponse, message ChannelMessageResponse) error {
+	if h == nil || tx == nil {
 		return nil
 	}
 	if !strings.EqualFold(ch.Kind, "group") {
@@ -46,10 +53,44 @@ func (h *Handler) captureDirectedGraphTurnTx(ctx context.Context, tx pgx.Tx, ch 
 	if !channelMessageIsHumanAuthored(message.Type) {
 		return nil
 	}
+	if strings.TrimSpace(ch.WorkspaceID) == "" || strings.TrimSpace(ch.ID) == "" || strings.TrimSpace(message.ID) == "" || message.Seq <= 0 {
+		return nil
+	}
+	var managedAgentID pgtype.UUID
+	err := tx.QueryRow(ctx, `
+		SELECT agent_id
+		FROM graph_memory_channel_agent
+		WHERE channel_id = $1 AND workspace_id = $2 AND status = 'active' AND agent_id IS NOT NULL
+		ORDER BY created_at, agent_id
+		LIMIT 1`, parseUUID(ch.ID), parseUUID(ch.WorkspaceID)).Scan(&managedAgentID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil // no managed memory agent: ordinary channel, nothing to record
+	}
+	if err != nil {
+		return fmt.Errorf("resolve managed graph memory agent: %w", err)
+	}
 	return h.mintGraphCaptureAnchorTx(ctx, tx,
-		parseUUID(ch.WorkspaceID), parseUUID(ch.ID), recipientAgentID,
+		parseUUID(ch.WorkspaceID), parseUUID(ch.ID), managedAgentID,
 		parseUUID(message.ID), message.Seq, message.Content,
 	)
+}
+
+// captureGraphTurnStandalone runs the turn capture in its own transaction for
+// the empty-plan path: a channel whose only conversational agent is the
+// managed memory agent has no delivery plan recipients at all.
+func (h *Handler) captureGraphTurnStandalone(ctx context.Context, ch ChannelResponse, message ChannelMessageResponse) error {
+	if h == nil || h.TxStarter == nil {
+		return nil
+	}
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin graph capture transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if err := h.captureHumanGraphTurnTx(ctx, tx, ch, message); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // captureGraphAgentReplyTx records a managed memory agent's channel reply as a

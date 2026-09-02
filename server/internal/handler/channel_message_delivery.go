@@ -143,13 +143,16 @@ func (h *Handler) persistCanonicalMessageDeliveryPlansTx(ctx context.Context, tx
 			if err := persistGraphMemoryAgentSteeringEvent(ctx, tx, delivery.Message); err != nil {
 				return fmt.Errorf("persist graph memory agent steering event: %w", err)
 			}
-			if err := h.captureDirectedGraphTurnTx(ctx, tx, ch, message, plan.Recipient.ID, delivery.Message.Directed); err != nil {
-				return fmt.Errorf("capture directed graph memory turn: %w", err)
-			}
 		}
 		// A repaired delivery or obligation needs a live notification after the
 		// acceptance boundary; an ordinary complete replay creates neither.
 		plan.Created = deliveryCreated || obligationCreated
+	}
+	// Post-#2295 the channel conversation turn itself has no DAG record;
+	// mint the graph capture anchor for the channel's managed memory agent in
+	// the same transaction (idempotent per message via the partial index).
+	if err := h.captureHumanGraphTurnTx(ctx, tx, ch, message); err != nil {
+		return fmt.Errorf("capture graph memory channel turn: %w", err)
 	}
 	return nil
 }
@@ -300,6 +303,13 @@ func (h *Handler) deliverCanonicalMessageToChannelAgents(ctx context.Context, ch
 	}
 	if err := h.persistCanonicalMessageDeliveryPlans(ctx, ch, message, plans); err != nil {
 		return err
+	}
+	if len(plans) == 0 {
+		// A channel whose only conversational agent is the managed memory
+		// agent produces no delivery plans; the turn still needs its anchor.
+		if err := h.captureGraphTurnStandalone(ctx, ch, message); err != nil {
+			return err
+		}
 	}
 	h.notifyCanonicalMessageDeliveryPlans(ctx, ch, plans)
 	return nil

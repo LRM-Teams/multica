@@ -2024,7 +2024,7 @@ func applyUniversalDAGMigrationIfPresent(t *testing.T, ctx context.Context, conn
 	if !ok {
 		t.Fatal("locate universal DAG schema test")
 	}
-	path := filepath.Join(filepath.Dir(filename), "..", "..", "migrations", "454_universal_interaction_dag.up.sql")
+	path := filepath.Join(filepath.Dir(filename), "..", "..", "migrations", "476_universal_interaction_dag.up.sql")
 	migration, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return

@@ -98,7 +98,7 @@ func newTrainingGovernanceHarness(t *testing.T) *trainingGovernanceHarness {
 	_, filename, _, ok := runtime.Caller(0)
 	require.True(t, ok, "locate training governance test")
 	path := filepath.Join(filepath.Dir(filename), "..", "..", "migrations",
-		"472_interaction_dag_training_governance.up.sql")
+		"487_interaction_dag_training_governance.up.sql")
 	migration, err := os.ReadFile(path)
 	require.NoError(t, err, "read migration 472")
 	_, err = h.conn.Exec(h.ctx, string(migration))

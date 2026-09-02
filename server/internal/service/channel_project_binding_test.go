@@ -76,7 +76,7 @@ func applyGraphMemoryChannelMigration(t *testing.T, ctx context.Context, conn *p
 
 // graphMemoryChannelMigrationDDL is the body of migration 470 (the guard
 // trigger, ledgers, and gate column), kept in sync with
-// migrations/470_graph_memory_channel_migration.up.sql for private-schema
+// migrations/485_graph_memory_channel_migration.up.sql for private-schema
 // harnesses.
 const graphMemoryChannelMigrationDDL = `
 ALTER TABLE memory_read_phase_gate

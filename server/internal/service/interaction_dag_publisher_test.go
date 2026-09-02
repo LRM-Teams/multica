@@ -68,7 +68,7 @@ func applyUniversalDAGAtomProjectionMigration(t *testing.T, ctx context.Context,
 	if !ok {
 		t.Fatal("locate universal DAG publisher test")
 	}
-	path := filepath.Join(filepath.Dir(filename), "..", "..", "migrations", "466_graph_memory_atom_projection.up.sql")
+	path := filepath.Join(filepath.Dir(filename), "..", "..", "migrations", "481_graph_memory_atom_projection.up.sql")
 	migration, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read migration 466: %v", err)
@@ -87,7 +87,7 @@ func applyUniversalDAGRetractionGateMigration(t *testing.T, ctx context.Context,
 	if !ok {
 		t.Fatal("locate universal DAG publisher test")
 	}
-	path := filepath.Join(filepath.Dir(filename), "..", "..", "migrations", "467_memory_retraction_gate.up.sql")
+	path := filepath.Join(filepath.Dir(filename), "..", "..", "migrations", "482_memory_retraction_gate.up.sql")
 	migration, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read migration 467: %v", err)
@@ -119,7 +119,7 @@ func applyUniversalDAGPublicationMigration(t *testing.T, ctx context.Context, co
 	if !ok {
 		t.Fatal("locate universal DAG publisher test")
 	}
-	path := filepath.Join(filepath.Dir(filename), "..", "..", "migrations", "469_graph_memory_publication_coverage.up.sql")
+	path := filepath.Join(filepath.Dir(filename), "..", "..", "migrations", "484_graph_memory_publication_coverage.up.sql")
 	migration, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read migration 469: %v", err)

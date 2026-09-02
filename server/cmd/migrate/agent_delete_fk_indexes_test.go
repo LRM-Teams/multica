@@ -76,6 +76,11 @@ func TestAgentDeleteCascadeFKIndexesCoverRecursiveDeleteClosureAndAreIdempotent(
 		if err := runAgentDeleteCascadeFKIndexesHook(ctx, pool); err != nil {
 			t.Fatalf("run agent-delete cascade index hook pass %d: %v", i+1, err)
 		}
+		// The closure spans the interaction-DAG tables the 476 universal
+		// migration wired into agent_inbox_event/channel teardown.
+		if err := runUniversalDAGFKIndexesHook(ctx, pool); err != nil {
+			t.Fatalf("run universal DAG index hook pass %d: %v", i+1, err)
+		}
 	}
 
 	// Start at agent, recursively include every relation reached through

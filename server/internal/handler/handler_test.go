@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -33,6 +34,13 @@ var testPool *pgxpool.Pool
 var testUserID string
 var testWorkspaceID string
 var testRuntimeID string
+
+// handlerTestDBURL is the URL TestMain resolved for this run, including the
+// disposable-schema search_path it may have provisioned. Tests that build
+// their own constrained pools must use it instead of the raw DATABASE_URL
+// env, or they land in public while every fixture lives in the disposable
+// schema.
+var handlerTestDBURL string
 
 const (
 	handlerTestEmail         = "handler-test@multica.ai"
@@ -68,6 +76,13 @@ func runHandlerTests(m *testing.M) int {
 		fmt.Printf("Failed to acquire handler test database lock: %v\n", err)
 		return 1
 	}
+
+	dbURL, err = provisionHandlerTestSchema(ctx, dbURL)
+	if err != nil {
+		fmt.Printf("Failed to provision handler test schema: %v\n", err)
+		return 1
+	}
+	handlerTestDBURL = dbURL
 
 	pool, err := pgxpool.New(ctx, dbURL)
 	if err != nil {
@@ -123,9 +138,16 @@ func runHandlerTests(m *testing.M) int {
 
 	code := m.Run()
 	if err := cleanupHandlerTestFixture(context.Background(), pool); err != nil {
+		// In-process schedulers can still be flushing channel/segment work
+		// queued by the final tests (e.g. racing a general-channel guard);
+		// give them a beat and try once more before failing the run.
 		fmt.Printf("Failed to clean up handler test fixture: %v\n", err)
-		if code == 0 {
-			code = 1
+		time.Sleep(2 * time.Second)
+		if err := cleanupHandlerTestFixture(context.Background(), pool); err != nil {
+			fmt.Printf("Failed to clean up handler test fixture on retry: %v\n", err)
+			if code == 0 {
+				code = 1
+			}
 		}
 	}
 	return code
@@ -235,6 +257,56 @@ func ensureAgentInboxTestFixtureDefaults(ctx context.Context, pool *pgxpool.Pool
 // the same migration path as `make test` and CI. Handler tests exercise a
 // broad set of tables, so an older local database otherwise surfaces as an
 // unrelated missing-table failure deep inside a test.
+// provisionHandlerTestSchema keeps the handler suite off the shared public
+// schema. Universal DAG tests refuse to run there (requireDisposableDAGTestSchema)
+// because they need a disposable schema, and CI shares one database across
+// integration packages, so residue earlier packages leave in public breaks
+// fixtures (e.g. orphaned pending interaction_dag_segment rows poison the
+// publisher loop). When the configured URL does not already pin a non-public
+// current schema, create a throwaway schema for this run and point the URL at
+// it; ensureHandlerTestSchema migrates it afterwards. The schema is left in
+// place when the run ends, mirroring the service suite's
+// bootstrapUniversalDAGProjectionSchema discipline.
+func provisionHandlerTestSchema(ctx context.Context, dbURL string) (string, error) {
+	probe, err := pgx.Connect(ctx, dbURL)
+	if err != nil {
+		return "", fmt.Errorf("probe current schema: %w", err)
+	}
+	defer probe.Close(context.Background())
+	var current string
+	if err := probe.QueryRow(ctx, `SELECT current_schema()`).Scan(&current); err != nil {
+		return "", fmt.Errorf("resolve current schema: %w", err)
+	}
+	if current != "" && current != "public" {
+		return dbURL, nil
+	}
+
+	schema := fmt.Sprintf("handler_tests_%d", time.Now().UnixNano())
+	if _, err := probe.Exec(ctx, fmt.Sprintf(`CREATE SCHEMA %s`, pgx.Identifier{schema}.Sanitize())); err != nil {
+		return "", fmt.Errorf("create disposable schema %s: %w", schema, err)
+	}
+	// Migration 314 resolves an unqualified DROP FUNCTION against the search
+	// path; the stubs keep that drop inside the disposable schema instead of
+	// reaching public.
+	for _, fn := range []string{"test_agent_inbox_fixture_defaults", "test_server_agent_inbox_fixture_defaults"} {
+		if _, err := probe.Exec(ctx, fmt.Sprintf(
+			`CREATE OR REPLACE FUNCTION %s.%s() RETURNS trigger LANGUAGE plpgsql AS $f$ BEGIN RETURN NEW; END $f$;`,
+			pgx.Identifier{schema}.Sanitize(), fn,
+		)); err != nil {
+			return "", fmt.Errorf("stub %s in %s: %w", fn, schema, err)
+		}
+	}
+
+	parsed, err := url.Parse(dbURL)
+	if err != nil {
+		return "", fmt.Errorf("parse database url: %w", err)
+	}
+	q := parsed.Query()
+	q.Set("search_path", schema+",public")
+	parsed.RawQuery = q.Encode()
+	return parsed.String(), nil
+}
+
 func ensureHandlerTestSchema(ctx context.Context, pool *pgxpool.Pool, dbURL string) error {
 	missing, err := handlerTestMissingMigration(ctx, pool)
 	if err == nil && missing == "" {
@@ -274,6 +346,23 @@ func handlerTestMissingMigration(ctx context.Context, pool *pgxpool.Pool) (strin
 	files, err := migrations.Files("up")
 	if err != nil {
 		return "", fmt.Errorf("find migrations: %w", err)
+	}
+
+	// Only the current schema's own ledger counts as applied. An unqualified
+	// schema_migrations lookup falls through the search path to public, which
+	// CI migrates before running tests, and the suite would then skip
+	// bootstrapping the still-empty disposable schema.
+	var hasLedger bool
+	if err := pool.QueryRow(ctx, `
+		SELECT EXISTS (
+		  SELECT 1 FROM information_schema.tables
+		  WHERE table_schema = current_schema()
+		    AND table_name = 'schema_migrations'
+		)`).Scan(&hasLedger); err != nil {
+		return "", err
+	}
+	if !hasLedger {
+		return migrations.ExtractVersion(files[0]), nil
 	}
 
 	for _, file := range files {
@@ -421,12 +510,38 @@ func cleanupHandlerTestFixture(ctx context.Context, pool *pgxpool.Pool) error {
 	} else if _, err := tx.Exec(ctx, `TRUNCATE interaction_dag_edge, interaction_dag_edge_sequence, interaction_dag_publish_outbox, interaction_dag_segment, interaction_dag_task_cursor CASCADE`); err != nil {
 		return err
 	}
+	// Drop the fixture workspace's agent credentials before the workspace
+	// delete: the workspace_member cascade revokes them and logs to
+	// activity_log for the already-deleted workspace, which trips
+	// activity_log_workspace_id_fkey inside this transaction.
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM agent_credential
+		WHERE workspace_id = (SELECT id FROM workspace WHERE slug = $1)
+	`, handlerTestWorkspaceSlug); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `DELETE FROM workspace WHERE slug = $1`, handlerTestWorkspaceSlug); err != nil {
+		return err
+	}
+	// Tests that mint extra workspaces (route/revoke fixtures) leave them
+	// behind with general channels created by the fixture user. The user
+	// delete would cascade through channel_created_by_fkey into those
+	// still-live workspaces and trip system_general_channel_protected, so
+	// drop those workspaces first (parent-first cascade is the sanctioned
+	// path for general-channel removal).
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM workspace AS w
+		USING channel AS c
+		WHERE c.workspace_id = w.id
+		  AND c.system_key = 'general'
+		  AND c.created_by = (SELECT id FROM "user" WHERE email = $1)
+	`, handlerTestEmail); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `
 		DELETE FROM agent
 		WHERE owner_id = (SELECT id FROM "user" WHERE email = $1)
+		   OR archived_by = (SELECT id FROM "user" WHERE email = $1)
 	`, handlerTestEmail); err != nil {
 		return err
 	}

@@ -41,7 +41,7 @@ func applyUniversalDAGEdgeOnlyLinkageMigration(t *testing.T, ctx context.Context
 	if !ok {
 		t.Fatal("locate universal DAG linkage test")
 	}
-	path := filepath.Join(filepath.Dir(filename), "..", "..", "migrations", "464_universal_dag_edge_only_linkage.up.sql")
+	path := filepath.Join(filepath.Dir(filename), "..", "..", "migrations", "478_universal_dag_edge_only_linkage.up.sql")
 	migration, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read migration 464: %v", err)
@@ -74,7 +74,7 @@ func applyUniversalDAGLegacyBackfillMarker(t *testing.T, ctx context.Context, co
 	if !ok {
 		t.Fatal("locate universal DAG boundary test")
 	}
-	path := filepath.Join(filepath.Dir(filename), "..", "..", "migrations", "475_universal_dag_legacy_backfill.up.sql")
+	path := filepath.Join(filepath.Dir(filename), "..", "..", "migrations", "490_universal_dag_legacy_backfill.up.sql")
 	migration, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read migration 475: %v", err)

@@ -194,7 +194,7 @@ func applyMemoryExploreV2Migration(t *testing.T, ctx context.Context, conn *pgxp
 	if !ok {
 		t.Fatal("locate explore plan test")
 	}
-	path := filepath.Join(filepath.Dir(filename), "..", "..", "migrations", "468_memory_explore_v2.up.sql")
+	path := filepath.Join(filepath.Dir(filename), "..", "..", "migrations", "483_memory_explore_v2.up.sql")
 	migration, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read migration 468: %v", err)

@@ -133,8 +133,8 @@ func newRewardPolicyHarness(t *testing.T) *rewardPolicyHarness {
 	require.NoError(t, err, "create graph reward stubs")
 	applyRewardPolicyMigrations(t, h,
 		"421_graph_memory_rl_session.up.sql",
-		"472_interaction_dag_training_governance.up.sql",
-		"473_graph_memory_reward_revision.up.sql")
+		"487_interaction_dag_training_governance.up.sql",
+		"488_graph_memory_reward_revision.up.sql")
 	return h
 }
 

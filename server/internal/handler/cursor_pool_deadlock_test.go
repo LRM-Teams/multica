@@ -78,7 +78,10 @@ func singleConnHandler(t *testing.T, maxConns int32) *Handler {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
-	dbURL := os.Getenv("DATABASE_URL")
+	dbURL := handlerTestDBURL
+	if dbURL == "" {
+		dbURL = os.Getenv("DATABASE_URL")
+	}
 	if dbURL == "" {
 		dbURL = "postgres://multica:multica@localhost:5432/multica?sslmode=disable"
 	}

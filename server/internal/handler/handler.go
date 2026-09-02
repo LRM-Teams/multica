@@ -173,6 +173,11 @@ type Handler struct {
 	// 17): owner/admin reads and CAS updates within the platform caps. Nil
 	// without a pool.
 	MemoryRetention *service.MemoryRetentionService
+	// SkillEvolutionLedger backs the trajectory-eligibility admin API
+	// (plan Phase 3 wrap-up, migration 496): owner/admin reads and the
+	// revoke-only mutation with a mandatory audit reason. Nil without a
+	// pool.
+	SkillEvolutionLedger *service.PostgresSkillEvolutionLedger
 	// TrainingGovernance (Task 18, spec 14.1): grant/manifest lifecycle for
 	// every training-data consumer. Nil = training governance not configured.
 	TrainingGovernance *service.TrainingGovernanceService
@@ -330,6 +335,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		exploreV2Pool = pool
 	}
 	var memoryRetention *service.MemoryRetentionService
+	var skillEvolutionLedger *service.PostgresSkillEvolutionLedger
 	var trainingGovernance *service.TrainingGovernanceService
 	var graphMemoryCorrections *service.GraphMemoryCorrectionService
 	var graphMemoryPromotion *service.GraphMemoryPromotionPolicy
@@ -356,6 +362,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 				service.NewFilesystemArchiveObjectStore(root))
 		}
 		memoryRetention = service.NewMemoryRetentionService(exploreV2Pool, archive)
+		skillEvolutionLedger = service.NewPostgresSkillEvolutionLedger(exploreV2Pool)
 	}
 	var updateDB updatePostgresDB
 	if candidate, ok := txStarter.(updatePostgresDB); ok {
@@ -393,6 +400,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		GraphMemoryPromotion:        graphMemoryPromotion,
 		GraphMemoryPromotionPublish: graphMemoryPromotionPublish,
 		MemoryRetention:             memoryRetention,
+		SkillEvolutionLedger:        skillEvolutionLedger,
 		TrainingGovernance:          trainingGovernance,
 		ChannelProjectBindings:      channelProjectBindings,
 		Hub:                         hub,

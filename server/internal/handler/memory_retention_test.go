@@ -50,19 +50,21 @@ func TestMemoryRetention_HandlerBindsBootstrapPolicy(t *testing.T) {
 	var resp struct {
 		Policy service.MemoryRetentionPolicy `json:"policy"`
 		Caps   struct {
-			TrajectoryHotDays int `json:"trajectory_hot_days"`
-			ArchiveDays       int `json:"archive_days"`
-			TraceHotDays      int `json:"trace_hot_days"`
+			TrajectoryHotDays      int `json:"trajectory_hot_days"`
+			ArchiveDays            int `json:"archive_days"`
+			TraceHotDays           int `json:"trace_hot_days"`
+			DiagnosticThinkingDays int `json:"diagnostic_thinking_days"`
 		} `json:"caps"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
 	if resp.Policy.Version != 1 || resp.Policy.TrajectoryHotDays != 90 ||
-		resp.Policy.ArchiveDays != 365 || resp.Policy.TraceHotDays != 30 {
+		resp.Policy.ArchiveDays != 365 || resp.Policy.TraceHotDays != 30 ||
+		resp.Policy.DiagnosticThinkingDays != 30 {
 		t.Fatalf("policy = %#v", resp.Policy)
 	}
-	if resp.Caps.ArchiveDays != 365 || resp.Caps.TraceHotDays != 30 {
+	if resp.Caps.ArchiveDays != 365 || resp.Caps.TraceHotDays != 30 || resp.Caps.DiagnosticThinkingDays != 30 {
 		t.Fatalf("caps = %#v", resp.Caps)
 	}
 }
@@ -79,7 +81,7 @@ func TestMemoryRetention_HandlerCASAndCaps(t *testing.T) {
 	// A plain member is forbidden.
 	rec := httptest.NewRecorder()
 	testHandler.UpdateMemoryRetention(rec, retentionRequest(t, http.MethodPut, workspaceID.String(), testUserID,
-		map[string]any{"trajectory_hot_days": 30, "archive_days": 180, "trace_hot_days": 14, "expected_version": 1}))
+		map[string]any{"trajectory_hot_days": 30, "archive_days": 180, "trace_hot_days": 14, "diagnostic_thinking_days": 30, "expected_version": 1}))
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("member PUT = %d: %s", rec.Code, rec.Body.String())
 	}
@@ -93,7 +95,7 @@ func TestMemoryRetention_HandlerCASAndCaps(t *testing.T) {
 	}
 	rec = httptest.NewRecorder()
 	testHandler.UpdateMemoryRetention(rec, retentionRequest(t, http.MethodPut, workspaceID.String(), testUserID,
-		map[string]any{"trajectory_hot_days": 30, "archive_days": 180, "trace_hot_days": 14, "expected_version": 1}))
+		map[string]any{"trajectory_hot_days": 30, "archive_days": 180, "trace_hot_days": 14, "diagnostic_thinking_days": 30, "expected_version": 1}))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"version":2`) {
 		t.Fatalf("owner PUT = %d: %s", rec.Code, rec.Body.String())
 	}
@@ -101,7 +103,7 @@ func TestMemoryRetention_HandlerCASAndCaps(t *testing.T) {
 	// Stale version conflicts.
 	rec = httptest.NewRecorder()
 	testHandler.UpdateMemoryRetention(rec, retentionRequest(t, http.MethodPut, workspaceID.String(), testUserID,
-		map[string]any{"trajectory_hot_days": 20, "archive_days": 100, "trace_hot_days": 7, "expected_version": 1}))
+		map[string]any{"trajectory_hot_days": 20, "archive_days": 100, "trace_hot_days": 7, "diagnostic_thinking_days": 14, "expected_version": 1}))
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("stale PUT = %d: %s", rec.Code, rec.Body.String())
 	}
@@ -109,7 +111,7 @@ func TestMemoryRetention_HandlerCASAndCaps(t *testing.T) {
 	// Cap violations are unprocessable.
 	rec = httptest.NewRecorder()
 	testHandler.UpdateMemoryRetention(rec, retentionRequest(t, http.MethodPut, workspaceID.String(), testUserID,
-		map[string]any{"trajectory_hot_days": 91, "archive_days": 180, "trace_hot_days": 14, "expected_version": 2}))
+		map[string]any{"trajectory_hot_days": 91, "archive_days": 180, "trace_hot_days": 14, "diagnostic_thinking_days": 30, "expected_version": 2}))
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("cap PUT = %d: %s", rec.Code, rec.Body.String())
 	}
@@ -117,7 +119,7 @@ func TestMemoryRetention_HandlerCASAndCaps(t *testing.T) {
 	// Unknown fields are rejected.
 	rec = httptest.NewRecorder()
 	testHandler.UpdateMemoryRetention(rec, retentionRequest(t, http.MethodPut, workspaceID.String(), testUserID,
-		map[string]any{"trajectory_hot_days": 30, "archive_days": 180, "trace_hot_days": 14,
+		map[string]any{"trajectory_hot_days": 30, "archive_days": 180, "trace_hot_days": 14, "diagnostic_thinking_days": 30,
 			"expected_version": 2, "extra": 1}))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("unknown-field PUT = %d: %s", rec.Code, rec.Body.String())

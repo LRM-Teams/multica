@@ -557,22 +557,34 @@ func (q *Queries) CreateGraphMemoryProfile(ctx context.Context, arg CreateGraphM
 }
 
 const currentMemoryRetentionPolicy = `-- name: CurrentMemoryRetentionPolicy :one
-SELECT workspace_id, version, trajectory_hot_days, archive_days, trace_hot_days, updated_by, created_at
+SELECT workspace_id, version, trajectory_hot_days, archive_days, trace_hot_days, diagnostic_thinking_days, updated_by, created_at
 FROM memory_retention_policy
 WHERE workspace_id = $1
 ORDER BY version DESC
 LIMIT 1
 `
 
-func (q *Queries) CurrentMemoryRetentionPolicy(ctx context.Context, workspaceID pgtype.UUID) (MemoryRetentionPolicy, error) {
+type CurrentMemoryRetentionPolicyRow struct {
+	WorkspaceID            pgtype.UUID        `json:"workspace_id"`
+	Version                int64              `json:"version"`
+	TrajectoryHotDays      int32              `json:"trajectory_hot_days"`
+	ArchiveDays            int32              `json:"archive_days"`
+	TraceHotDays           int32              `json:"trace_hot_days"`
+	DiagnosticThinkingDays int32              `json:"diagnostic_thinking_days"`
+	UpdatedBy              string             `json:"updated_by"`
+	CreatedAt              pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) CurrentMemoryRetentionPolicy(ctx context.Context, workspaceID pgtype.UUID) (CurrentMemoryRetentionPolicyRow, error) {
 	row := q.db.QueryRow(ctx, currentMemoryRetentionPolicy, workspaceID)
-	var i MemoryRetentionPolicy
+	var i CurrentMemoryRetentionPolicyRow
 	err := row.Scan(
 		&i.WorkspaceID,
 		&i.Version,
 		&i.TrajectoryHotDays,
 		&i.ArchiveDays,
 		&i.TraceHotDays,
+		&i.DiagnosticThinkingDays,
 		&i.UpdatedBy,
 		&i.CreatedAt,
 	)
@@ -612,8 +624,8 @@ func (q *Queries) EnqueueGraphMemoryProjection(ctx context.Context, arg EnqueueG
 
 const ensureBootstrapMemoryRetentionPolicy = `-- name: EnsureBootstrapMemoryRetentionPolicy :execrows
 
-INSERT INTO memory_retention_policy (workspace_id, version, trajectory_hot_days, archive_days, trace_hot_days, updated_by)
-SELECT $1::uuid, 1, 90, 365, 30, 'bootstrap'
+INSERT INTO memory_retention_policy (workspace_id, version, trajectory_hot_days, archive_days, trace_hot_days, diagnostic_thinking_days, updated_by)
+SELECT $1::uuid, 1, 90, 365, 30, 30, 'bootstrap'
 WHERE NOT EXISTS (
     SELECT 1 FROM memory_retention_policy WHERE workspace_id = $1::uuid
 )
@@ -622,10 +634,41 @@ WHERE NOT EXISTS (
 // ===========================================================================
 // Task 17: versioned retention, encrypted archive, restore leases, sweeps.
 // ===========================================================================
-// New workspaces bind to the explicit bootstrap version 1 (90/365/30);
-// no runtime default silently creates or lengthens retention.
+// New workspaces bind to the explicit bootstrap version 1
+// (90/365/30/30); no runtime default silently creates or lengthens
+// retention. Diagnostic thinking binds to the platform ceiling from the
+// start (spec §12.2).
 func (q *Queries) EnsureBootstrapMemoryRetentionPolicy(ctx context.Context, workspaceID pgtype.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, ensureBootstrapMemoryRetentionPolicy, workspaceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const eraseDueDiagnosticThinking = `-- name: EraseDueDiagnosticThinking :execrows
+UPDATE task_message m
+SET content = '', output = '', input = NULL
+FROM agent_inbox_event e
+WHERE e.id = m.task_id
+  AND e.workspace_id = $1
+  AND m.type = 'thinking'
+  AND m.visibility = 'diagnostic_only'
+  AND m.created_at < $2
+  AND (COALESCE(m.content, '') <> '' OR COALESCE(m.output, '') <> '' OR m.input IS NOT NULL)
+`
+
+type EraseDueDiagnosticThinkingParams struct {
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+// In-place content erase for expired diagnostic provider thinking (spec
+// §12.2): the row, type, seq, and timestamps stay intact so sanitized
+// trajectory sequences remain contiguous; only the payload fields are
+// cleared. Idempotent — already-erased rows no longer match.
+func (q *Queries) EraseDueDiagnosticThinking(ctx context.Context, arg EraseDueDiagnosticThinkingParams) (int64, error) {
+	result, err := q.db.Exec(ctx, eraseDueDiagnosticThinking, arg.WorkspaceID, arg.CreatedAt)
 	if err != nil {
 		return 0, err
 	}
@@ -1962,36 +2005,50 @@ func (q *Queries) InsertMemoryReadPhaseGate(ctx context.Context, workspaceID pgt
 
 const insertMemoryRetentionPolicy = `-- name: InsertMemoryRetentionPolicy :one
 INSERT INTO memory_retention_policy (
-    workspace_id, version, trajectory_hot_days, archive_days, trace_hot_days, updated_by
-) VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING workspace_id, version, trajectory_hot_days, archive_days, trace_hot_days, updated_by, created_at
+    workspace_id, version, trajectory_hot_days, archive_days, trace_hot_days, diagnostic_thinking_days, updated_by
+) VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING workspace_id, version, trajectory_hot_days, archive_days, trace_hot_days, diagnostic_thinking_days, updated_by, created_at
 `
 
 type InsertMemoryRetentionPolicyParams struct {
-	WorkspaceID       pgtype.UUID `json:"workspace_id"`
-	Version           int64       `json:"version"`
-	TrajectoryHotDays int32       `json:"trajectory_hot_days"`
-	ArchiveDays       int32       `json:"archive_days"`
-	TraceHotDays      int32       `json:"trace_hot_days"`
-	UpdatedBy         string      `json:"updated_by"`
+	WorkspaceID            pgtype.UUID `json:"workspace_id"`
+	Version                int64       `json:"version"`
+	TrajectoryHotDays      int32       `json:"trajectory_hot_days"`
+	ArchiveDays            int32       `json:"archive_days"`
+	TraceHotDays           int32       `json:"trace_hot_days"`
+	DiagnosticThinkingDays int32       `json:"diagnostic_thinking_days"`
+	UpdatedBy              string      `json:"updated_by"`
 }
 
-func (q *Queries) InsertMemoryRetentionPolicy(ctx context.Context, arg InsertMemoryRetentionPolicyParams) (MemoryRetentionPolicy, error) {
+type InsertMemoryRetentionPolicyRow struct {
+	WorkspaceID            pgtype.UUID        `json:"workspace_id"`
+	Version                int64              `json:"version"`
+	TrajectoryHotDays      int32              `json:"trajectory_hot_days"`
+	ArchiveDays            int32              `json:"archive_days"`
+	TraceHotDays           int32              `json:"trace_hot_days"`
+	DiagnosticThinkingDays int32              `json:"diagnostic_thinking_days"`
+	UpdatedBy              string             `json:"updated_by"`
+	CreatedAt              pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) InsertMemoryRetentionPolicy(ctx context.Context, arg InsertMemoryRetentionPolicyParams) (InsertMemoryRetentionPolicyRow, error) {
 	row := q.db.QueryRow(ctx, insertMemoryRetentionPolicy,
 		arg.WorkspaceID,
 		arg.Version,
 		arg.TrajectoryHotDays,
 		arg.ArchiveDays,
 		arg.TraceHotDays,
+		arg.DiagnosticThinkingDays,
 		arg.UpdatedBy,
 	)
-	var i MemoryRetentionPolicy
+	var i InsertMemoryRetentionPolicyRow
 	err := row.Scan(
 		&i.WorkspaceID,
 		&i.Version,
 		&i.TrajectoryHotDays,
 		&i.ArchiveDays,
 		&i.TraceHotDays,
+		&i.DiagnosticThinkingDays,
 		&i.UpdatedBy,
 		&i.CreatedAt,
 	)
@@ -3460,6 +3517,31 @@ func (q *Queries) ReleaseGraphMemoryBlobRefs(ctx context.Context, blobID pgtype.
 	return result.RowsAffected(), nil
 }
 
+const reportDueDiagnosticThinking = `-- name: ReportDueDiagnosticThinking :one
+SELECT COUNT(*)::integer AS due_count
+FROM task_message m
+JOIN agent_inbox_event e ON e.id = m.task_id
+WHERE e.workspace_id = $1
+  AND m.type = 'thinking'
+  AND m.visibility = 'diagnostic_only'
+  AND m.created_at < $2
+  AND (COALESCE(m.content, '') <> '' OR COALESCE(m.output, '') <> '' OR m.input IS NOT NULL)
+`
+
+type ReportDueDiagnosticThinkingParams struct {
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+// Dry-run/report mode for the diagnostic thinking sweep (spec §12.2):
+// counts messages whose content would be erased, without erasing.
+func (q *Queries) ReportDueDiagnosticThinking(ctx context.Context, arg ReportDueDiagnosticThinkingParams) (int32, error) {
+	row := q.db.QueryRow(ctx, reportDueDiagnosticThinking, arg.WorkspaceID, arg.CreatedAt)
+	var due_count int32
+	err := row.Scan(&due_count)
+	return due_count, err
+}
+
 const resolveStagingAtomForRef = `-- name: ResolveStagingAtomForRef :one
 SELECT atom.atom_id,
        atom.segment_id,
@@ -4037,12 +4119,13 @@ func (q *Queries) UpsertMemoryExplorePlan(ctx context.Context, arg UpsertMemoryE
 
 const upsertMemoryRetentionSweepCursor = `-- name: UpsertMemoryRetentionSweepCursor :exec
 INSERT INTO memory_retention_sweep_cursor (
-    workspace_id, last_trajectory_sweep_at, last_trace_sweep_at, last_archive_sweep_at, updated_at
-) VALUES ($1, $2, $3, $4, now())
+    workspace_id, last_trajectory_sweep_at, last_trace_sweep_at, last_archive_sweep_at, last_thinking_sweep_at, updated_at
+) VALUES ($1, $2, $3, $4, $5, now())
 ON CONFLICT (workspace_id) DO UPDATE SET
     last_trajectory_sweep_at = EXCLUDED.last_trajectory_sweep_at,
     last_trace_sweep_at = EXCLUDED.last_trace_sweep_at,
     last_archive_sweep_at = EXCLUDED.last_archive_sweep_at,
+    last_thinking_sweep_at = EXCLUDED.last_thinking_sweep_at,
     updated_at = now()
 `
 
@@ -4051,6 +4134,7 @@ type UpsertMemoryRetentionSweepCursorParams struct {
 	LastTrajectorySweepAt pgtype.Timestamptz `json:"last_trajectory_sweep_at"`
 	LastTraceSweepAt      pgtype.Timestamptz `json:"last_trace_sweep_at"`
 	LastArchiveSweepAt    pgtype.Timestamptz `json:"last_archive_sweep_at"`
+	LastThinkingSweepAt   pgtype.Timestamptz `json:"last_thinking_sweep_at"`
 }
 
 func (q *Queries) UpsertMemoryRetentionSweepCursor(ctx context.Context, arg UpsertMemoryRetentionSweepCursorParams) error {
@@ -4059,6 +4143,7 @@ func (q *Queries) UpsertMemoryRetentionSweepCursor(ctx context.Context, arg Upse
 		arg.LastTrajectorySweepAt,
 		arg.LastTraceSweepAt,
 		arg.LastArchiveSweepAt,
+		arg.LastThinkingSweepAt,
 	)
 	return err
 }

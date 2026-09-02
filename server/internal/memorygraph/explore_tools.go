@@ -435,10 +435,18 @@ func writeTraversalError(w http.ResponseWriter, err error) {
 
 // viewAllows reports whether the graph view attached to the retriever (if
 // any) permits access to n (spec §5: the view is reapplied at every
-// traversal step so edges can never bypass scope). Without a retriever or
-// with an inactive (zero) view, all nodes are allowed — legacy behavior.
+// traversal step so edges can never bypass scope). Without a retriever all
+// nodes are allowed — legacy behavior. The pattern-role gate applies even
+// for inactive views: traversal must not leak the evolution plane into
+// task-recall exploration (spec §12.3).
 func (s *ExploreToolServer) viewAllows(n *Node) bool {
-	if s.retr == nil || !s.retr.viewActive() {
+	if s.retr == nil {
+		return true
+	}
+	if !s.retr.cfg.View.patternEligible(n) {
+		return false
+	}
+	if !s.retr.viewActive() {
 		return true
 	}
 	return s.retr.cfg.View.Allows(n)
@@ -554,10 +562,13 @@ type expandRequest struct {
 // how the candidate was reached: "parent", "child", "entity", a relation
 // edge type, or "embedding".
 type expandCandidate struct {
-	NodeID  string `json:"node_id"`
-	Via     string `json:"via"`
-	Level   int    `json:"level"` // -1 for staging segments
-	Snippet string `json:"snippet"`
+	NodeID string `json:"node_id"`
+	Via    string `json:"via"`
+	Level  int    `json:"level"` // -1 for staging segments
+	// NodeRole is v2 layered-navigation metadata (spec §7.3), served only
+	// when cfg.LayeredNavigation is on.
+	NodeRole string `json:"node_role,omitempty"`
+	Snippet  string `json:"snippet"`
 }
 
 // memoryGraphStartRequest begins one server-pinned trajectory. Scope, graph
@@ -820,14 +831,18 @@ type exploreRequest struct {
 }
 
 type exploredNode struct {
-	NodeID          string            `json:"node_id"`
-	Level           int               `json:"level"`
-	EpistemicStatus string            `json:"epistemic_status,omitempty"`
-	Tags            []string          `json:"tags,omitempty"`
-	Body            string            `json:"body"`
-	Truncated       bool              `json:"truncated"`
-	Staging         bool              `json:"staging,omitempty"`
-	Neighbors       []expandCandidate `json:"neighbors,omitempty"`
+	NodeID          string `json:"node_id"`
+	Level           int    `json:"level"`
+	EpistemicStatus string `json:"epistemic_status,omitempty"`
+	// NodeRole and DerivedAtomKinds are v2 layered-navigation metadata
+	// (spec §7.3), served only when cfg.LayeredNavigation is on.
+	NodeRole         string            `json:"node_role,omitempty"`
+	DerivedAtomKinds []AtomKind        `json:"derived_atom_kinds,omitempty"`
+	Tags             []string          `json:"tags,omitempty"`
+	Body             string            `json:"body"`
+	Truncated        bool              `json:"truncated"`
+	Staging          bool              `json:"staging,omitempty"`
+	Neighbors        []expandCandidate `json:"neighbors,omitempty"`
 }
 
 type exploreResponse struct {
@@ -922,7 +937,16 @@ func (s *ExploreToolServer) exploreNode(g *Graph, id string) exploredNode {
 		return truncateExploreBody(&n, s.cfg.MaxNodeChars)
 	}
 	node := g.Node(id)
-	n := exploredNode{NodeID: node.NodeID, Level: node.Level, EpistemicStatus: node.Epistemic, Tags: node.Tags, Body: node.Body, Neighbors: s.expandCandidates(g, node, "")}
+	n := exploredNode{
+		NodeID: node.NodeID, Level: node.Level, EpistemicStatus: node.Epistemic,
+		Tags: node.Tags, Body: node.Body, Neighbors: s.expandCandidates(g, node, ""),
+	}
+	if s.cfg.LayeredNavigation {
+		n.NodeRole = string(EffectiveNodeRole(node.Role))
+		if len(node.DerivedAtomKinds) > 0 {
+			n.DerivedAtomKinds = node.DerivedAtomKinds
+		}
+	}
 	return truncateExploreBody(&n, s.cfg.MaxNodeChars)
 }
 
@@ -1080,6 +1104,9 @@ func (s *ExploreToolServer) expandCandidates(g *Graph, node *Node, relationFilte
 		c := expandCandidate{NodeID: ref.NodeID, Via: ref.Via, Level: -1, Snippet: s.snippet(g, ref.NodeID)}
 		if n := g.Node(ref.NodeID); n != nil {
 			c.Level = n.Level
+			if s.cfg.LayeredNavigation {
+				c.NodeRole = string(EffectiveNodeRole(n.Role))
+			}
 		}
 		out = append(out, c)
 	}

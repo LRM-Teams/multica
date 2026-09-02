@@ -33,6 +33,10 @@ const (
 	MemoryRetentionTrajectoryHotCapDays = 90
 	MemoryRetentionArchiveCapDays       = 365
 	MemoryRetentionTraceHotCapDays      = 30
+	// MemoryRetentionThinkingCapDays is the hard ceiling for diagnostic
+	// provider thinking (spec §12.2): short-term incident/debug data only,
+	// never extendable, never exported into the evolution corpus.
+	MemoryRetentionThinkingCapDays = 30
 )
 
 // Restore lease TTL: short by construction (spec AC 41).

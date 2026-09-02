@@ -891,16 +891,18 @@ WHERE workspace_id = $1 AND old_kind = $2
 -- ===========================================================================
 
 -- name: EnsureBootstrapMemoryRetentionPolicy :execrows
--- New workspaces bind to the explicit bootstrap version 1 (90/365/30);
--- no runtime default silently creates or lengthens retention.
-INSERT INTO memory_retention_policy (workspace_id, version, trajectory_hot_days, archive_days, trace_hot_days, updated_by)
-SELECT sqlc.arg(workspace_id)::uuid, 1, 90, 365, 30, 'bootstrap'
+-- New workspaces bind to the explicit bootstrap version 1
+-- (90/365/30/30); no runtime default silently creates or lengthens
+-- retention. Diagnostic thinking binds to the platform ceiling from the
+-- start (spec §12.2).
+INSERT INTO memory_retention_policy (workspace_id, version, trajectory_hot_days, archive_days, trace_hot_days, diagnostic_thinking_days, updated_by)
+SELECT sqlc.arg(workspace_id)::uuid, 1, 90, 365, 30, 30, 'bootstrap'
 WHERE NOT EXISTS (
     SELECT 1 FROM memory_retention_policy WHERE workspace_id = sqlc.arg(workspace_id)::uuid
 );
 
 -- name: CurrentMemoryRetentionPolicy :one
-SELECT workspace_id, version, trajectory_hot_days, archive_days, trace_hot_days, updated_by, created_at
+SELECT workspace_id, version, trajectory_hot_days, archive_days, trace_hot_days, diagnostic_thinking_days, updated_by, created_at
 FROM memory_retention_policy
 WHERE workspace_id = $1
 ORDER BY version DESC
@@ -908,9 +910,9 @@ LIMIT 1;
 
 -- name: InsertMemoryRetentionPolicy :one
 INSERT INTO memory_retention_policy (
-    workspace_id, version, trajectory_hot_days, archive_days, trace_hot_days, updated_by
-) VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING workspace_id, version, trajectory_hot_days, archive_days, trace_hot_days, updated_by, created_at;
+    workspace_id, version, trajectory_hot_days, archive_days, trace_hot_days, diagnostic_thinking_days, updated_by
+) VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING workspace_id, version, trajectory_hot_days, archive_days, trace_hot_days, diagnostic_thinking_days, updated_by, created_at;
 
 -- name: ArchiveDueGraphMemoryBlobs :many
 -- Active blobs backing at least one open graph_source ref, older than the
@@ -983,17 +985,45 @@ RETURNING id, workspace_id, manifest_id, actor, reason, expires_at, created_at;
 
 -- name: UpsertMemoryRetentionSweepCursor :exec
 INSERT INTO memory_retention_sweep_cursor (
-    workspace_id, last_trajectory_sweep_at, last_trace_sweep_at, last_archive_sweep_at, updated_at
-) VALUES ($1, $2, $3, $4, now())
+    workspace_id, last_trajectory_sweep_at, last_trace_sweep_at, last_archive_sweep_at, last_thinking_sweep_at, updated_at
+) VALUES ($1, $2, $3, $4, $5, now())
 ON CONFLICT (workspace_id) DO UPDATE SET
     last_trajectory_sweep_at = EXCLUDED.last_trajectory_sweep_at,
     last_trace_sweep_at = EXCLUDED.last_trace_sweep_at,
     last_archive_sweep_at = EXCLUDED.last_archive_sweep_at,
+    last_thinking_sweep_at = EXCLUDED.last_thinking_sweep_at,
     updated_at = now();
 
 -- name: ListMemoryRetentionWorkspaceIDs :many
 -- Every workspace bound to at least one policy version.
 SELECT DISTINCT workspace_id FROM memory_retention_policy;
+
+-- name: ReportDueDiagnosticThinking :one
+-- Dry-run/report mode for the diagnostic thinking sweep (spec §12.2):
+-- counts messages whose content would be erased, without erasing.
+SELECT COUNT(*)::integer AS due_count
+FROM task_message m
+JOIN agent_inbox_event e ON e.id = m.task_id
+WHERE e.workspace_id = $1
+  AND m.type = 'thinking'
+  AND m.visibility = 'diagnostic_only'
+  AND m.created_at < $2
+  AND (COALESCE(m.content, '') <> '' OR COALESCE(m.output, '') <> '' OR m.input IS NOT NULL);
+
+-- name: EraseDueDiagnosticThinking :execrows
+-- In-place content erase for expired diagnostic provider thinking (spec
+-- §12.2): the row, type, seq, and timestamps stay intact so sanitized
+-- trajectory sequences remain contiguous; only the payload fields are
+-- cleared. Idempotent — already-erased rows no longer match.
+UPDATE task_message m
+SET content = '', output = '', input = NULL
+FROM agent_inbox_event e
+WHERE e.id = m.task_id
+  AND e.workspace_id = $1
+  AND m.type = 'thinking'
+  AND m.visibility = 'diagnostic_only'
+  AND m.created_at < $2
+  AND (COALESCE(m.content, '') <> '' OR COALESCE(m.output, '') <> '' OR m.input IS NOT NULL);
 
 -- name: IsMemoryArchiveFenced :one
 -- Task 8A fence over archive restore (spec AC 62): the manifest's blob

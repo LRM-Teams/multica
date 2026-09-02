@@ -19,21 +19,26 @@ import (
 
 // MemoryRetentionPolicy is the versioned per-workspace retention contract
 // (spec §13). All fields are whole days bounded by the platform caps.
+// DiagnosticThinkingDays bounds how long diagnostic provider thinking
+// survives in the hot store (spec §12.2): short-term incident/debug data
+// only, never extendable past the platform ceiling.
 type MemoryRetentionPolicy struct {
-	Version           int64 `json:"version"`
-	TrajectoryHotDays int   `json:"trajectory_hot_days"`
-	ArchiveDays       int   `json:"archive_days"`
-	TraceHotDays      int   `json:"trace_hot_days"`
+	Version                int64 `json:"version"`
+	TrajectoryHotDays      int   `json:"trajectory_hot_days"`
+	ArchiveDays            int   `json:"archive_days"`
+	TraceHotDays           int   `json:"trace_hot_days"`
+	DiagnosticThinkingDays int   `json:"diagnostic_thinking_days"`
 }
 
 // MemoryRetentionUpdate is a CAS policy change: every value must stay
 // within the platform caps, and ExpectedVersion must name the version the
 // caller saw.
 type MemoryRetentionUpdate struct {
-	TrajectoryHotDays int   `json:"trajectory_hot_days"`
-	ArchiveDays       int   `json:"archive_days"`
-	TraceHotDays      int   `json:"trace_hot_days"`
-	ExpectedVersion   int64 `json:"expected_version"`
+	TrajectoryHotDays      int   `json:"trajectory_hot_days"`
+	ArchiveDays            int   `json:"archive_days"`
+	TraceHotDays           int   `json:"trace_hot_days"`
+	DiagnosticThinkingDays int   `json:"diagnostic_thinking_days"`
+	ExpectedVersion        int64 `json:"expected_version"`
 }
 
 // Validate enforces the platform caps server-side (the DB CHECKs are the
@@ -41,6 +46,10 @@ type MemoryRetentionUpdate struct {
 func (u MemoryRetentionUpdate) Validate() error {
 	if u.TrajectoryHotDays <= 0 || u.ArchiveDays <= 0 || u.TraceHotDays <= 0 {
 		return ErrMemoryRetentionDaysGlobal
+	}
+	if u.DiagnosticThinkingDays <= 0 || u.DiagnosticThinkingDays > MemoryRetentionThinkingCapDays {
+		return fmt.Errorf("%w: diagnostic_thinking_days must be between 1 and %d (hard platform ceiling, spec §12.2)",
+			ErrMemoryRetentionCap, MemoryRetentionThinkingCapDays)
 	}
 	if u.TrajectoryHotDays > MemoryRetentionTrajectoryHotCapDays ||
 		u.ArchiveDays > MemoryRetentionArchiveCapDays ||
@@ -65,7 +74,7 @@ func NewMemoryRetentionService(pool *pgxpool.Pool, archive *MemoryArchiveService
 }
 
 // EnsureBootstrapPolicy binds a workspace to the explicit bootstrap
-// version 1 (90/365/30) when it has no policy yet — the migration does
+// version 1 (90/365/30/30) when it has no policy yet — the migration does
 // this for existing workspaces; this covers new ones.
 func (s *MemoryRetentionService) EnsureBootstrapPolicy(ctx context.Context, workspaceID pgtype.UUID) error {
 	q := db.New(s.pool)
@@ -89,12 +98,13 @@ func (s *MemoryRetentionService) CurrentPolicy(ctx context.Context, workspaceID 
 	return retentionPolicyFromRow(row), nil
 }
 
-func retentionPolicyFromRow(row db.MemoryRetentionPolicy) MemoryRetentionPolicy {
+func retentionPolicyFromRow(row db.CurrentMemoryRetentionPolicyRow) MemoryRetentionPolicy {
 	return MemoryRetentionPolicy{
-		Version:           row.Version,
-		TrajectoryHotDays: int(row.TrajectoryHotDays),
-		ArchiveDays:       int(row.ArchiveDays),
-		TraceHotDays:      int(row.TraceHotDays),
+		Version:                row.Version,
+		TrajectoryHotDays:      int(row.TrajectoryHotDays),
+		ArchiveDays:            int(row.ArchiveDays),
+		TraceHotDays:           int(row.TraceHotDays),
+		DiagnosticThinkingDays: int(row.DiagnosticThinkingDays),
 	}
 }
 
@@ -127,10 +137,11 @@ func (s *MemoryRetentionService) UpdatePolicy(
 	}
 	row, err := q.InsertMemoryRetentionPolicy(ctx, db.InsertMemoryRetentionPolicyParams{
 		WorkspaceID: workspaceID, Version: current.Version + 1,
-		TrajectoryHotDays: int32(update.TrajectoryHotDays),
-		ArchiveDays:       int32(update.ArchiveDays),
-		TraceHotDays:      int32(update.TraceHotDays),
-		UpdatedBy:         actor,
+		TrajectoryHotDays:      int32(update.TrajectoryHotDays),
+		ArchiveDays:            int32(update.ArchiveDays),
+		TraceHotDays:           int32(update.TraceHotDays),
+		DiagnosticThinkingDays: int32(update.DiagnosticThinkingDays),
+		UpdatedBy:              actor,
 	})
 	if err != nil {
 		return MemoryRetentionPolicy{}, fmt.Errorf("retention policy write: %w", err)
@@ -146,14 +157,37 @@ func (s *MemoryRetentionService) UpdatePolicy(
 	return MemoryRetentionPolicy{
 		Version: row.Version, TrajectoryHotDays: int(row.TrajectoryHotDays),
 		ArchiveDays: int(row.ArchiveDays), TraceHotDays: int(row.TraceHotDays),
+		DiagnosticThinkingDays: int(row.DiagnosticThinkingDays),
 	}, nil
 }
 
-// SweepDue runs the three idempotent retention streams for every
+// ReportDueDiagnosticThinking is the dry-run/report mode of the thinking
+// sweep (spec §12.11: report first): it counts expired diagnostic provider
+// thinking messages without erasing anything.
+func (s *MemoryRetentionService) ReportDueDiagnosticThinking(ctx context.Context, workspaceID pgtype.UUID) (int, error) {
+	if s == nil || s.pool == nil {
+		return 0, errors.New("memory retention service not configured")
+	}
+	policy, err := s.CurrentPolicy(ctx, workspaceID)
+	if err != nil {
+		return 0, err
+	}
+	cutoff := s.now().AddDate(0, 0, -policy.DiagnosticThinkingDays)
+	due, err := db.New(s.pool).ReportDueDiagnosticThinking(ctx, db.ReportDueDiagnosticThinkingParams{
+		WorkspaceID: workspaceID, CreatedAt: pgTimestamptz(cutoff),
+	})
+	if err != nil {
+		return 0, fmt.Errorf("thinking report: %w", err)
+	}
+	return int(due), nil
+}
+
+// SweepDue runs the four idempotent retention streams for every
 // policy-bound workspace: archive hot blobs past their hot window, sweep
-// full query/Explore trace windows past their hot window, and
-// cryptographically erase due archives. Returns the number of actions
-// taken. The sweep cursor records the last pass per stream.
+// full query/Explore trace windows past their hot window, erase expired
+// diagnostic provider thinking in place, and cryptographically erase due
+// archives. Returns the number of actions taken. The sweep cursor records
+// the last pass per stream.
 func (s *MemoryRetentionService) SweepDue(ctx context.Context, limit int32) (int, error) {
 	if s == nil || s.pool == nil {
 		return 0, errors.New("memory retention service not configured")
@@ -178,8 +212,22 @@ func (s *MemoryRetentionService) SweepDue(ctx context.Context, limit int32) (int
 		if swept, err := sweepWorkspaceTraceWindows(workspaceID, int(policy.TraceHotDays), now); err == nil {
 			actions += swept
 		}
+		// Thinking sweep: in-place content erase for diagnostic provider
+		// thinking past its (<=30d) window (spec §12.2). Rows, types, and seq
+		// order stay intact so sanitized trajectories remain contiguous;
+		// only content/output/input are cleared, and the erase is
+		// idempotent.
+		thinkingCutoff := now.AddDate(0, 0, -int(policy.DiagnosticThinkingDays))
+		erased, err := q.EraseDueDiagnosticThinking(ctx, db.EraseDueDiagnosticThinkingParams{
+			WorkspaceID: workspaceID, CreatedAt: pgTimestamptz(thinkingCutoff),
+		})
+		if err != nil {
+			return actions, fmt.Errorf("thinking sweep: %w", err)
+		}
+		actions += int(erased)
 		if err := q.UpsertMemoryRetentionSweepCursor(ctx, db.UpsertMemoryRetentionSweepCursorParams{
 			WorkspaceID: workspaceID, LastTraceSweepAt: pgTimestamptz(now),
+			LastThinkingSweepAt: pgTimestamptz(now),
 		}); err != nil {
 			return actions, fmt.Errorf("retention cursor: %w", err)
 		}

@@ -37,6 +37,60 @@ func atomizerFixtureSegment() AtomizerSegment {
 	}
 }
 
+// TestGraphMemoryAtomizer_PublishesAllClosedKinds pins the spec §4 kind
+// vocabulary at the publication boundary: every proposer-selectable kind
+// survives validation with its kind intact (fallback stays server-only and
+// is covered by TestGraphMemoryAtomizer_FallbackAtomOnExtractorFailure).
+func TestGraphMemoryAtomizer_PublishesAllClosedKinds(t *testing.T) {
+	candidates := make([]AtomCandidate, 0, 6)
+	for _, kind := range []string{
+		"fact", "event", "instruction", "preference", "decision", "constraint",
+	} {
+		candidates = append(candidates, AtomCandidate{
+			Body: kind + " recorded for the NIMBUS launch",
+			Kind: kind, SourceMessageSeqs: []int32{1},
+		})
+	}
+	atomizer := NewGraphMemoryAtomizer(&stubAtomProposer{candidates: candidates})
+	atoms, err := atomizer.ExtractAtoms(context.Background(), atomizerFixtureSegment(), atomizerFixturePayload())
+	require.NoError(t, err)
+	require.Len(t, atoms, len(candidates))
+
+	published := map[string]bool{}
+	for _, atom := range atoms {
+		published[atom.Kind] = true
+		assert.True(t, memorygraph.ValidAtomKind(atom.Kind), "published kind %q must be in the closed set", atom.Kind)
+		assert.Regexp(t, `^atom-[0-9a-f]{24,}$`, atom.AtomID)
+	}
+	for _, kind := range []string{"fact", "event", "instruction", "preference", "decision", "constraint"} {
+		assert.True(t, published[kind], "kind %q was not published", kind)
+	}
+}
+
+// TestGraphMemoryAtomizer_RejectsLegacyRuleAndProcedureKinds: the retired
+// labels must not be silently mapped onto current kinds at any publication
+// boundary (spec §4, plan Slice 1.1).
+func TestGraphMemoryAtomizer_RejectsLegacyRuleAndProcedureKinds(t *testing.T) {
+	atomizer := NewGraphMemoryAtomizer(&stubAtomProposer{candidates: []AtomCandidate{
+		{Body: "legacy rule body", Kind: "rule", SourceMessageSeqs: []int32{1}},
+		{Body: "legacy procedure body", Kind: "procedure", SourceMessageSeqs: []int32{1}},
+		{Body: "current fact body", Kind: "fact", SourceMessageSeqs: []int32{1}},
+	}})
+	atoms, err := atomizer.ExtractAtoms(context.Background(), atomizerFixtureSegment(), atomizerFixturePayload())
+	require.NoError(t, err)
+	require.Len(t, atoms, 1, "only the current-kind candidate may publish")
+	assert.Equal(t, "fact", atoms[0].Kind)
+
+	for _, legacy := range []string{"rule", "procedure"} {
+		disposition, ok := memorygraph.LegacyAtomKindDispositionFor(legacy)
+		require.True(t, ok)
+		assert.False(t, memorygraph.ValidAtomKind(legacy),
+			"the legacy label %q must stay unpublishable", legacy)
+		assert.NotEmpty(t, disposition.AllowedTargets,
+			"the legacy label %q must route through an explicit disposition, never a silent map", legacy)
+	}
+}
+
 func TestGraphMemoryAtomizer_ExtractsMultipleFactsDeterministically(t *testing.T) {
 	atomizer := NewGraphMemoryAtomizer(nil)
 	segment := atomizerFixtureSegment()

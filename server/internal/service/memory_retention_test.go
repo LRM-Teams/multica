@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS memory_retention_policy (
     trajectory_hot_days int         NOT NULL CHECK (trajectory_hot_days > 0 AND trajectory_hot_days <= 90),
     archive_days        int         NOT NULL CHECK (archive_days > 0 AND archive_days <= 365),
     trace_hot_days      int         NOT NULL CHECK (trace_hot_days > 0 AND trace_hot_days <= 30),
+    diagnostic_thinking_days int    NOT NULL DEFAULT 30 CHECK (diagnostic_thinking_days > 0 AND diagnostic_thinking_days <= 30),
     updated_by          text        NOT NULL,
     created_at          timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (workspace_id, version)
@@ -57,6 +58,7 @@ CREATE TABLE IF NOT EXISTS memory_retention_sweep_cursor (
     last_trajectory_sweep_at timestamptz,
     last_trace_sweep_at      timestamptz,
     last_archive_sweep_at    timestamptz,
+    last_thinking_sweep_at   timestamptz,
     updated_at               timestamptz NOT NULL DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS graph_memory_blob (
@@ -198,7 +200,8 @@ func TestMemoryRetention_UpdateShortensWithCAS(t *testing.T) {
 	svc := h.retentionService()
 
 	updated, err := svc.UpdatePolicy(h.ctx, h.workspace, MemoryRetentionUpdate{
-		TrajectoryHotDays: 30, ArchiveDays: 180, TraceHotDays: 14, ExpectedVersion: 1,
+		TrajectoryHotDays: 30, ArchiveDays: 180, TraceHotDays: 14, DiagnosticThinkingDays: 30,
+		ExpectedVersion: 1,
 	}, "user:1")
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), updated.Version)
@@ -206,7 +209,8 @@ func TestMemoryRetention_UpdateShortensWithCAS(t *testing.T) {
 
 	// Stale expected version conflicts and writes nothing.
 	_, err = svc.UpdatePolicy(h.ctx, h.workspace, MemoryRetentionUpdate{
-		TrajectoryHotDays: 10, ArchiveDays: 100, TraceHotDays: 7, ExpectedVersion: 1,
+		TrajectoryHotDays: 10, ArchiveDays: 100, TraceHotDays: 7, DiagnosticThinkingDays: 30,
+		ExpectedVersion: 1,
 	}, "user:1")
 	assert.ErrorIs(t, err, ErrMemoryRetentionVersion)
 	var versions int
@@ -223,7 +227,8 @@ func TestMemoryRetention_CapExtensionRejected(t *testing.T) {
 	svc := h.retentionService()
 
 	for _, update := range []MemoryRetentionUpdate{
-		{TrajectoryHotDays: 91, ArchiveDays: 365, TraceHotDays: 30, ExpectedVersion: 1},
+		{TrajectoryHotDays: 91, ArchiveDays: 365, TraceHotDays: 30, DiagnosticThinkingDays: 30,
+			ExpectedVersion: 1},
 		{TrajectoryHotDays: 90, ArchiveDays: 366, TraceHotDays: 30, ExpectedVersion: 1},
 		{TrajectoryHotDays: 90, ArchiveDays: 365, TraceHotDays: 31, ExpectedVersion: 1},
 	} {
@@ -231,7 +236,8 @@ func TestMemoryRetention_CapExtensionRejected(t *testing.T) {
 		assert.ErrorIs(t, err, ErrMemoryRetentionCap, "update %+v must be rejected", update)
 	}
 	_, err := svc.UpdatePolicy(h.ctx, h.workspace, MemoryRetentionUpdate{
-		TrajectoryHotDays: 0, ArchiveDays: 365, TraceHotDays: 30, ExpectedVersion: 1,
+		TrajectoryHotDays: 0, ArchiveDays: 365, TraceHotDays: 30, DiagnosticThinkingDays: 30,
+		ExpectedVersion: 1,
 	}, "user:1")
 	assert.ErrorIs(t, err, ErrMemoryRetentionDaysGlobal)
 }
@@ -244,11 +250,13 @@ func TestMemoryRetention_RollbackAppendsVersion(t *testing.T) {
 	svc := h.retentionService()
 
 	_, err := svc.UpdatePolicy(h.ctx, h.workspace, MemoryRetentionUpdate{
-		TrajectoryHotDays: 30, ArchiveDays: 90, TraceHotDays: 14, ExpectedVersion: 1,
+		TrajectoryHotDays: 30, ArchiveDays: 90, TraceHotDays: 14, DiagnosticThinkingDays: 30,
+		ExpectedVersion: 1,
 	}, "user:1")
 	require.NoError(t, err)
 	rolled, err := svc.UpdatePolicy(h.ctx, h.workspace, MemoryRetentionUpdate{
-		TrajectoryHotDays: 60, ArchiveDays: 200, TraceHotDays: 20, ExpectedVersion: 2,
+		TrajectoryHotDays: 60, ArchiveDays: 200, TraceHotDays: 20, DiagnosticThinkingDays: 30,
+		ExpectedVersion: 2,
 	}, "user:1")
 	require.NoError(t, err)
 	assert.Equal(t, int64(3), rolled.Version)

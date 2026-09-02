@@ -711,6 +711,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					// Task 17: versioned retention policy (owner/admin).
 					r.Get("/memory/retention", h.GetMemoryRetention)
 					r.Put("/memory/retention", h.UpdateMemoryRetention)
+					// Skill evolution trajectory eligibility (owner/admin):
+					// pinned reads and the revoke-only audit mutation.
+					r.Get("/skill-evolution/eligibility/{runId}", h.GetSkillTrajectoryEligibility)
+					r.Post("/skill-evolution/eligibility/{runId}/revoke", h.RevokeSkillTrajectoryEligibility)
 					// Task 18: training governance (owner/admin) — grants,
 					// global switches, selection manifests, executions and
 					// the deletion/unlearning ledger.

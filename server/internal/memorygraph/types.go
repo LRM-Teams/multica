@@ -49,6 +49,21 @@ const (
 	EdgeTypeDerivedFrom      = "derived_from"
 	EdgeTypeMergedFrom       = "merged_from" // merge_node lineage: superseded input -> merge result (unification spec §4.3)
 
+	// Layered-navigation edges of the skill-graph spec (§3.3, §5.2).
+	// EdgeTypeMemberOf is the explicit membership edge of Topic/Profile
+	// views: member node → view node. The skill relations are advisory
+	// graph structure only — they never grant artifact access, binding, or
+	// execution (spec §8.1/§8.4).
+	EdgeTypeMemberOf       = "member_of"
+	EdgeTypeValidatedBy    = "validated_by"
+	EdgeTypeApplicableTo   = "applicable_to"
+	EdgeTypeRequires       = "requires"
+	EdgeTypeUses           = "uses"
+	EdgeTypeComposesWith   = "composes_with"
+	EdgeTypeComposedOf     = "composed_of"
+	EdgeTypeRecommendedFor = "recommended_for"
+	EdgeTypeConflictsWith  = "conflicts_with"
+
 	// EdgeTypeHasAttachment is the ingest-owned provenance edge from a
 	// segment source node to a file source node (spec §10). It lives in
 	// the shared source store, not in version snapshots.
@@ -105,27 +120,72 @@ var RelationEdgeTypes = map[string]bool{
 	EdgeTypeEvidenceFor:      true,
 	EdgeTypeDerivedFrom:      true,
 	EdgeTypeMergedFrom:       true,
+	EdgeTypeMemberOf:         true,
+	EdgeTypeValidatedBy:      true,
+	EdgeTypeApplicableTo:     true,
+	EdgeTypeRequires:         true,
+	EdgeTypeUses:             true,
+	EdgeTypeComposesWith:     true,
+	EdgeTypeComposedOf:       true,
+	EdgeTypeRecommendedFor:   true,
+	EdgeTypeConflictsWith:    true,
+}
+
+// NodeRole is the structural role of a graph node. It is orthogonal to
+// AtomKind: one node can derive from atoms of multiple semantic kinds.
+type NodeRole string
+
+const (
+	NodeRoleMemory  NodeRole = "memory"
+	NodeRoleEntity  NodeRole = "entity"
+	NodeRoleDaily   NodeRole = "daily"
+	NodeRoleTopic   NodeRole = "topic"
+	NodeRoleProfile NodeRole = "profile"
+	NodeRoleSkill   NodeRole = "skill"
+	NodeRolePattern NodeRole = "pattern"
+)
+
+// ValidNodeRole accepts the empty legacy representation, which is interpreted
+// as memory. Every non-empty role must belong to the closed vocabulary.
+func ValidNodeRole(role NodeRole) bool {
+	switch role {
+	case "", NodeRoleMemory, NodeRoleEntity, NodeRoleDaily, NodeRoleTopic, NodeRoleProfile, NodeRoleSkill, NodeRolePattern:
+		return true
+	default:
+		return false
+	}
+}
+
+// EffectiveNodeRole returns the legacy-compatible role used by authorization
+// and retrieval plans. Empty persisted roles must never create a new class.
+func EffectiveNodeRole(role NodeRole) NodeRole {
+	if role == "" {
+		return NodeRoleMemory
+	}
+	return role
 }
 
 // Node is one graph node: one .md file = one embedding chunk (design §4.2).
 // The frontmatter fields map 1:1 to the yaml block; Body is the chunk text.
 type Node struct {
-	NodeID         string     `yaml:"node_id" json:"node_id"`
-	ContentHash    string     `yaml:"content_hash" json:"content_hash"` // sha256 of Body only
-	SegmentRefs    []string   `yaml:"segment_refs,omitempty" json:"segment_refs,omitempty"`
-	AtomRefs       []string   `yaml:"atom_refs,omitempty" json:"atom_refs,omitempty"`
-	Level          int        `yaml:"level" json:"level"` // -1 = source layer; 0 = most specific statement layer
-	Epistemic      string     `yaml:"epistemic_status" json:"epistemic_status"`
-	EntityRefs     []string   `yaml:"entity_refs,omitempty" json:"entity_refs,omitempty"`
-	ObservedAt     time.Time  `yaml:"observed_at" json:"observed_at"`
-	ValidFrom      *time.Time `yaml:"valid_from" json:"valid_from"`
-	ValidTo        *time.Time `yaml:"valid_to" json:"valid_to"`
-	RefreshAfter   *time.Time `yaml:"refresh_after" json:"refresh_after"`
-	TemporalStatus string     `yaml:"temporal_status" json:"temporal_status"`
-	Tags           []string   `yaml:"tags,omitempty" json:"tags,omitempty"`
-	CreatedBy      string     `yaml:"created_by" json:"created_by"`
-	CreatedVersion int        `yaml:"created_version" json:"created_version"`
-	UpdatedVersion int        `yaml:"updated_version" json:"updated_version"`
+	NodeID           string     `yaml:"node_id" json:"node_id"`
+	Role             NodeRole   `yaml:"role,omitempty" json:"role,omitempty"`
+	DerivedAtomKinds []AtomKind `yaml:"derived_atom_kinds,omitempty" json:"derived_atom_kinds,omitempty"`
+	ContentHash      string     `yaml:"content_hash" json:"content_hash"` // sha256 of Body only
+	SegmentRefs      []string   `yaml:"segment_refs,omitempty" json:"segment_refs,omitempty"`
+	AtomRefs         []string   `yaml:"atom_refs,omitempty" json:"atom_refs,omitempty"`
+	Level            int        `yaml:"level" json:"level"` // -1 = source layer; 0 = most specific statement layer
+	Epistemic        string     `yaml:"epistemic_status" json:"epistemic_status"`
+	EntityRefs       []string   `yaml:"entity_refs,omitempty" json:"entity_refs,omitempty"`
+	ObservedAt       time.Time  `yaml:"observed_at" json:"observed_at"`
+	ValidFrom        *time.Time `yaml:"valid_from" json:"valid_from"`
+	ValidTo          *time.Time `yaml:"valid_to" json:"valid_to"`
+	RefreshAfter     *time.Time `yaml:"refresh_after" json:"refresh_after"`
+	TemporalStatus   string     `yaml:"temporal_status" json:"temporal_status"`
+	Tags             []string   `yaml:"tags,omitempty" json:"tags,omitempty"`
+	CreatedBy        string     `yaml:"created_by" json:"created_by"`
+	CreatedVersion   int        `yaml:"created_version" json:"created_version"`
+	UpdatedVersion   int        `yaml:"updated_version" json:"updated_version"`
 	// PolicyVersion stamps the server policy that authorized a promotion
 	// (empty for ordinary consolidated nodes).
 	PolicyVersion string `yaml:"policy_version,omitempty" json:"policy_version,omitempty"`
@@ -199,12 +259,39 @@ type GraphView struct {
 	// recall, unification spec §4.4). Research visibility is never implied by
 	// the other flags: project/channel views fail closed on it.
 	AllowResearch bool
+	// AllowPatternRole admits NodeRole=pattern nodes into the corpus. The
+	// pattern role is the evolution plane (spec §12.3): it stays outside
+	// every task-recall corpus — including inactive zero views — until a
+	// canonical plan grants the evolution/curator capability. Scope flags
+	// never imply this grant.
+	AllowPatternRole bool
 }
 
 // Active reports whether the view filters at all; the zero GraphView is
 // inactive so legacy callers keep unfiltered retrieval.
 func (v GraphView) Active() bool {
 	return v.AllowProject || v.ChannelID != "" || v.AllowResearch
+}
+
+// patternEligible is the unconditional role gate: pattern nodes are never
+// retrievable without the explicit pattern grant, regardless of whether the
+// view is otherwise active.
+func (v GraphView) patternEligible(n *Node) bool {
+	return EffectiveNodeRole(n.Role) != NodeRolePattern || v.AllowPatternRole
+}
+
+// visibleForRetrieval combines the unconditional pattern-role gate with the
+// scoped visibility check. Inactive views keep returning everything except
+// pattern nodes, preserving legacy behavior while closing the evolution
+// plane off from task recall.
+func (v GraphView) visibleForRetrieval(n *Node) bool {
+	if !v.patternEligible(n) {
+		return false
+	}
+	if !v.Active() {
+		return true
+	}
+	return v.Allows(n)
 }
 
 // Allows reports whether n is visible under v. Empty Visibility reads as

@@ -31,6 +31,13 @@ type ExploreConfig struct {
 	Temperature       float64       // trajectory sampling temperature (wired at integration time)
 	Model             string        // model name passed to the agent backend
 	Timeout           time.Duration // per-trajectory wall-clock timeout
+	// LayeredNavigation serves the v2 additive metadata of the skill-graph
+	// spec (§7.3): explored nodes and expand candidates carry their
+	// effective node_role and derived_atom_kinds. It stays false for v1
+	// node-only runs — one run never mixes protocol generations (spec §6
+	// rule 4) — and grants no Atom/Skill/View/DAG capability beyond the
+	// metadata itself.
+	LayeredNavigation bool
 }
 
 // DefaultExploreConfig returns the conservative design §6 defaults.

@@ -165,6 +165,15 @@ func (ix *BM25Index) Len() int {
 // using Okapi BM25 and returns the topK highest, sorted by descending
 // score. Documents with a zero score (no shared terms) are excluded.
 func (ix *BM25Index) Search(query string, topK int) []ScoredDoc {
+	return ix.SearchFiltered(query, topK, nil)
+}
+
+// SearchFiltered scores the index exactly like Search, but only documents
+// passing eligible are considered when selecting the topK (nil admits
+// everything). Filtering happens before the topK cut — the eligible corpus
+// is ranked, not the rank output filtered — while IDF statistics stay
+// corpus-wide, so an all-visible corpus yields results identical to Search.
+func (ix *BM25Index) SearchFiltered(query string, topK int, eligible func(id string) bool) []ScoredDoc {
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
 
@@ -199,7 +208,7 @@ func (ix *BM25Index) Search(query string, topK int) []ScoredDoc {
 
 	hits := make([]ScoredDoc, 0, len(scores))
 	for id, score := range scores {
-		if score > 0 {
+		if score > 0 && (eligible == nil || eligible(id)) {
 			hits = append(hits, ScoredDoc{ID: id, Score: score})
 		}
 	}

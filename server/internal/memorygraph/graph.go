@@ -64,6 +64,16 @@ func (g *Graph) RelationEdges() []*Edge { return g.rel }
 // edge via "edge:<id>"), relation types are in RelationEdgeTypes and
 // epistemic markers are asserted|inferred when set.
 func (g *Graph) Validate() error {
+	for _, n := range g.nodes {
+		if !ValidNodeRole(n.Role) {
+			return fmt.Errorf("node %s has invalid role %q", n.NodeID, n.Role)
+		}
+		for _, kind := range n.DerivedAtomKinds {
+			if !ValidAtomKind(string(kind)) {
+				return fmt.Errorf("node %s has invalid derived atom kind %q", n.NodeID, kind)
+			}
+		}
+	}
 	for _, e := range g.hier {
 		if e.Type != EdgeTypeSummarizes {
 			return fmt.Errorf("hierarchy edge %s has type %q, want %q", e.EdgeID, e.Type, EdgeTypeSummarizes)

@@ -2,7 +2,7 @@
 
 import { useTheme } from "next-themes"
 import { Toaster as Sonner, type ToasterProps } from "sonner"
-import { CircleCheckIcon, InfoIcon, TriangleAlertIcon, OctagonXIcon, Loader2Icon } from "lucide-react"
+import { CircleCheckIcon, InfoIcon, TriangleAlertIcon, OctagonXIcon, Loader2Icon, XIcon } from "lucide-react"
 
 const Toaster = ({ ...props }: ToasterProps) => {
   // Use `resolvedTheme` (the concrete "light" / "dark" value) instead of
@@ -32,7 +32,11 @@ const Toaster = ({ ...props }: ToasterProps) => {
         loading: (
           <Loader2Icon className="size-4 animate-spin text-brand" />
         ),
+        close: (
+          <XIcon className="size-3.5" />
+        ),
       }}
+      closeButton
       style={
         {
           "--normal-bg": "var(--popover)",
@@ -44,6 +48,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
       toastOptions={{
         classNames: {
           toast: "cn-toast",
+          closeButton: "cn-toast-close",
         },
       }}
       {...props}

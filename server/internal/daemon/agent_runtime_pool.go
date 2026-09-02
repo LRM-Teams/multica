@@ -161,9 +161,10 @@ type agentRuntimeAcquireRequest struct {
 	// concrete backend lifetime and runs on every create failure.
 	PrepareLaunchEnvironment func(map[string]string) (string, func(), error)
 	Now                      time.Time
-	// ForceFreshSession discards CanonicalSessionID and any queued
-	// nextResume pointer so this acquire cannot continue a poisoned Pi
-	// conversation. Period Brief collect/synth/retry set this on claim.
+	// ForceFreshSession discards CanonicalSessionID, drains any queued
+	// nextResume pointer, and replaces a live resident process so this
+	// acquire cannot continue a poisoned Pi conversation. Period Brief
+	// collect/synth/retry set this on the product-task claim.
 	ForceFreshSession bool
 }
 
@@ -330,7 +331,12 @@ func (p *agentRuntimePool) acquire(request agentRuntimeAcquireRequest) (*agentRu
 
 	// Live process → reuse. No hash, no implicit stop+start.
 	// Model/MCP/AGENTS baked at start stay until explicit restart/reset
-	// or the process dies.
+	// or the process dies. ForceFreshSession is the one-shot exception:
+	// clearing ResumeSessionID is not enough — Pi keeps the conversation
+	// inside the live process.
+	if request.ForceFreshSession && slot.backend != nil {
+		slot.closeBackend()
+	}
 	reused := slot.backend != nil
 	slot.running = true
 

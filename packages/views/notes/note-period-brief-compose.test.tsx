@@ -322,6 +322,26 @@ describe("NotePeriodBriefCompose", () => {
     expect(getComputerCollectRoots).toHaveBeenCalledWith("pc-daemon-aaaa");
   });
 
+  it("lets an existing collector chip reopen runtime setup beside collect folders", async () => {
+    const user = userEvent.setup();
+    const onConfigureCollector = vi.fn();
+    renderCompose({ onConfigureCollector });
+    await waitFor(() => {
+      expect(screen.getByTestId("period-brief-collector-roots-collector-a")).toBeTruthy();
+    });
+    expect(screen.getByTestId("period-brief-collector-roots-collector-a")).toHaveAccessibleName(
+      "采集目录",
+    );
+    const rebind = screen.getByTestId("period-brief-collector-runtime-collector-a");
+    expect(rebind).toHaveAccessibleName("更换运行时");
+    await user.click(rebind);
+    expect(onConfigureCollector).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collector: expect.objectContaining({ id: "collector-a" }),
+      }),
+    );
+  });
+
   it("shows the in-bubble run status instead of jumping away", () => {
     renderCompose({
       startedTitle: "工作介绍 本周 · 底稿",

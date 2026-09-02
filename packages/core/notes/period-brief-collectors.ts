@@ -17,8 +17,14 @@ const PERIOD_BRIEF_COLLECTOR_NON_SLUG = /[^a-z0-9]+/g;
 
 export type PeriodBriefCollectorCandidate = Pick<
   Agent,
-  "id" | "name" | "display_name" | "runtime_id" | "runtime_mode" | "runtime_status" | "owner_id"
->;
+  | "id"
+  | "name"
+  | "display_name"
+  | "runtime_id"
+  | "runtime_mode"
+  | "runtime_status"
+  | "owner_id"
+> & Pick<Partial<Agent>, "model">;
 
 export type PeriodBriefCollectorRuntime = Pick<AgentRuntime, "id" | "status" | "owner_id">;
 

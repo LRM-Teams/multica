@@ -2006,6 +2006,9 @@ func TestApplyForceFreshSessionDropsPrior(t *testing.T) {
 	if task.PriorSessionID != "" {
 		t.Fatalf("PriorSessionID = %q, want empty", task.PriorSessionID)
 	}
+	if !task.ForceFreshSession {
+		t.Fatal("ForceFreshSession must stay set so resident acquire replaces the live process")
+	}
 }
 
 func TestApplyForceFreshSessionNoopWhenUnset(t *testing.T) {

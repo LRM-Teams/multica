@@ -16,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/storage"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -1000,12 +1001,31 @@ func (h *Handler) DeleteAttachment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.Queries.DeleteAttachment(r.Context(), db.DeleteAttachmentParams{
+	// Task 8A: fence the attachment's canonical memory sources in the same
+	// transaction as the business delete.
+	tx, err := h.beginMemoryRetractionTx(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to start transaction")
+		return
+	}
+	defer func() { _ = tx.Rollback(r.Context()) }()
+	if err := h.fenceMemorySourcesTx(r.Context(), tx, att.WorkspaceID,
+		[]service.MemorySourceRef{memorySourceRef(att.WorkspaceID, service.MemorySourceAttachment, att.ID)},
+		"member:"+userID, "attachment deleted"); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to fence attachment memory")
+		return
+	}
+	if err := h.Queries.WithTx(tx).DeleteAttachment(r.Context(), db.DeleteAttachmentParams{
 		ID:          att.ID,
 		WorkspaceID: att.WorkspaceID,
 	}); err != nil {
 		slog.Error("failed to delete attachment", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to delete attachment")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		slog.Error("failed to commit attachment delete", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to commit attachment delete")
 		return
 	}
 

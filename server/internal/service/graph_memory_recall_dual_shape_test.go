@@ -5,7 +5,6 @@ package service
 import (
 	"context"
 	"errors"
-	"os"
 	"testing"
 
 	"github.com/google/uuid"
@@ -25,14 +24,9 @@ import (
 
 func dualShapeTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
-		t.Skip("integration test requires Postgres at DATABASE_URL")
-	}
-	pool, err := pgxpool.New(context.Background(), dbURL)
-	require.NoError(t, err)
-	t.Cleanup(pool.Close)
-	return pool
+	// Recall Begin resolves the live-guard publication index (universal DAG
+	// live version), so the fixture needs the fully migrated faithful schema.
+	return bootstrapUniversalDAGProjectionSchema(t)
 }
 
 type dualShapeFixture struct {
@@ -66,8 +60,9 @@ func newDualShapeFixture(t *testing.T, pool *pgxpool.Pool) *dualShapeFixture {
 	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM "user" WHERE id=$1::uuid`, userID) })
 
 	require.NoError(t, pool.QueryRow(ctx, `
-		INSERT INTO workspace (name, slug) VALUES ($1, $2) RETURNING id::text`,
-		"dual-shape ws "+suffix, "dual-shape-"+suffix).Scan(&f.wsID))
+		INSERT INTO workspace (name, slug, settings) VALUES ($1, $2, $3) RETURNING id::text`,
+		"dual-shape ws "+suffix, "dual-shape-"+suffix,
+		`{"memory_provider_policy":{"version":"test","purposes":{"embed":{"enabled":false}}}}`).Scan(&f.wsID))
 	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM workspace WHERE id=$1::uuid`, f.wsID) })
 
 	_, err := pool.Exec(ctx, `INSERT INTO member (workspace_id, user_id, role) VALUES ($1::uuid, $2::uuid, 'owner')`, f.wsID, userID)

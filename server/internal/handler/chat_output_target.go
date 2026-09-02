@@ -433,7 +433,7 @@ func (h *Handler) ensureAgentHumanDMChannel(ctx context.Context, workspaceID, ag
 // chat completion. It resolves the final destination before deriving any
 // message facts, so a cross-channel output cannot borrow mention candidates
 // from the channel that originally woke the agent.
-func (h *Handler) handleResolvedChannelChatDone(ctx context.Context, origin chatOutputOrigin, payload protocol.ChatDonePayload, content string, parts []protocol.MessagePart, initiatorID, defaultThreadRootMessageID pgtype.UUID, defaultThreadID *string, defaultTriggerDepth int) {
+func (h *Handler) handleResolvedChannelChatDone(ctx context.Context, taskID pgtype.UUID, origin chatOutputOrigin, payload protocol.ChatDonePayload, content string, parts []protocol.MessagePart, initiatorID, defaultThreadRootMessageID pgtype.UUID, defaultThreadID *string, defaultTriggerDepth int) {
 	target, err := h.resolveChatOutputTarget(ctx, origin, payload.Target)
 	if err != nil {
 		slog.Warn("channel bridge: suppressing invalid chat output target", "chat_session_id", payload.ChatSessionID, "target", payload.Target, "error", err)
@@ -463,14 +463,14 @@ func (h *Handler) handleResolvedChannelChatDone(ctx context.Context, origin chat
 	}
 	switch target.kind {
 	case chatOutputTargetDM:
-		h.insertAgentChatOutputMessage(ctx, target.channel, origin.agentID, content, parts, pgtype.UUID{}, nil, 0, initiatorID)
+		h.insertAgentChatOutputMessage(ctx, taskID, target.channel, origin.agentID, content, parts, pgtype.UUID{}, nil, 0, initiatorID)
 	case chatOutputTargetThread:
 		threadID := target.threadRoot.ThreadID
 		if threadID == nil || strings.TrimSpace(*threadID) == "" {
 			fresh := uuid.NewString()
 			threadID = &fresh
 		}
-		h.insertAgentChatOutputMessage(ctx, target.channel, origin.agentID, content, parts, parseUUID(target.threadRoot.ID), threadID, target.threadRoot.TriggerDepth+1, initiatorID)
+		h.insertAgentChatOutputMessage(ctx, taskID, target.channel, origin.agentID, content, parts, parseUUID(target.threadRoot.ID), threadID, target.threadRoot.TriggerDepth+1, initiatorID)
 	case chatOutputTargetChannel:
 		threadRootMessageID := pgtype.UUID{}
 		threadID := (*string)(nil)
@@ -480,11 +480,11 @@ func (h *Handler) handleResolvedChannelChatDone(ctx context.Context, origin chat
 			threadID = defaultThreadID
 			triggerDepth = defaultTriggerDepth + 1
 		}
-		h.insertAgentChatOutputMessage(ctx, target.channel, origin.agentID, content, parts, threadRootMessageID, threadID, triggerDepth, initiatorID)
+		h.insertAgentChatOutputMessage(ctx, taskID, target.channel, origin.agentID, content, parts, threadRootMessageID, threadID, triggerDepth, initiatorID)
 	}
 }
 
-func (h *Handler) insertAgentChatOutputMessage(ctx context.Context, ch ChannelResponse, agentID pgtype.UUID, content string, parts []protocol.MessagePart, threadRootMessageID pgtype.UUID, threadID *string, triggerDepth int, initiatorID pgtype.UUID) (ChannelMessageResponse, bool) {
+func (h *Handler) insertAgentChatOutputMessage(ctx context.Context, taskID pgtype.UUID, ch ChannelResponse, agentID pgtype.UUID, content string, parts []protocol.MessagePart, threadRootMessageID pgtype.UUID, threadID *string, triggerDepth int, initiatorID pgtype.UUID) (ChannelMessageResponse, bool) {
 	content, parts, err := h.finalizeAgentChannelMessage(ctx, ch, content, parts)
 	if err != nil {
 		slog.Warn("channel bridge: invalid agent message output", "channel_id", ch.ID, "agent_id", uuidToString(agentID), "error", err)
@@ -493,7 +493,7 @@ func (h *Handler) insertAgentChatOutputMessage(ctx context.Context, ch ChannelRe
 	channelID := parseUUID(ch.ID)
 	workspaceID := parseUUID(ch.WorkspaceID)
 	agentName := h.agentName(ctx, agentID)
-	msg, err := h.insertChannelMessageWithParts(ctx, channelID, workspaceID, "agent", agentID, agentName, content, parts, "multica", nil, pgtype.UUID{}, threadRootMessageID, threadID, triggerDepth)
+	msg, err := h.insertChannelMessageWithPartsAndTask(ctx, taskID, channelID, workspaceID, "agent", agentID, agentName, content, parts, "multica", nil, pgtype.UUID{}, threadRootMessageID, threadID, triggerDepth)
 	if err != nil {
 		slog.Warn("channel bridge: insert targeted agent message failed", "channel_id", ch.ID, "agent_id", uuidToString(agentID), "error", err)
 		return ChannelMessageResponse{}, false

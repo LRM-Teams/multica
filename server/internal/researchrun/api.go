@@ -72,6 +72,13 @@ type ResearchRunReconciler interface {
 	ReconcileV6Work(context.Context, int) (int, error)
 }
 
+// BackgroundKnowledgeProbe reports whether Director-cycle background recall
+// is wired (unification spec §5); an unwired engine compiles briefs without
+// the background block.
+type BackgroundKnowledgeProbe interface {
+	BackgroundKnowledgeConfigured() bool
+}
+
 var _ ResearchRun = (*Engine)(nil)
 var _ ResearchRunSubmission = (*Engine)(nil)
 var _ ResearchRunV6Bootstrap = (*Engine)(nil)
@@ -79,5 +86,6 @@ var _ ResearchSourceIngestion = (*Engine)(nil)
 var _ ResearchCanonicalRebuild = (*Engine)(nil)
 var _ ResearchRunReconciler = (*Engine)(nil)
 var _ ResearchRunDirectorControl = (*Engine)(nil)
+var _ BackgroundKnowledgeProbe = (*Engine)(nil)
 var _ V6ProjectionReader = (*Engine)(nil)
 var _ V6WorkActivityWriter = (*Engine)(nil)

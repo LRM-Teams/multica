@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -25,14 +26,14 @@ type MockDiagnosisStores struct {
 	mock.Mock
 }
 
-func (m *MockDiagnosisStores) ListInteractionDAGSegmentsForProject(ctx context.Context, projectID string) ([]db.ListInteractionDAGSegmentsForProjectRow, error) {
-	args := m.Called(ctx, projectID)
+func (m *MockDiagnosisStores) ListInteractionDAGSegmentsForProject(ctx context.Context, arg db.ListInteractionDAGSegmentsForProjectParams) ([]db.ListInteractionDAGSegmentsForProjectRow, error) {
+	args := m.Called(ctx, arg.ProjectID)
 	return args.Get(0).([]db.ListInteractionDAGSegmentsForProjectRow), args.Error(1)
 }
 
-func (m *MockDiagnosisStores) ListInteractionDAGEdgesForProject(ctx context.Context, projectID string) ([]db.InteractionDagEdge, error) {
-	args := m.Called(ctx, projectID)
-	return args.Get(0).([]db.InteractionDagEdge), args.Error(1)
+func (m *MockDiagnosisStores) ListInteractionDAGEdgesForProject(ctx context.Context, arg db.ListInteractionDAGEdgesForProjectParams) ([]db.ListInteractionDAGEdgesForProjectRow, error) {
+	args := m.Called(ctx, arg.ProjectID)
+	return args.Get(0).([]db.ListInteractionDAGEdgesForProjectRow), args.Error(1)
 }
 
 func (m *MockDiagnosisStores) GetInteractionDAGSegmentByID(ctx context.Context, segmentID string) (db.GetInteractionDAGSegmentByIDRow, error) {
@@ -40,12 +41,12 @@ func (m *MockDiagnosisStores) GetInteractionDAGSegmentByID(ctx context.Context, 
 	return args.Get(0).(db.GetInteractionDAGSegmentByIDRow), args.Error(1)
 }
 
-func (m *MockDiagnosisStores) GetInteractionDAGSegmentByAgentRun(ctx context.Context, agentRunID string) (db.GetInteractionDAGSegmentByAgentRunRow, error) {
+func (m *MockDiagnosisStores) GetInteractionDAGSegmentByAgentRun(ctx context.Context, agentRunID pgtype.UUID) (db.GetInteractionDAGSegmentByAgentRunRow, error) {
 	args := m.Called(ctx, agentRunID)
 	return args.Get(0).(db.GetInteractionDAGSegmentByAgentRunRow), args.Error(1)
 }
 
-func (m *MockDiagnosisStores) GetLastEndSeqForAgentRun(ctx context.Context, agentRunID string) (int32, error) {
+func (m *MockDiagnosisStores) GetLastEndSeqForAgentRun(ctx context.Context, agentRunID pgtype.UUID) (int32, error) {
 	args := m.Called(ctx, agentRunID)
 	return args.Get(0).(int32), args.Error(1)
 }
@@ -80,14 +81,34 @@ func (m *MockDiagnosisStores) GetInteractionDAGSessionRun(ctx context.Context, s
 	return args.Get(0).(db.InteractionDagSessionRun), args.Error(1)
 }
 
-func (m *MockDiagnosisStores) InsertInteractionDAGSegmentWithSnapshot(ctx context.Context, arg db.InsertInteractionDAGSegmentWithSnapshotParams) error {
+func (m *MockDiagnosisStores) InsertInteractionDAGSegmentWithSnapshot(ctx context.Context, arg db.InsertInteractionDAGSegmentWithSnapshotParams) (string, error) {
 	args := m.Called(ctx, arg)
-	return args.Error(0)
+	return arg.SegmentID, args.Error(0)
 }
 
-func (m *MockDiagnosisStores) InsertInteractionDAGEdge(ctx context.Context, arg db.InsertInteractionDAGEdgeParams) error {
+func (m *MockDiagnosisStores) AllocateUniversalDAGEdgeSeq(ctx context.Context, workspaceID pgtype.UUID) (int64, error) {
+	args := m.Called(ctx, workspaceID)
+	return args.Get(0).(int64), args.Error(1)
+}
+
+func (m *MockDiagnosisStores) GetUniversalDAGEdgeTriggerMessageID(ctx context.Context, arg db.GetUniversalDAGEdgeTriggerMessageIDParams) (pgtype.UUID, error) {
 	args := m.Called(ctx, arg)
-	return args.Error(0)
+	return args.Get(0).(pgtype.UUID), args.Error(1)
+}
+
+func (m *MockDiagnosisStores) InsertUniversalDAGEdge(ctx context.Context, arg db.InsertUniversalDAGEdgeParams) (db.InteractionDagEdge, error) {
+	args := m.Called(ctx, arg)
+	return args.Get(0).(db.InteractionDagEdge), args.Error(1)
+}
+
+func (m *MockDiagnosisStores) InsertUniversalDAGEdgeAtomic(ctx context.Context, arg db.InsertUniversalDAGEdgeAtomicParams) (db.InteractionDagEdge, error) {
+	args := m.Called(ctx, arg)
+	return args.Get(0).(db.InteractionDagEdge), args.Error(1)
+}
+
+func (m *MockDiagnosisStores) GetUniversalDAGProjectWorkspace(ctx context.Context, projectID string) (pgtype.UUID, error) {
+	args := m.Called(ctx, projectID)
+	return args.Get(0).(pgtype.UUID), args.Error(1)
 }
 
 func (m *MockDiagnosisStores) InsertInteractionDAGStepReward(ctx context.Context, arg db.InsertInteractionDAGStepRewardParams) error {
@@ -95,8 +116,8 @@ func (m *MockDiagnosisStores) InsertInteractionDAGStepReward(ctx context.Context
 	return args.Error(0)
 }
 
-func (m *MockDiagnosisStores) ListInteractionDAGStepRewardsForProject(ctx context.Context, projectID string) ([]db.InteractionDagStepReward, error) {
-	args := m.Called(ctx, projectID)
+func (m *MockDiagnosisStores) ListInteractionDAGStepRewardsForProject(ctx context.Context, arg db.ListInteractionDAGStepRewardsForProjectParams) ([]db.InteractionDagStepReward, error) {
+	args := m.Called(ctx, arg.ProjectID)
 	return args.Get(0).([]db.InteractionDagStepReward), args.Error(1)
 }
 
@@ -110,8 +131,8 @@ func (m *MockDiagnosisStores) ListInteractionDAGSessionRunsForProject(ctx contex
 	return args.Get(0).([]db.InteractionDagSessionRun), args.Error(1)
 }
 
-func (m *MockDiagnosisStores) ListInteractionDAGEnvSnapshotsForProject(ctx context.Context, projectID string) ([]db.InteractionDagEnvSnapshot, error) {
-	args := m.Called(ctx, projectID)
+func (m *MockDiagnosisStores) ListInteractionDAGEnvSnapshotsForProject(ctx context.Context, arg db.ListInteractionDAGEnvSnapshotsForProjectParams) ([]db.InteractionDagEnvSnapshot, error) {
+	args := m.Called(ctx, arg.ProjectID)
 	return args.Get(0).([]db.InteractionDagEnvSnapshot), args.Error(1)
 }
 
@@ -123,14 +144,17 @@ func TestGetSegmentMessages(t *testing.T) {
 	var projectID pgtype.UUID
 	_ = projectID.Scan("123e4567-e89b-12d3-a456-426614174000")
 	segmentID := "segment-1"
-	agentRunID := "agent-run-1"
+	agentRunID := "123e4567-e89b-12d3-a456-426614174001"
 
 	segment := db.GetInteractionDAGSegmentByIDRow{
-		SegmentID:  segmentID,
-		ProjectID:  projectID.String(),
-		AgentRunID: agentRunID,
-		StartSeq:   1,
-		EndSeq:     5,
+		SegmentID:        segmentID,
+		ProjectID:        pgtype.Text{String: projectID.String(), Valid: true},
+		AgentRunID:       util.MustParseUUID(agentRunID),
+		StartSeq:         1,
+		EndSeq:           5,
+		WorkspaceID:      workspaceID,
+		ProjectIDAtEvent: projectID,
+		ContentStatus:    "published",
 	}
 
 	messages := []db.TaskMessage{
@@ -147,7 +171,7 @@ func TestGetSegmentMessages(t *testing.T) {
 		// Setup expectations
 		mockStore.On("GetInteractionDAGSegmentByID", ctx, segmentID).Return(segment, nil)
 		mockStore.On("GetProjectInWorkspace", ctx, mock.MatchedBy(func(arg db.GetProjectInWorkspaceParams) bool {
-			return arg.ID.String() == segment.ProjectID && arg.WorkspaceID == workspaceID
+			return arg.ID.String() == segment.ProjectID.String && arg.WorkspaceID == workspaceID
 		})).Return(db.Project{ID: projectID, WorkspaceID: workspaceID}, nil)
 		mockStore.On("MessagesForTaskInRange", ctx, db.MessagesForTaskInRangeParams{TaskID: agentRunID, StartSeq: int32(1), EndSeq: int32(5)}).Return(messages, nil)
 
@@ -202,7 +226,6 @@ func TestGetSegmentMessages(t *testing.T) {
 		otherWorkspaceID := pgtype.UUID{Bytes: [16]byte{0xff}, Valid: true}
 
 		mockStore.On("GetInteractionDAGSegmentByID", ctx, segmentID).Return(segment, nil)
-		mockStore.On("GetProjectInWorkspace", ctx, mock.Anything).Return(db.Project{}, pgx.ErrNoRows)
 
 		result, err := GetSegmentMessages(ctx, mockStore, mockStore, otherWorkspaceID, segmentID)
 		assert.Error(t, err)
@@ -249,11 +272,11 @@ func TestGetInteractionDAG(t *testing.T) {
 	projectIDStr := projectID.String()
 
 	segments := []db.ListInteractionDAGSegmentsForProjectRow{
-		{SegmentID: "seg1", ProjectID: projectIDStr},
-		{SegmentID: "seg2", ProjectID: projectIDStr},
+		{SegmentID: "seg1", ProjectID: pgtype.Text{String: projectIDStr, Valid: true}},
+		{SegmentID: "seg2", ProjectID: pgtype.Text{String: projectIDStr, Valid: true}},
 	}
 
-	edges := []db.InteractionDagEdge{
+	edges := []db.ListInteractionDAGEdgesForProjectRow{
 		{SrcSegmentID: "seg1", DstSegmentID: "seg2", Type: EdgeTypeDelegation},
 	}
 

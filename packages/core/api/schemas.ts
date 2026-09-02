@@ -24,6 +24,7 @@ import type {
   EvolutionReviewSubmission,
   MemoryCurationRunDetail,
   WorkspaceMemoryCurationStatus,
+  GraphMemoryCitation,
   GraphMemoryStatus,
   GraphMemoryAuditSummary,
   GraphMemoryConsolidationRun,
@@ -1596,6 +1597,63 @@ export const EMPTY_GRAPH_MEMORY_PROFILE = {
   updated_at: "",
 };
 
+// Memory Explore v2 (plan Task 13): structured refs, search hits, evidence
+// and history of the gated external v2 surface. Every field is typed — no
+// raw ref maps cross the wire.
+export const MemoryRefSchema = z.object({
+  kind: z.enum(["graph_node", "staging_atom"]),
+  node_id: z.string().default(""),
+  segment_id: z.string().default(""),
+  atom_id: z.string().default(""),
+  channel_id: z.string().default(""),
+}).strict();
+
+export const ResolvedMemoryRefSchema = z.object({
+  ref: MemoryRefSchema,
+  segment_id: z.string().default(""),
+  publish_seq: z.number().int().default(0),
+}).strict();
+
+export const MemoryExploreV2SearchHitSchema = z.object({
+  ref: MemoryRefSchema,
+  class: z.enum(["graph_node", "staging_atom"]),
+  score: z.number(),
+}).strict();
+
+export const MemoryExploreV2SearchResponseSchema = z.object({
+  workspace_id: z.string(),
+  hits: z.array(MemoryExploreV2SearchHitSchema).default([]),
+}).strict();
+
+export const MemoryExploreV2EvidenceSchema = z.object({
+  ref: MemoryRefSchema,
+  segment_id: z.string(),
+  summary: z.string().default(""),
+  trajectory_chunk: z.unknown().optional(),
+  publish_seq: z.number().int().default(0),
+}).loose();
+
+export const MemoryExploreV2HistorySchema = z.object({
+  trajectory_id: z.string(),
+  refs: z.array(ResolvedMemoryRefSchema).default([]),
+}).loose();
+
+export const EMPTY_MEMORY_EXPLORE_V2_SEARCH = {
+  workspace_id: "",
+  hits: [] as Array<{
+    ref: { kind: "graph_node" | "staging_atom"; node_id: string; segment_id: string; atom_id: string; channel_id: string };
+    class: "graph_node" | "staging_atom";
+    score: number;
+  }>,
+};
+
+export type MemoryRef = z.infer<typeof MemoryRefSchema>;
+export type ResolvedMemoryRef = z.infer<typeof ResolvedMemoryRefSchema>;
+export type MemoryExploreV2SearchHit = z.infer<typeof MemoryExploreV2SearchHitSchema>;
+export type MemoryExploreV2SearchResponse = z.infer<typeof MemoryExploreV2SearchResponseSchema>;
+export type MemoryExploreV2Evidence = z.infer<typeof MemoryExploreV2EvidenceSchema>;
+export type MemoryExploreV2History = z.infer<typeof MemoryExploreV2HistorySchema>;
+
 export const GraphMemoryChannelModeSchema = z.object({
   workspace_id: z.string(),
   channel_id: z.string(),
@@ -1632,12 +1690,57 @@ export const GraphMemoryMessageCitationsSchema = z.object({
   items: z.array(GraphMemoryCitationSchema).default([]),
 }).loose();
 
+// Citation classes (spec §15): every UI citation carries one of five labels.
+// The server sends no class field — these pure rules derive it from the
+// documented wire shapes: the Task 8A/17 read gate resolves retracted
+// sources to a literal sentinel body, staging references from
+// qualifyRecallCitations carry level "-1" without graph content, and a
+// withheld (restricted) graph node arrives with every content field empty.
+export type GraphMemoryCitationClass =
+  | "consolidated"
+  | "recent-unreviewed"
+  | "historical"
+  | "restricted"
+  | "retracted";
+
+const GRAPH_MEMORY_RETRACTION_SENTINEL = "content_retracted";
+
+export function graphMemoryCitationClass(
+  citation: Pick<
+    GraphMemoryCitation,
+    "level" | "epistemic_status" | "title" | "excerpt" | "first_paragraph"
+  >,
+): GraphMemoryCitationClass {
+  if (
+    citation.excerpt === GRAPH_MEMORY_RETRACTION_SENTINEL ||
+    citation.first_paragraph === GRAPH_MEMORY_RETRACTION_SENTINEL
+  ) {
+    return "retracted";
+  }
+  if (
+    citation.level !== "-1" &&
+    !citation.title &&
+    !citation.excerpt &&
+    !citation.first_paragraph
+  ) {
+    return "restricted";
+  }
+  if (citation.epistemic_status === "superseded") {
+    return "historical";
+  }
+  if (citation.level === "-1") {
+    return "recent-unreviewed";
+  }
+  return "consolidated";
+}
+
 export const GraphMemoryGraphStatusSchema = z.object({
-  kind: z.enum(["project", "channel"]).catch("project"),
+  kind: z.enum(["project", "channel", "research"]).catch("project"),
   owner_id: z.string().default(""),
   current_version: z.number().int().default(0),
   versions: z.array(z.number().int()).default([]),
   staging_segments: z.number().int().default(0),
+  node_count: z.number().int().default(0),
   // Backend omits/nulls this when the graph was never consolidated.
   last_consolidated_at: z.string().nullable().default(null),
   consolidation_backoff: z.boolean().default(false),
@@ -1658,6 +1761,53 @@ export const EMPTY_GRAPH_MEMORY_STATUS: GraphMemoryStatus = {
   workspace_id: "", memory_type: "legacy", scoped_writer_ready: false, empty_start: true, graphs: [],
 };
 
+const GraphMemoryAuditCounterMapSchema = z.record(z.string(), z.number().int());
+
+// Untyped on purpose: zod's .default() on loose schemas needs a value whose
+// type carries an implicit index signature, which annotated interfaces lack.
+export const EMPTY_GRAPH_MEMORY_AUDIT_LEDGER = {
+  recalls_by_status: {},
+  recalls_by_error_kind: {},
+  trajectories_by_status: {},
+  trajectories_by_dive_status: {},
+  avg_rounds: 0,
+  p95_rounds: 0,
+  graded_trajectories: 0,
+  overall_reward_min: 0,
+  overall_reward_avg: 0,
+  dive_jobs_by_status: {},
+  dive_job_attempts: 0,
+  last_failure: { kind: "", message: "" },
+  reward_outbox_by_status: {},
+  oldest_pending_age_seconds: 0,
+  offline_export_eligible: 0,
+  catalog_items: 0,
+};
+
+// Bounded ledger aggregate (spec §15 workspace health): counters and
+// anonymous failure kinds only — never prompts, model text or credentials.
+export const GraphMemoryAuditLedgerSchema = z.object({
+  recalls_by_status: GraphMemoryAuditCounterMapSchema.default({}),
+  recalls_by_error_kind: GraphMemoryAuditCounterMapSchema.default({}),
+  trajectories_by_status: GraphMemoryAuditCounterMapSchema.default({}),
+  trajectories_by_dive_status: GraphMemoryAuditCounterMapSchema.default({}),
+  avg_rounds: z.number().default(0),
+  p95_rounds: z.number().default(0),
+  graded_trajectories: z.number().int().default(0),
+  overall_reward_min: z.number().default(0),
+  overall_reward_avg: z.number().default(0),
+  dive_jobs_by_status: GraphMemoryAuditCounterMapSchema.default({}),
+  dive_job_attempts: z.number().int().default(0),
+  last_failure: z.object({
+    kind: z.string().default(""),
+    message: z.string().default(""),
+  }).loose().default({ kind: "", message: "" }),
+  reward_outbox_by_status: GraphMemoryAuditCounterMapSchema.default({}),
+  oldest_pending_age_seconds: z.number().default(0),
+  offline_export_eligible: z.number().int().default(0),
+  catalog_items: z.number().int().default(0),
+}).loose();
+
 export const GraphMemoryAuditSummarySchema = z.object({
   workspace_id: z.string().default(""),
   queries_24h: z.number().int().default(0),
@@ -1666,12 +1816,23 @@ export const GraphMemoryAuditSummarySchema = z.object({
   avg_explore_rounds_24h: z.number().default(0),
   judged_queries_24h: z.number().int().default(0),
   regressions_total: z.number().int().default(0),
+  ledger: GraphMemoryAuditLedgerSchema.default(EMPTY_GRAPH_MEMORY_AUDIT_LEDGER),
 }).loose();
 
 export const EMPTY_GRAPH_MEMORY_AUDIT: GraphMemoryAuditSummary = {
   workspace_id: "", queries_24h: 0, recall_hits_24h: 0, recall_hit_rate_24h: 0,
   avg_explore_rounds_24h: 0, judged_queries_24h: 0, regressions_total: 0,
+  ledger: EMPTY_GRAPH_MEMORY_AUDIT_LEDGER,
 };
+
+// Migration progress for a channel that rebound across projects (plan Task
+// 16): aggregate counters only — no atom bodies, no actor, no error payloads.
+export const GraphMemoryChannelLineageMigrationSchema = z.object({
+  binding_generation: z.number().int().default(0),
+  source_watermark: z.number().int().default(0),
+  phase: z.string().default(""),
+  copied_atoms: z.number().int().default(0),
+}).loose();
 
 export const GraphMemoryChannelLineageSchema = z.object({
   workspace_id: z.string().default(""),
@@ -1689,7 +1850,128 @@ export const GraphMemoryChannelLineageSchema = z.object({
     valid_from: z.string().default(""),
     valid_to: z.string().default(""),
   }).loose()).default([]),
+  migration: GraphMemoryChannelLineageMigrationSchema.nullable().default(null),
 }).loose();
+
+// Training governance (plan Task 18 / spec §14.1). Owner/admin surfaces: the
+// per-workspace tenant/pooled grant pair plus the global kill switches.
+export const TrainingGrantSchema = z.object({
+  grant_id: z.string().default(""),
+  workspace_id: z.string().default(""),
+  tenant_status: z.string().default(""),
+  tenant_policy_version: z.number().int().default(0),
+  tenant_granted_by: z.string().default(""),
+  tenant_granted_at: z.string().default(""),
+  pooled_status: z.string().default(""),
+  pooled_policy_version: z.number().int().default(0),
+  pooled_granted_by: z.string().default(""),
+  pooled_granted_at: z.string().default(""),
+}).loose();
+
+export const TrainingPolicySchema = z.object({
+  selection_enabled: z.boolean().default(false),
+  execution_enabled: z.boolean().default(false),
+  reward_policy_version: z.number().int().default(0),
+  per_agent_sample_cap: z.number().int().default(0),
+  per_channel_sample_cap: z.number().int().default(0),
+  per_workspace_sample_cap: z.number().int().default(0),
+}).loose();
+
+export const TrainingGovernanceResponseSchema = z.object({
+  grant: TrainingGrantSchema,
+  policy: TrainingPolicySchema,
+}).loose();
+
+export const TrainingPolicyEnvelopeSchema = z.object({
+  policy: TrainingPolicySchema,
+}).loose();
+
+export const TrainingGrantRevokeResponseSchema = z.object({
+  workspace_id: z.string().default(""),
+  purpose: z.string().default(""),
+  invalidated: z.number().int().default(0),
+  revoked_samples: z.number().int().default(0),
+  deletion_ledger_rows: z.number().int().default(0),
+}).loose();
+
+export type TrainingGrant = z.infer<typeof TrainingGrantSchema>;
+export type TrainingPolicy = z.infer<typeof TrainingPolicySchema>;
+export type TrainingGovernanceResponse = z.infer<typeof TrainingGovernanceResponseSchema>;
+export type TrainingGrantRevokeResponse = z.infer<typeof TrainingGrantRevokeResponseSchema>;
+
+export interface UpdateTrainingGrantRequest {
+  purpose: "tenant" | "pooled";
+  action: "ack" | "opt_in" | "revoke";
+  /** CAS version the caller saw; ack/opt_in reject with 409 when stale. */
+  expected_version: number;
+}
+
+/** Sparse patch: omitted fields keep their current server-side value. */
+export type TrainingPolicyPatch = Partial<
+  Pick<
+    TrainingPolicy,
+    | "selection_enabled"
+    | "execution_enabled"
+    | "reward_policy_version"
+    | "per_agent_sample_cap"
+    | "per_channel_sample_cap"
+    | "per_workspace_sample_cap"
+  >
+>;
+
+export const EMPTY_TRAINING_GRANT: TrainingGrant = {
+  grant_id: "", workspace_id: "", tenant_status: "", tenant_policy_version: 0,
+  tenant_granted_by: "", tenant_granted_at: "", pooled_status: "", pooled_policy_version: 0,
+  pooled_granted_by: "", pooled_granted_at: "",
+};
+
+export const EMPTY_TRAINING_POLICY: TrainingPolicy = {
+  selection_enabled: false, execution_enabled: false, reward_policy_version: 0,
+  per_agent_sample_cap: 0, per_channel_sample_cap: 0, per_workspace_sample_cap: 0,
+};
+
+export const EMPTY_TRAINING_GOVERNANCE: TrainingGovernanceResponse = {
+  grant: EMPTY_TRAINING_GRANT,
+  policy: EMPTY_TRAINING_POLICY,
+};
+
+// Memory retention (plan Task 17 / spec §13): the per-workspace versioned
+// policy plus the platform caps every value must stay within. Whole,
+// non-negative days; the bootstrap and caps both default to 90/365/30.
+export const MemoryRetentionPolicySchema = z.object({
+  version: z.number().int().nonnegative().default(0),
+  trajectory_hot_days: z.number().int().nonnegative().default(90),
+  archive_days: z.number().int().nonnegative().default(365),
+  trace_hot_days: z.number().int().nonnegative().default(30),
+}).loose();
+
+export const MemoryRetentionCapsSchema = z.object({
+  trajectory_hot_days: z.number().int().default(90),
+  archive_days: z.number().int().default(365),
+  trace_hot_days: z.number().int().default(30),
+}).loose();
+
+export const MemoryRetentionResponseSchema = z.object({
+  policy: MemoryRetentionPolicySchema,
+  caps: MemoryRetentionCapsSchema,
+}).loose();
+
+export type MemoryRetentionPolicy = z.infer<typeof MemoryRetentionPolicySchema>;
+export type MemoryRetentionCaps = z.infer<typeof MemoryRetentionCapsSchema>;
+export type MemoryRetentionResponse = z.infer<typeof MemoryRetentionResponseSchema>;
+
+export interface UpdateMemoryRetentionRequest {
+  trajectory_hot_days: number;
+  archive_days: number;
+  trace_hot_days: number;
+  /** CAS version the caller saw; stale versions reject with 409. */
+  expected_version: number;
+}
+
+export const EMPTY_MEMORY_RETENTION: MemoryRetentionResponse = {
+  policy: { version: 0, trajectory_hot_days: 90, archive_days: 365, trace_hot_days: 30 },
+  caps: { trajectory_hot_days: 90, archive_days: 365, trace_hot_days: 30 },
+};
 
 export const GraphMemoryConsolidationRunSchema = z.object({
   id: z.string().default(""),

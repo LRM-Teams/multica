@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +21,7 @@ const (
 	OpAddNode          = "add_node"
 	OpUpdateNode       = "update_node"
 	OpDeleteNode       = "delete_node"
+	OpMergeNode        = "merge_node"
 	OpAddHierarchyEdge = "add_hierarchy_edge"
 	OpAddRelationEdge  = "add_relation_edge"
 	OpDeleteEdge       = "delete_edge"
@@ -150,14 +152,17 @@ func ShouldConsolidate(newSegments, queriesSinceLast int, cfg ConsolidateConfig)
 }
 
 // ConsolidateOp is one operation of the agent's final {"operations":[...]}
-// output. Node carries the full node document for add_node/update_node;
-// Edge carries the edge for add_hierarchy_edge/add_relation_edge.
+// output. Node carries the full node document for add_node/update_node and
+// the merge result for merge_node; Edge carries the edge for
+// add_hierarchy_edge/add_relation_edge; InputNodeIDs lists the nodes folded
+// into the result by merge_node.
 type ConsolidateOp struct {
-	Op     string `json:"op"`
-	NodeID string `json:"node_id,omitempty"`
-	Node   *Node  `json:"node,omitempty"`
-	EdgeID string `json:"edge_id,omitempty"`
-	Edge   *Edge  `json:"edge,omitempty"`
+	Op           string   `json:"op"`
+	NodeID       string   `json:"node_id,omitempty"`
+	Node         *Node    `json:"node,omitempty"`
+	InputNodeIDs []string `json:"input_node_ids,omitempty"`
+	EdgeID       string   `json:"edge_id,omitempty"`
+	Edge         *Edge    `json:"edge,omitempty"`
 }
 
 // consolidateOutput is the strict-JSON final-response contract.
@@ -190,49 +195,106 @@ type ConsolidateResult struct {
 // place; in TTT mode T trajectories edit isolated candidate version copies
 // and a backtest selects the winner.
 type Consolidator struct {
-	store    *Store
-	backend  AgentBackend
-	cfg      ConsolidateConfig
-	provider string // agent CLI provider name (e.g. "pi"); integration-time wiring
-	oplog    *OpLogger
-	traces   *TraceRecorder // nil → trajectories are drained but not persisted
+	store   *Store
+	backend AgentBackend
+	cfg     ConsolidateConfig
+	scope   ProviderScope
+	oplog   *OpLogger
+	traces  *TraceRecorder // nil → trajectories are drained but not persisted
 
-	runner FullBacktestRunner // nil → full backtests count as misses
+	runner *ScopedFullBacktestRunner // nil → full backtests count as misses
 	// emb enables the vector channel of the per-candidate backtest retrieval
 	// (design Q13/A2: the backtest retriever must mirror production); nil
 	// keeps backtests BM25-only through the same two-channel merge.
 	emb *CachedEmbedder
+	// wsb assembles the hot-region working set injected into prompts
+	// (unification spec §4.3); nil keeps prompts working-set-free.
+	wsb *WorkingSetBuilder
+	// maintenance marks a research maintenance round (spec §4.5): the op
+	// whitelist shrinks to update/merge/delete/edge operations on working-set
+	// nodes and epistemic edits may only migrate along the supersede
+	// direction. roundWS is the round's working-set id set backing that gate.
+	maintenance bool
+	roundWS     map[string]bool
+
+	runnerBindingErr   error
+	embedderBindingErr error
 }
 
-// NewConsolidator returns a Consolidator over the given store. cfg zero
-// values fall back to DefaultConsolidateConfig. oplog may be nil, in which
-// case a fresh OpLogger over store is used. provider is informational until
-// provider wiring lands at integration time. traces may be nil, in which
-// case trajectories are not persisted.
-func NewConsolidator(store *Store, backend AgentBackend, cfg ConsolidateConfig, provider string, oplog *OpLogger, traces *TraceRecorder) *Consolidator {
+// NewConsolidator returns a Consolidator over the given store. The provider
+// scope must come from the server resolver; cfg.Model is overwritten by its
+// resolved model. oplog and traces may be nil.
+func NewConsolidator(store *Store, backend AgentBackend, cfg ConsolidateConfig, scope ProviderScope, oplog *OpLogger, traces *TraceRecorder) *Consolidator {
 	if oplog == nil {
 		oplog = NewOpLogger(store)
 	}
+	cfg.Model = scope.Model
 	return &Consolidator{
-		store:    store,
-		backend:  backend,
-		cfg:      cfg.normalized(),
-		provider: provider,
-		oplog:    oplog,
-		traces:   traces,
+		store:   store,
+		backend: backend,
+		cfg:     cfg.normalized(),
+		scope:   scope,
+		oplog:   oplog,
+		traces:  traces,
 	}
 }
 
-// SetRunner installs the FullBacktestRunner used when a candidate's
-// retrieval distance regresses (design Q13: distance increase triggers a
-// full agent explore backtest). In production this rebuilds an Explorer
-// against the candidate version; in tests a fake.
-func (c *Consolidator) SetRunner(r FullBacktestRunner) { c.runner = r }
+// SetRunner installs a FullBacktestRunner with the Consolidator's resolved identity.
+func (c *Consolidator) SetRunner(r *ScopedFullBacktestRunner) error {
+	if r == nil {
+		c.runner = nil
+		c.runnerBindingErr = nil
+		return nil
+	}
+	if err := validateProviderScope(c.scope, ProviderPurposeConsolidate); err != nil {
+		c.runnerBindingErr = err
+		return err
+	}
+	if err := validateProviderScope(r.scope, ProviderPurposeConsolidate); err != nil {
+		c.runnerBindingErr = err
+		return err
+	}
+	if !providerScopeIdentityEqual(c.scope, r.scope) {
+		err := fmt.Errorf("consolidate: runner scope identity does not match consolidation scope identity")
+		c.runnerBindingErr = err
+		return err
+	}
+	c.runner = r
+	c.runnerBindingErr = nil
+	return nil
+}
 
 // SetEmbedder installs the embedding channel used by the per-candidate
 // backtest retrievers so backtests mirror the production hybrid retrieval
 // (design Q13/A2). Nil keeps backtests BM25-only.
-func (c *Consolidator) SetEmbedder(emb *CachedEmbedder) { c.emb = emb }
+func (c *Consolidator) SetEmbedder(emb *CachedEmbedder) error {
+	if emb == nil {
+		c.emb = nil
+		c.embedderBindingErr = nil
+		return nil
+	}
+	if err := validateProviderScope(c.scope, ProviderPurposeConsolidate); err != nil {
+		c.embedderBindingErr = err
+		return err
+	}
+	if err := validateProviderScope(emb.scope, ProviderPurposeEmbed); err != nil {
+		c.embedderBindingErr = err
+		return err
+	}
+	if !providerScopeIdentityEqual(c.scope, emb.scope) {
+		err := fmt.Errorf("consolidate: embedder scope identity does not match consolidation scope identity")
+		c.embedderBindingErr = err
+		return err
+	}
+	c.emb = emb
+	c.embedderBindingErr = nil
+	return nil
+}
+
+// SetWorkingSetBuilder installs the builder whose working set is injected
+// into every consolidation prompt (unification spec §4.3). Nil — the default
+// — keeps the legacy staging-only prompt.
+func (c *Consolidator) SetWorkingSetBuilder(b *WorkingSetBuilder) { c.wsb = b }
 
 // stagingSummary is one pending staging segment embedded in the prompt.
 type stagingSummary struct {
@@ -246,9 +308,21 @@ const maxStagingPromptChars = 2000
 // Consolidate runs one consolidation cycle against the current version
 // (design §5.4). The caller is expected to have gated on ShouldConsolidate.
 func (c *Consolidator) Consolidate(ctx context.Context) (*ConsolidateResult, error) {
+	if err := validateProviderScope(c.scope, ProviderPurposeConsolidate); err != nil {
+		return nil, fmt.Errorf("consolidate: %w", err)
+	}
+	if c.runnerBindingErr != nil {
+		return nil, c.runnerBindingErr
+	}
+	if c.embedderBindingErr != nil {
+		return nil, c.embedderBindingErr
+	}
 	if c.backend == nil {
 		return nil, fmt.Errorf("consolidate: agent backend not configured")
 	}
+	// Legacy staging-file flow: the scheduler no longer drives it (Task 14
+	// replaced it with ConsolidateAtoms + the publication coordinator); it
+	// remains for offline tooling and backtests.
 	current, err := c.store.CurrentVersion()
 	if err != nil {
 		return nil, fmt.Errorf("consolidate: current version: %w", err)
@@ -262,19 +336,77 @@ func (c *Consolidator) Consolidate(ctx context.Context) (*ConsolidateResult, err
 		return nil, err
 	}
 	stats := computeGraphStats(g)
+	ws := c.buildWorkingSet(ctx, current, g, staging)
 
 	if c.cfg.TTVTrajectories <= 1 {
-		return c.consolidateInPlace(ctx, current, g, staging, stats)
+		return c.consolidateInPlace(ctx, current, g, staging, stats, ws)
 	}
-	return c.consolidateTTT(ctx, current, staging, stats)
+	return c.consolidateTTT(ctx, current, staging, stats, ws)
+}
+
+// buildWorkingSet assembles the hot-region working set and records its
+// query-log cursor (unification spec §4.3). A build failure degrades to a
+// staging-only prompt: consolidation must not fail because the
+// retrieval-activity view is unavailable. The cursor advance is audit-only
+// and likewise best-effort.
+func (c *Consolidator) buildWorkingSet(ctx context.Context, current int, g *Graph, staging []stagingSummary) *WorkingSet {
+	if c.wsb == nil {
+		return nil
+	}
+	ws, err := c.wsb.Build(ctx, g, current, staging)
+	if err != nil {
+		return nil
+	}
+	_ = c.wsb.RecordCursor(current, ws)
+	return ws
+}
+
+// MaintenanceRound runs one research-graph maintenance round (unification
+// spec §4.5): a no-staging consolidation variant whose prompt carries only
+// the working set — three retrieval-signal nodes, their neighborhood, the
+// recently exported research nodes and their similar top-K older nodes. The
+// agent may only issue update_node/merge_node/delete_node/edge operations
+// on working-set nodes (the exporter is the sole writer of new research
+// content) and epistemic edits may only settle further along the supersede
+// direction. An empty working set is an idle round: no agent call, no
+// version. Auditing is the regular op log.
+func (c *Consolidator) MaintenanceRound(ctx context.Context) (*ConsolidateResult, error) {
+	if c.backend == nil {
+		return nil, fmt.Errorf("maintenance: agent backend not configured")
+	}
+	current, err := c.store.CurrentVersion()
+	if err != nil {
+		return nil, fmt.Errorf("maintenance: current version: %w", err)
+	}
+	g, err := LoadGraph(c.store, current)
+	if err != nil {
+		return nil, fmt.Errorf("maintenance: load graph v%d: %w", current, err)
+	}
+	ws := c.buildWorkingSet(ctx, current, g, nil)
+	if ws == nil || len(ws.Nodes) == 0 {
+		return &ConsolidateResult{WinnerVersion: current, Switched: false}, nil
+	}
+
+	ids := make(map[string]bool, len(ws.Nodes))
+	for _, n := range ws.Nodes {
+		ids[n.NodeID] = true
+	}
+	c.maintenance, c.roundWS = true, ids
+	defer func() { c.maintenance, c.roundWS = false, nil }()
+
+	stats := computeGraphStats(g)
+	if c.cfg.TTVTrajectories <= 1 {
+		return c.consolidateInPlace(ctx, current, g, nil, stats, ws)
+	}
+	return c.consolidateTTT(ctx, current, nil, stats, ws)
 }
 
 // consolidateInPlace is the non-TTT flow (design Q16): one trajectory edits
 // the current version in place; every operation is validated before being
 // applied, failures are skipped and recorded, and there is no snapshot
 // rollback — the op log is the audit trail.
-func (c *Consolidator) consolidateInPlace(ctx context.Context, current int, g *Graph, staging []stagingSummary, stats graphStats) (*ConsolidateResult, error) {
-	prompt := c.buildPrompt(staging, stats, "")
+func (c *Consolidator) consolidateInPlace(ctx context.Context, current int, g *Graph, staging []stagingSummary, stats graphStats, ws *WorkingSet) (*ConsolidateResult, error) {
+	prompt := c.buildPrompt(staging, stats, "", ws)
 	startedAt := time.Now().UTC()
 
 	// Persist the trajectory best-effort; the deferred write observes the
@@ -336,7 +468,7 @@ type trajectoryOutcome struct {
 // the same operations-manifest prompt and different sampling instructions
 // (Q11), backtest every candidate, apply the hard gates, pick the
 // minimum-cost survivor, switch current to it and GC the losers.
-func (c *Consolidator) consolidateTTT(ctx context.Context, current int, staging []stagingSummary, stats graphStats) (*ConsolidateResult, error) {
+func (c *Consolidator) consolidateTTT(ctx context.Context, current int, staging []stagingSummary, stats graphStats, ws *WorkingSet) (*ConsolidateResult, error) {
 	t := c.cfg.TTVTrajectories
 
 	// Step 1: T isolated candidate version copies (Q12).
@@ -356,7 +488,7 @@ func (c *Consolidator) consolidateTTT(ctx context.Context, current int, staging 
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			outcomes[i] = c.runTrajectory(ctx, versions[i], i, t, staging, stats)
+			outcomes[i] = c.runTrajectory(ctx, versions[i], i, t, staging, stats, ws)
 		}(i)
 	}
 	wg.Wait()
@@ -378,6 +510,7 @@ func (c *Consolidator) consolidateTTT(ctx context.Context, current int, staging 
 	btCfg := BacktestConfig{
 		RecallTolerance: c.cfg.RecallTolerance,
 		Embedder:        c.emb,
+		Scope:           c.scope,
 		Runner:          c.runner,
 		// Cold start (spec §7): below the threshold the window baselines are
 		// too thin to trust, so the statistical gates (recall, rounds
@@ -418,6 +551,18 @@ func (c *Consolidator) consolidateTTT(ctx context.Context, current int, staging 
 		cands[i] = stats
 		result.OpsApplied += outcomes[i].applied
 		result.Rejected = append(result.Rejected, outcomes[i].rejected...)
+	}
+
+	// Shadow consolidation reward (spec §14.3, Task 19): every candidate
+	// carries the reward computed from its OWN absolute stats over the
+	// evaluation partition — winner identity contributes nothing, and
+	// SelectWinner's batch-relative cost never leaks into the reward. The
+	// components are recorded for offline calibration; no model update runs
+	// until weights ship under a new policy version (spec §14.4).
+	for i := range cands {
+		cands[i].Reward, cands[i].RewardComponents = ConsolidationReward(
+			ConsolidationRewardInputFromStats(&cands[i]), DefaultConsolidationRewardWeights())
+		cands[i].RewardPolicyVersion = ConsolidationRewardPolicyVersion
 	}
 
 	// Step 5: minimum-cost selection among gate survivors.
@@ -487,6 +632,7 @@ func appendBudgetAudit(stats []QueryBacktestStat, cb candidateBudget, measured, 
 		stats = append(stats, QueryBacktestStat{
 			TraceID:        q.TraceID,
 			Query:          q.Query,
+			Partition:      QueryPartition(q.TraceID),
 			BaselineRounds: baselineRounds(q.BaselineRounds),
 			BaselineFound:  q.BaselineFound,
 			Skipped:        true,
@@ -499,10 +645,10 @@ func appendBudgetAudit(stats []QueryBacktestStat, cb candidateBudget, measured, 
 
 // runTrajectory executes one consolidation trajectory against candidate
 // version v: one backend call, strict-JSON parse, safe apply, persist.
-func (c *Consolidator) runTrajectory(ctx context.Context, v, idx, total int, staging []stagingSummary, stats graphStats) (outcome trajectoryOutcome) {
+func (c *Consolidator) runTrajectory(ctx context.Context, v, idx, total int, staging []stagingSummary, stats graphStats, ws *WorkingSet) (outcome trajectoryOutcome) {
 	actor := fmt.Sprintf("ttt-%d", idx)
 	sampling := fmt.Sprintf("You are consolidation trajectory %d of %d: use temperature seed %d for any sampling decisions.", idx, total, idx)
-	prompt := c.buildPrompt(staging, stats, sampling)
+	prompt := c.buildPrompt(staging, stats, sampling, ws)
 	startedAt := time.Now().UTC()
 
 	// Persist the trajectory best-effort; the deferred write observes the
@@ -606,6 +752,12 @@ func (c *Consolidator) applyOperations(g *Graph, version int, actor string, ops 
 			reject(op, opTarget(op), "op budget exceeded")
 			continue
 		}
+		if c.maintenance {
+			if reason := c.maintenanceOpReject(op); reason != "" {
+				reject(op, opTarget(op), reason)
+				continue
+			}
+		}
 		target, applyErr := c.applyOne(g, version, actor, op)
 		if applyErr != nil {
 			reject(op, target, applyErr.Error())
@@ -689,6 +841,12 @@ func (c *Consolidator) applyOne(g *Graph, version int, actor string, op Consolid
 		if n.TemporalStatus == "" {
 			n.TemporalStatus = existing.TemporalStatus
 		}
+		// Fidelity constraint (spec §4.5): inside a maintenance round the
+		// epistemic state may only migrate along the supersede direction —
+		// settling further is allowed, reviving a settled node is not.
+		if c.maintenance && maintenanceEpistemicRank(n.Epistemic) < maintenanceEpistemicRank(existing.Epistemic) {
+			return id, fmt.Errorf("maintenance_epistemic_regression: %q -> %q moves against the supersede direction", existing.Epistemic, n.Epistemic)
+		}
 		// Scope immutability (spec §5): visibility/channel flips on an
 		// existing node are rejected; promotion creates a separate
 		// project-visible node instead of mutating the source.
@@ -722,6 +880,9 @@ func (c *Consolidator) applyOne(g *Graph, version int, actor string, op Consolid
 		}
 		g.DeleteNode(id)
 		return id, nil
+
+	case OpMergeNode:
+		return c.applyMergeNode(g, version, actor, op)
 
 	case OpAddHierarchyEdge:
 		if op.Edge == nil {
@@ -766,6 +927,129 @@ func (c *Consolidator) applyOne(g *Graph, version int, actor string, op Consolid
 	default:
 		return "", fmt.Errorf("unknown operation %q", op.Op)
 	}
+}
+
+// applyMergeNode folds N input nodes into one result node atomically
+// (unification spec §4.3): the result's provenance is the monotonic union of
+// every input, each superseded input is linked to the result with a
+// merged_from edge (inputs are never deleted — merges stay traceable), and
+// the operation is rejected when any input is missing or the inputs do not
+// share one visibility scope. Deterministic merged_from edge ids plus
+// monotonic unions make a replayed merge a no-op.
+func (c *Consolidator) applyMergeNode(g *Graph, version int, actor string, op ConsolidateOp) (string, error) {
+	if op.Node == nil {
+		return "", fmt.Errorf("merge_node requires a result node")
+	}
+	result := op.Node
+	if err := validateFileID("node_id", result.NodeID); err != nil {
+		return result.NodeID, err
+	}
+	if len(op.InputNodeIDs) == 0 {
+		return result.NodeID, fmt.Errorf("merge_node requires at least one input node id")
+	}
+	inputs := make([]*Node, 0, len(op.InputNodeIDs))
+	seen := map[string]bool{}
+	for _, id := range op.InputNodeIDs {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		in := g.Node(id)
+		if in == nil {
+			return result.NodeID, fmt.Errorf("merge_node: input node %q does not exist", id)
+		}
+		inputs = append(inputs, in)
+	}
+	// Inputs (and a pre-existing result) must share one visibility scope: a
+	// merge must never move a node across scopes (spec §5).
+	scopeOf := func(n *Node) string { return normalizedVisibility(n.Visibility) + "\x00" + n.ChannelID }
+	scope := scopeOf(inputs[0])
+	for _, in := range inputs {
+		if scopeOf(in) != scope {
+			return result.NodeID, fmt.Errorf("scope_mutation: merge inputs must share one scope, %q differs from %q", in.NodeID, inputs[0].NodeID)
+		}
+	}
+	if existing := g.Node(result.NodeID); existing != nil && scopeOf(existing) != scope {
+		return result.NodeID, fmt.Errorf("scope_mutation: merge result %q crosses input scope", result.NodeID)
+	}
+	// Provenance is the monotonic union of all inputs; entries are never removed.
+	merged := *result
+	for _, in := range inputs {
+		merged.SegmentRefs = mergeStringSet(merged.SegmentRefs, in.SegmentRefs)
+		merged.SourceAgentIDs = mergeStringSet(merged.SourceAgentIDs, in.SourceAgentIDs)
+		merged.SourceChannelIDs = mergeStringSet(merged.SourceChannelIDs, in.SourceChannelIDs)
+		merged.SourceTaskIDs = mergeStringSet(merged.SourceTaskIDs, in.SourceTaskIDs)
+	}
+	if survivor := g.Node(result.NodeID); survivor != nil {
+		if merged.CreatedBy == "" {
+			merged.CreatedBy = survivor.CreatedBy
+		}
+		if merged.CreatedVersion == 0 {
+			merged.CreatedVersion = survivor.CreatedVersion
+		}
+		if merged.Epistemic == "" {
+			merged.Epistemic = survivor.Epistemic
+		}
+		if merged.TemporalStatus == "" {
+			merged.TemporalStatus = survivor.TemporalStatus
+		}
+		merged.SegmentRefs = mergeStringSet(survivor.SegmentRefs, merged.SegmentRefs)
+		merged.SourceAgentIDs = mergeStringSet(survivor.SourceAgentIDs, merged.SourceAgentIDs)
+		merged.SourceChannelIDs = mergeStringSet(survivor.SourceChannelIDs, merged.SourceChannelIDs)
+		merged.SourceTaskIDs = mergeStringSet(survivor.SourceTaskIDs, merged.SourceTaskIDs)
+		// Scope immutability mirrors update_node: the survivor keeps its own scope.
+		merged.Visibility = survivor.Visibility
+		merged.ChannelID = survivor.ChannelID
+		merged.UpdatedVersion = version
+		*survivor = merged // in-place replacement keeps incident edges
+		g.rebuild()
+	} else {
+		if merged.Epistemic == "" {
+			merged.Epistemic = StatusProposed
+		}
+		if merged.TemporalStatus == "" {
+			merged.TemporalStatus = TemporalCurrent
+		}
+		if merged.CreatedBy == "" {
+			merged.CreatedBy = actor
+		}
+		if merged.CreatedVersion == 0 {
+			merged.CreatedVersion = version
+		}
+		merged.UpdatedVersion = version
+		// A new result inherits the inputs' shared scope verbatim.
+		merged.Visibility = inputs[0].Visibility
+		merged.ChannelID = inputs[0].ChannelID
+		if err := g.AddNode(&merged); err != nil {
+			return result.NodeID, err
+		}
+	}
+	// Link every superseded input to the result with a deterministic edge
+	// id; the survivor (the result id among the inputs) is skipped so a
+	// node is never superseded by its own merge.
+	supersededAny := false
+	for _, in := range inputs {
+		if in.NodeID == result.NodeID {
+			continue
+		}
+		edgeID := EdgeTypeMergedFrom + ":" + result.NodeID + ":" + in.NodeID
+		if !edgeExists(g, edgeID) {
+			e := &Edge{EdgeID: edgeID, Type: EdgeTypeMergedFrom, From: in.NodeID, To: result.NodeID, Confidence: 1.0}
+			edgeDefaults(e, actor, version)
+			if err := g.AddRelationEdge(e); err != nil {
+				return result.NodeID, err
+			}
+		}
+		if in.Epistemic != StatusSuperseded {
+			in.Epistemic = StatusSuperseded
+			in.UpdatedVersion = version
+			supersededAny = true
+		}
+	}
+	if supersededAny {
+		g.rebuild()
+	}
+	return result.NodeID, nil
 }
 
 // normalizedVisibility reads an empty visibility as "project" (spec §5:
@@ -914,6 +1198,65 @@ func maxLevel(g *Graph) int {
 }
 
 // opTarget returns the audit target id of an operation.
+// maintenanceOpReject enforces the maintenance-round whitelist (spec §4.5):
+// add_node is forbidden (the exporter is the only writer of new research
+// content) and every node an operation touches must be in the round's
+// working set — the agent curates what it was shown, nothing else. Edge
+// deletions are node-free and always allowed.
+func (c *Consolidator) maintenanceOpReject(op ConsolidateOp) string {
+	inWS := func(id string) bool { return c.roundWS[id] }
+	switch op.Op {
+	case OpAddNode:
+		return "maintenance_add_forbidden: the research exporter is the only writer of new content"
+	case OpUpdateNode, OpDeleteNode:
+		id := op.NodeID
+		if id == "" && op.Node != nil {
+			id = op.Node.NodeID
+		}
+		if !inWS(id) {
+			return fmt.Sprintf("maintenance_working_set: node %q is not in this round's working set", id)
+		}
+	case OpMergeNode:
+		for _, id := range op.InputNodeIDs {
+			if !inWS(id) {
+				return fmt.Sprintf("maintenance_working_set: merge input %q is not in this round's working set", id)
+			}
+		}
+	case OpAddHierarchyEdge, OpAddRelationEdge:
+		if op.Edge == nil {
+			return ""
+		}
+		if !inWS(op.Edge.From) {
+			return fmt.Sprintf("maintenance_working_set: edge endpoint %q is not in this round's working set", op.Edge.From)
+		}
+		// Relation edges may target another edge ("edge:<id>"), which has no
+		// working-set membership of its own.
+		if !strings.HasPrefix(op.Edge.To, "edge:") && !inWS(op.Edge.To) {
+			return fmt.Sprintf("maintenance_working_set: edge endpoint %q is not in this round's working set", op.Edge.To)
+		}
+	}
+	return ""
+}
+
+// maintenanceEpistemicRank orders the epistemic states along the supersede
+// direction (spec §4.5): a maintenance round may only move a node to an
+// equal or higher rank. Unknown states rank highest so they cannot be
+// "corrected" down either.
+func maintenanceEpistemicRank(s string) int {
+	switch s {
+	case StatusProposed:
+		return 0
+	case StatusSupported, StatusContested:
+		return 1
+	case StatusAccepted, StatusRejected:
+		return 2
+	case StatusSuperseded:
+		return 3
+	default:
+		return 4
+	}
+}
+
 func opTarget(op ConsolidateOp) string {
 	switch {
 	case op.NodeID != "":
@@ -939,6 +1282,11 @@ func opLogDetail(op ConsolidateOp) map[string]any {
 		detail["edge_type"] = op.Edge.Type
 		detail["from"] = op.Edge.From
 		detail["to"] = op.Edge.To
+	}
+	if op.Op == OpMergeNode {
+		// Merges are only traceable through their input list: record it
+		// alongside the merged_from edges left in the graph.
+		detail["inputs"] = op.InputNodeIDs
 	}
 	if len(detail) == 0 {
 		return nil
@@ -1042,23 +1390,42 @@ const consolidatorSystemPrompt = `You are the memory-graph consolidation agent. 
 // buildPrompt assembles the operations-manifest prompt: the fixed enumerated
 // list of allowed operations, the budgets, the pending staging segment
 // summaries, the current graph stats, the optional per-trajectory sampling
-// instruction, and the strict-JSON final-response contract.
-func (c *Consolidator) buildPrompt(staging []stagingSummary, stats graphStats, samplingInstruction string) string {
+// instruction, the optional hot-region working set (unification spec §4.3),
+// and the strict-JSON final-response contract.
+func (c *Consolidator) buildPrompt(staging []stagingSummary, stats graphStats, samplingInstruction string, ws *WorkingSet) string {
 	var b strings.Builder
-	b.WriteString("Consolidate the pending staging segment summaries into the memory graph.\n\n")
+	if c.maintenance {
+		b.WriteString("Maintain the research memory graph: curate the working-set nodes below. No staging segments exist for this graph — the research exporter has already imported every node.\n\n")
+	} else {
+		b.WriteString("Consolidate the pending staging segment summaries into the memory graph.\n\n")
+	}
 	if samplingInstruction != "" {
 		b.WriteString(samplingInstruction + "\n\n")
 	}
 
 	b.WriteString("Allowed operations (emit them as a JSON array under \"operations\"):\n")
-	b.WriteString("- {\"op\":\"add_node\",\"node\":{\"node_id\",\"body\",\"segment_refs\":[...],\"tags\":[...],\"entity_refs\":[...]}} — create a node referencing one or more staging segment ids.\n")
-	b.WriteString("- {\"op\":\"update_node\",\"node_id\":\"<id>\",\"node\":{\"node_id\":\"<id>\",\"body\":...}} — replace an existing node's content.\n")
-	b.WriteString("- {\"op\":\"delete_node\",\"node_id\":\"<id>\"} — remove a node and its incident edges.\n")
-	b.WriteString("- {\"op\":\"add_hierarchy_edge\",\"edge\":{\"edge_id\",\"from\":\"<parent>\",\"to\":\"<child>\"}} — summarizes edge; must keep the hierarchy a DAG.\n")
-	b.WriteString("- {\"op\":\"add_relation_edge\",\"edge\":{\"edge_id\",\"type\":\"causes|supports|contradicts|supersedes|evidence_for|derived_from|...\",\"from\",\"to\",\"confidence\":0.0}} — typed relation edge (may form cycles, may target \"edge:<edge_id>\").\n")
-	b.WriteString("- {\"op\":\"delete_edge\",\"edge_id\":\"<id>\"} — remove an edge.\n")
-	b.WriteString("- {\"op\":\"prune_edge\",\"edge_id\":\"<id>\"} — remove an edge as deliberate sparsification.\n")
-	b.WriteString("- {\"op\":\"submit\"} — finish within budget.\n\n")
+	if c.maintenance {
+		// Maintenance whitelist (spec §4.5): no add_node — the exporter is
+		// the only writer of new research content.
+		b.WriteString("- {\"op\":\"update_node\",\"node_id\":\"<id>\",\"node\":{\"node_id\":\"<id>\",\"body\":...,\"epistemic\":...}} — replace a working-set node's content; epistemic may only migrate along the supersede direction (proposed → supported/contested → accepted/rejected → superseded).\n")
+		b.WriteString("- {\"op\":\"merge_node\",\"input_node_ids\":[\"<id>\",...],\"node\":{\"node_id\":\"<result>\",\"body\":...}} — fold duplicate research nodes into one result node (inputs become superseded, linked by merged_from edges; inputs must share one scope).\n")
+		b.WriteString("- {\"op\":\"delete_node\",\"node_id\":\"<id>\"} — remove a working-set node and its incident edges.\n")
+		b.WriteString("- {\"op\":\"add_hierarchy_edge\",\"edge\":{\"edge_id\",\"from\":\"<parent>\",\"to\":\"<child>\"}} — summarizes edge; must keep the hierarchy a DAG.\n")
+		b.WriteString("- {\"op\":\"add_relation_edge\",\"edge\":{\"edge_id\",\"type\":\"causes|supports|contradicts|supersedes|evidence_for|derived_from|...\",\"from\",\"to\",\"confidence\":0.0}} — typed relation edge (may form cycles, may target \"edge:<edge_id>\").\n")
+		b.WriteString("- {\"op\":\"delete_edge\",\"edge_id\":\"<id>\"} — remove an edge.\n")
+		b.WriteString("- {\"op\":\"prune_edge\",\"edge_id\":\"<id>\"} — remove an edge as deliberate sparsification.\n")
+		b.WriteString("- {\"op\":\"submit\"} — finish within budget.\n\n")
+	} else {
+		b.WriteString("- {\"op\":\"add_node\",\"node\":{\"node_id\",\"body\",\"segment_refs\":[...],\"tags\":[...],\"entity_refs\":[...]}} — create a node referencing one or more staging segment ids.\n")
+		b.WriteString("- {\"op\":\"update_node\",\"node_id\":\"<id>\",\"node\":{\"node_id\":\"<id>\",\"body\":...}} — replace an existing node's content.\n")
+		b.WriteString("- {\"op\":\"merge_node\",\"input_node_ids\":[\"<id>\",...],\"node\":{\"node_id\":\"<result>\",\"body\":...}} — fold duplicate nodes into one result node (inputs become superseded, linked by merged_from edges; inputs must share one scope).\n")
+		b.WriteString("- {\"op\":\"delete_node\",\"node_id\":\"<id>\"} — remove a node and its incident edges.\n")
+		b.WriteString("- {\"op\":\"add_hierarchy_edge\",\"edge\":{\"edge_id\",\"from\":\"<parent>\",\"to\":\"<child>\"}} — summarizes edge; must keep the hierarchy a DAG.\n")
+		b.WriteString("- {\"op\":\"add_relation_edge\",\"edge\":{\"edge_id\",\"type\":\"causes|supports|contradicts|supersedes|evidence_for|derived_from|...\",\"from\",\"to\",\"confidence\":0.0}} — typed relation edge (may form cycles, may target \"edge:<edge_id>\").\n")
+		b.WriteString("- {\"op\":\"delete_edge\",\"edge_id\":\"<id>\"} — remove an edge.\n")
+		b.WriteString("- {\"op\":\"prune_edge\",\"edge_id\":\"<id>\"} — remove an edge as deliberate sparsification.\n")
+		b.WriteString("- {\"op\":\"submit\"} — finish within budget.\n\n")
+	}
 
 	fmt.Fprintf(&b, "Budgets (hard limits): at most %d operations and %d working rounds; submit when done.\n", c.cfg.OpBudget, c.cfg.RoundBudget)
 	fmt.Fprintf(&b, "Graph limits: at most %d hierarchy levels, %d children per node, and %d relation edges per node.\n\n", c.cfg.MaxLevels, c.cfg.MaxFanout, c.cfg.MaxRelationEdges)
@@ -1072,6 +1439,23 @@ func (c *Consolidator) buildPrompt(staging []stagingSummary, stats graphStats, s
 	}
 	for _, s := range staging {
 		fmt.Fprintf(&b, "- segment %s:\n%s\n", s.id, s.body)
+	}
+
+	if ws != nil && len(ws.Nodes) > 0 {
+		if c.maintenance {
+			b.WriteString("\nWorking set (hot-region nodes: retrieval-signal nodes, their neighborhood, recently imported research nodes and their similar older nodes; update_node, merge_node, delete_node and any new edge touching an existing node may ONLY reference these node ids):\n")
+		} else {
+			b.WriteString("\nWorking set (hot-region nodes from recent retrieval activity; update_node, merge_node, delete_node and any new edge touching an existing node may ONLY reference these node ids):\n")
+		}
+		for _, n := range ws.Nodes {
+			fmt.Fprintf(&b, "- node %s [level=%d epistemic=%s] signals: %s\n  %s\n",
+				n.NodeID, n.Level, n.Epistemic, strings.Join(n.Signals, ", "), n.Summary)
+		}
+		if c.maintenance {
+			b.WriteString("\nGuidance: research-import nodes are freshly exported evidence — compare them against their similar older nodes and fold cross-session duplicates with merge_node; supersede outdated conclusions with update_node plus a supersedes relation edge; never add new content and never relax an epistemic state.\n")
+		} else {
+			b.WriteString("\nGuidance: new knowledge defaults to add_node; when a working-set node or staging segment duplicates another, fold them with merge_node; supersede outdated nodes with update_node plus a supersedes relation edge.\n")
+		}
 	}
 
 	b.WriteString("\nYour FINAL response must be exactly one JSON object and nothing else (no prose, no markdown fences):\n")
@@ -1097,6 +1481,12 @@ func candidateAuditDetails(cands []CandidateStats) []map[string]any {
 			"embed_bytes":   cs.EmbedBytes,
 			"edge_churn":    cs.EdgeChurn,
 			"cost":          cs.Cost,
+			// Spec §14.3/§14.4 (Task 19): the shadow reward and its raw
+			// components ride the audit entry for offline calibration;
+			// weights only change under a new reward policy version.
+			"reward":                cs.Reward,
+			"reward_components":     cs.RewardComponents,
+			"reward_policy_version": cs.RewardPolicyVersion,
 		}
 		if cs.Error != "" {
 			out[i]["error"] = cs.Error
@@ -1115,4 +1505,141 @@ func extractJSONObject(output string, dst any) bool {
 		return false
 	}
 	return json.Unmarshal([]byte(output[start:end+1]), dst) == nil
+}
+
+// ============ Task 14: atom-manifest consolidation ============
+
+// AtomManifestEntry is one active atom of the DB-authoritative manifest:
+// the Task 14 consolidator input. Staging files are no longer the source of
+// truth — the caller loads the active, unfenced atom ledger at the current
+// publish watermark and hands it in explicitly.
+type AtomManifestEntry struct {
+	AtomID    string
+	SegmentID string
+	Body      string
+}
+
+// AtomConsolidateResult reports one immutable candidate built from the atom
+// manifest. The caller (the publication coordinator service) decides
+// whether to publish; nothing here flips the current pointer.
+type AtomConsolidateResult struct {
+	CandidateVersion int
+	OpsApplied       int
+	Rejected         []RejectReason
+	// UncitedAtomIDs are manifest atoms no applied operation cited. They are
+	// NOT consumed: the next cycle still sees them.
+	UncitedAtomIDs []string
+	// NodeAtoms maps each node to the manifest atoms its operations cited,
+	// ready to become the publication reverse provenance.
+	NodeAtoms map[string][]string
+}
+
+// buildAtomsPrompt renders the atom-manifest prompt. Coverage is explicit:
+// every add/update must cite the atom ids it folds, and every manifest atom
+// must end up cited by at least one node.
+func (c *Consolidator) buildAtomsPrompt(atoms []AtomManifestEntry, stats graphStats) string {
+	var b strings.Builder
+	b.WriteString("Consolidate the active memory atoms into the memory graph. This is protocol generation 2: the input is the atom ledger, not staging segments.\n\n")
+
+	b.WriteString("Allowed operations (emit them as a JSON array under \"operations\"):\n")
+	b.WriteString("- {\"op\":\"add_node\",\"node\":{\"node_id\",\"body\",\"atom_refs\":[...],\"tags\":[...],\"entity_refs\":[...]}} — create a node citing the atom ids it folds; atom_refs is REQUIRED on every add_node.\n")
+	b.WriteString("- {\"op\":\"update_node\",\"node_id\":\"<id>\",\"node\":{\"node_id\":\"<id>\",\"body\":...,\"atom_refs\":[...]}} — replace an existing node's content; cited atoms merge into its provenance.\n")
+	b.WriteString("- {\"op\":\"delete_node\",\"node_id\":\"<id>\"} — remove a node and its incident edges.\n")
+	b.WriteString("- {\"op\":\"add_hierarchy_edge\",\"edge\":{\"edge_id\",\"from\":\"<parent>\",\"to\":\"<child>\"}} — summarizes edge; must keep the hierarchy a DAG.\n")
+	b.WriteString("- {\"op\":\"add_relation_edge\",\"edge\":{\"edge_id\",\"type\":\"causes|supports|contradicts|supersedes|evidence_for|derived_from|...\",\"from\",\"to\",\"confidence\":0.0}} — typed relation edge (may form cycles, may target \"edge:<edge_id>\").\n")
+	b.WriteString("- {\"op\":\"delete_edge\",\"edge_id\":\"<id>\"} — remove an edge.\n")
+	b.WriteString("- {\"op\":\"prune_edge\",\"edge_id\":\"<id>\"} — remove an edge as deliberate sparsification.\n")
+	b.WriteString("- {\"op\":\"submit\"} — finish within budget.\n\n")
+
+	fmt.Fprintf(&b, "Budgets (hard limits): at most %d operations and %d working rounds; submit when done.\n", c.cfg.OpBudget, c.cfg.RoundBudget)
+	fmt.Fprintf(&b, "Graph limits: at most %d hierarchy levels, %d children per node, and %d relation edges per node.\n\n", c.cfg.MaxLevels, c.cfg.MaxFanout, c.cfg.MaxRelationEdges)
+
+	fmt.Fprintf(&b, "Current graph stats: %d nodes, %d hierarchy edges, %d relation edges, max level %d.\n\n",
+		stats.NodeCount, stats.HierEdgeCount, stats.RelEdgeCount, stats.MaxLevel)
+
+	b.WriteString("Active atoms (every atom id must end up cited by at least one node's atom_refs):\n")
+	if len(atoms) == 0 {
+		b.WriteString("- (none)\n")
+	}
+	for _, a := range atoms {
+		body := a.Body
+		if len(body) > maxStagingPromptChars {
+			body = body[:maxStagingPromptChars]
+		}
+		fmt.Fprintf(&b, "- atom %s (segment %s):\n%s\n", a.AtomID, a.SegmentID, body)
+	}
+
+	b.WriteString("\nYour FINAL response must be exactly one JSON object and nothing else (no prose, no markdown fences):\n")
+	b.WriteString("{\"operations\":[...]}\n")
+	return b.String()
+}
+
+// ConsolidateAtoms folds the active atom manifest into a NEW immutable
+// candidate version (Task 14 Step 3): even the single-trajectory flow never
+// mutates the current version directory in place, and the candidate is only
+// a candidate until the DB-authoritative publication coordinator commits
+// it. Uncited atoms are reported, not consumed.
+func (c *Consolidator) ConsolidateAtoms(ctx context.Context, baseVersion int, atoms []AtomManifestEntry) (*AtomConsolidateResult, error) {
+	if err := validateProviderScope(c.scope, ProviderPurposeConsolidate); err != nil {
+		return nil, fmt.Errorf("consolidate atoms: %w", err)
+	}
+	if c.runnerBindingErr != nil {
+		return nil, c.runnerBindingErr
+	}
+	if c.embedderBindingErr != nil {
+		return nil, c.embedderBindingErr
+	}
+	if c.backend == nil {
+		return nil, fmt.Errorf("consolidate atoms: agent backend not configured")
+	}
+	if baseVersion <= 0 {
+		return nil, fmt.Errorf("consolidate atoms: base version required")
+	}
+
+	candidate, err := c.store.CreateVersionFrom(baseVersion, "atom_candidate")
+	if err != nil {
+		return nil, fmt.Errorf("consolidate atoms: create candidate: %w", err)
+	}
+	g, err := LoadGraph(c.store, candidate)
+	if err != nil {
+		return nil, fmt.Errorf("consolidate atoms: load graph v%d: %w", candidate, err)
+	}
+	stats := computeGraphStats(g)
+	prompt := c.buildAtomsPrompt(atoms, stats)
+
+	parsed, _, err := c.runAgent(ctx, prompt)
+	if err != nil {
+		return nil, fmt.Errorf("consolidate atoms: agent: %w", err)
+	}
+	applied, rejected, err := c.applyOperations(g, candidate, CreatorConsolidator, parsed.Operations)
+	if err != nil {
+		return nil, fmt.Errorf("consolidate atoms: apply: %w", err)
+	}
+
+	cited := map[string]bool{}
+	nodeAtoms := map[string][]string{}
+	for _, node := range g.Nodes() {
+		if len(node.AtomRefs) == 0 {
+			continue
+		}
+		nodeAtoms[node.NodeID] = append(nodeAtoms[node.NodeID], node.AtomRefs...)
+		for _, atomID := range node.AtomRefs {
+			cited[atomID] = true
+		}
+	}
+	var uncited []string
+	for _, atom := range atoms {
+		if !cited[atom.AtomID] {
+			uncited = append(uncited, atom.AtomID)
+		}
+	}
+	sort.Strings(uncited)
+
+	if err := persistGraph(c.store, candidate, g); err != nil {
+		return nil, fmt.Errorf("consolidate atoms: persist candidate: %w", err)
+	}
+	return &AtomConsolidateResult{
+		CandidateVersion: candidate, OpsApplied: applied, Rejected: rejected,
+		UncitedAtomIDs: uncited, NodeAtoms: nodeAtoms,
+	}, nil
 }

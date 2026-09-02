@@ -5,6 +5,8 @@ package service
 import (
 	"strings"
 	"testing"
+
+	"github.com/multica-ai/multica/server/internal/memorygraph"
 )
 
 // Spec §2 / brief D22: server environment provides defaults and hard safety
@@ -120,5 +122,68 @@ func TestGraphMemoryLimitsDiveOverridePolicy(t *testing.T) {
 	}
 	if err := open.ValidateDiveOverride("openai", "glm-5.3"); err == nil {
 		t.Fatal("provider outside allow-list must be rejected")
+	}
+}
+
+// Unification spec §4.3 parameter table (decision 14): consolidation
+// working-set budgets default to 64 nodes / 400 runes / top-K 3 / 256-entry
+// fallback, and research knobs to a 0.95 conservative dedup threshold.
+func TestLoadGraphMemoryUnificationDefaults(t *testing.T) {
+	limits := LoadGraphMemoryLimits(func(string) string { return "" })
+	ws := limits.ConsolidationWorkingSet
+	if ws.MaxNodes != 64 || ws.NodeBodyRunes != 400 || ws.StagingTopK != 3 || ws.MaxWindowEntries != 256 {
+		t.Fatalf("working-set defaults = %+v, want 64/400/3/256", ws)
+	}
+	rg := limits.Research
+	if rg.DedupThreshold != 0.95 || rg.ExportBatch != 100 {
+		t.Fatalf("research defaults = %+v, want 0.95/100", rg)
+	}
+	// The working-set group converts to the memorygraph builder config.
+	if got := ws.WorkingSetConfig(); got != (memorygraph.WorkingSetConfig{
+		MaxNodes: 64, NodeBodyRunes: 400, StagingTopK: 3, MaxWindowEntries: 256,
+	}) {
+		t.Fatalf("WorkingSetConfig() = %+v", got)
+	}
+}
+
+// Env overrides retune the unification groups (spec §4.3: every value is
+// GraphMemoryLimits-style configurable).
+func TestLoadGraphMemoryUnificationEnvOverrides(t *testing.T) {
+	env := map[string]string{
+		"MULTICA_GRAPH_MEMORY_DEFAULT_WORKING_SET_MAX_NODES":          "32",
+		"MULTICA_GRAPH_MEMORY_DEFAULT_WORKING_SET_NODE_BODY_RUNES":    "200",
+		"MULTICA_GRAPH_MEMORY_DEFAULT_WORKING_SET_STAGING_TOP_K":      "5",
+		"MULTICA_GRAPH_MEMORY_DEFAULT_WORKING_SET_MAX_WINDOW_ENTRIES": "128",
+		"MULTICA_GRAPH_MEMORY_RESEARCH_DEDUP_THRESHOLD":               "0.98",
+		"MULTICA_GRAPH_MEMORY_RESEARCH_EXPORT_BATCH":                  "50",
+	}
+	limits := LoadGraphMemoryLimits(func(k string) string { return env[k] })
+	if ws := limits.ConsolidationWorkingSet; ws.MaxNodes != 32 || ws.NodeBodyRunes != 200 ||
+		ws.StagingTopK != 5 || ws.MaxWindowEntries != 128 {
+		t.Fatalf("working-set env override = %+v", ws)
+	}
+	if rg := limits.Research; rg.DedupThreshold != 0.98 || rg.ExportBatch != 50 {
+		t.Fatalf("research env override = %+v", rg)
+	}
+}
+
+// Out-of-range or unparseable unification env fails closed to the defaults —
+// a bad knob can never enlarge prompt budgets past the sanity bounds.
+func TestLoadGraphMemoryUnificationClamps(t *testing.T) {
+	env := map[string]string{
+		"MULTICA_GRAPH_MEMORY_DEFAULT_WORKING_SET_MAX_NODES":          "999999", // > 512 bound
+		"MULTICA_GRAPH_MEMORY_DEFAULT_WORKING_SET_NODE_BODY_RUNES":    "not-a-number",
+		"MULTICA_GRAPH_MEMORY_DEFAULT_WORKING_SET_STAGING_TOP_K":      "-3",
+		"MULTICA_GRAPH_MEMORY_DEFAULT_WORKING_SET_MAX_WINDOW_ENTRIES": "1.5", // non-integer
+		"MULTICA_GRAPH_MEMORY_RESEARCH_DEDUP_THRESHOLD":               "1.5", // > 1.0
+		"MULTICA_GRAPH_MEMORY_RESEARCH_EXPORT_BATCH":                  "0",   // < 1
+	}
+	limits := LoadGraphMemoryLimits(func(k string) string { return env[k] })
+	if ws := limits.ConsolidationWorkingSet; ws.MaxNodes != 64 || ws.NodeBodyRunes != 400 ||
+		ws.StagingTopK != 3 || ws.MaxWindowEntries != 256 {
+		t.Fatalf("working-set clamp = %+v, want built-ins", ws)
+	}
+	if rg := limits.Research; rg.DedupThreshold != 0.95 || rg.ExportBatch != 100 {
+		t.Fatalf("research clamp = %+v, want built-ins", rg)
 	}
 }

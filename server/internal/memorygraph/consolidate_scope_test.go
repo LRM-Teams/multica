@@ -31,7 +31,7 @@ func TestConsolidationRejectsVisibilityMutation(t *testing.T) {
 	if err := store.SaveNode(v, src); err != nil {
 		t.Fatal(err)
 	}
-	c := NewConsolidator(store, nil, DefaultConsolidateConfig(), "pi", NewOpLogger(store), NewTraceRecorder(store.Root))
+	c := NewConsolidator(store, nil, DefaultConsolidateConfig(), testConsolidateScope(), NewOpLogger(store), NewTraceRecorder(store.Root))
 	g, err := LoadGraph(store, v)
 	if err != nil {
 		t.Fatal(err)
@@ -67,7 +67,7 @@ func TestConsolidationStampsNewNodeScopeFromSegments(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	c := NewConsolidator(store, nil, DefaultConsolidateConfig(), "pi", NewOpLogger(store), NewTraceRecorder(store.Root))
+	c := NewConsolidator(store, nil, DefaultConsolidateConfig(), testConsolidateScope(), NewOpLogger(store), NewTraceRecorder(store.Root))
 	g, err := LoadGraph(store, v)
 	if err != nil {
 		t.Fatal(err)
@@ -127,7 +127,7 @@ func TestConsolidationUpdatePreservesScopeAndMergesProvenance(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	c := NewConsolidator(store, nil, DefaultConsolidateConfig(), "pi", NewOpLogger(store), NewTraceRecorder(store.Root))
+	c := NewConsolidator(store, nil, DefaultConsolidateConfig(), testConsolidateScope(), NewOpLogger(store), NewTraceRecorder(store.Root))
 	g, err := LoadGraph(store, v)
 	if err != nil {
 		t.Fatal(err)

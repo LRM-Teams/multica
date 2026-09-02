@@ -66,6 +66,13 @@ func (s *MixedRLFreezeService) Freeze(ctx context.Context, runID pgtype.UUID, ti
 		SnapshotID: "sha256:pending", SnapshotHash: "sha256:pending", RunID: runID, RunStatus: status,
 		SchemaVersion: "1", NormalizationVersion: "1", CanonicalManifest: []byte(`{"calls":[],"associations":[],"terminals":[]}`),
 		Build: func(ctx context.Context, qtx *db.Queries, frozen FrozenSnapshotInput) (FrozenSnapshotInput, error) {
+			// The canonical projection runs first: its gates refuse any
+			// pending, conflicted, or owned-less expected capture before any
+			// count, hash, or snapshot identity exists.
+			projected, err := NewUniversalDAGFrozenProjector().ProjectRunSnapshot(ctx, qtx, run.WorkspaceID, runID)
+			if err != nil {
+				return frozen, err
+			}
 			agents, err := qtx.ListMixedRLRunAgents(ctx, runID)
 			if err != nil {
 				return frozen, err
@@ -84,12 +91,10 @@ func (s *MixedRLFreezeService) Freeze(ctx context.Context, runID pgtype.UUID, ti
 					owned[association.ProviderCallID] = true
 				}
 			}
-			terminalIDs := make([]string, 0, len(agents))
 			nextOrdinal, err := qtx.CountMixedRLSegments(ctx, runID)
 			if err != nil {
 				return frozen, err
 			}
-			qledger := &ProviderCallLedger{queries: qtx}
 			for _, agent := range agents {
 				unassigned := make([]db.PiProviderCall, 0)
 				for _, call := range calls {
@@ -100,19 +105,35 @@ func (s *MixedRLFreezeService) Freeze(ctx context.Context, runID pgtype.UUID, ti
 				if len(unassigned) == 0 {
 					continue
 				}
-				nextOrdinal++
-				terminalID := "terminal:" + agent.RunAgentID.String()
-				if _, err := qledger.InsertSegment(ctx, SegmentInput{SegmentID: terminalID, RunID: runID, RunAgentID: agent.RunAgentID, Kind: "terminal", SegmentOrdinal: nextOrdinal, ProvisionalAt: time.Now().UTC()}); err != nil {
-					return frozen, err
-				}
-				for _, call := range unassigned {
-					if err := qledger.AssociateProviderCall(ctx, SegmentCallAssociationInput{SegmentID: terminalID, ProviderCallID: call.CallID, CallOrdinal: call.CallOrdinal, AssociationKind: "owned"}); err != nil {
+				// Calls without an owned association land on their run
+				// agent's terminal segment: the canonical terminal close when
+				// one exists, otherwise the derived freeze bucket.
+				terminalID, ok := projected.TerminalByRunAgent[agent.RunAgentID]
+				if !ok {
+					nextOrdinal++
+					terminalID = "terminal:" + agent.RunAgentID.String()
+					if _, err := qtx.InsertMixedRLRunSegment(ctx, db.InsertMixedRLRunSegmentParams{
+						SegmentID: terminalID, RunID: runID, RunAgentID: agent.RunAgentID,
+						Kind: "terminal", SegmentOrdinal: nextOrdinal, ProvisionalAt: timestamptz(time.Now().UTC()),
+					}); err != nil {
 						return frozen, err
 					}
+					projected.TerminalByRunAgent[agent.RunAgentID] = terminalID
 				}
-				terminalIDs = append(terminalIDs, terminalID)
+				for _, call := range unassigned {
+					affected, err := qtx.AssociateMixedRLProviderCallIdempotent(ctx, db.AssociateMixedRLProviderCallIdempotentParams{
+						SegmentID: terminalID, ProviderCallID: call.CallID,
+						CallOrdinal: call.CallOrdinal, AssociationKind: "owned",
+					})
+					if err != nil {
+						return frozen, err
+					}
+					if affected != 1 {
+						return frozen, fmt.Errorf("terminal ownership for call %q drifted on segment %s", call.CallID, terminalID)
+					}
+				}
 			}
-			if err := finalizeMixedRLCausalEdges(ctx, qtx, qledger, runID); err != nil {
+			if err := finalizeMixedRLCausalEdges(ctx, qtx, runID, projected); err != nil {
 				return frozen, err
 			}
 			allCalls, err := qtx.ListMixedRLProviderCallsCanonical(ctx, runID)
@@ -208,7 +229,7 @@ func (s *MixedRLFreezeService) ReapMixedRLQuiescence(ctx context.Context, now ti
 //     recorded provider events produces a different manifest hash. The hash is
 //     a tamper-evidence seal for one frozen snapshot, not a reproducible-build
 //     digest across re-runs.
-func canonicalMixedRLManifest(calls []db.PiProviderCall, segments []db.InteractionDagRunSegment, associations []db.InteractionDagSegmentProviderCall, edges []db.InteractionDagCausalEdge, auditEvents []db.EnvDispatchRunAuditEvent) ([]byte, string, error) {
+func canonicalMixedRLManifest(calls []db.PiProviderCall, segments []db.ListMixedRLRunSegmentsCanonicalRow, associations []db.InteractionDagSegmentProviderCall, edges []db.ListMixedRLCausalEdgesCanonicalRow, auditEvents []db.EnvDispatchRunAuditEvent) ([]byte, string, error) {
 	callIDs := make([]string, 0, len(calls))
 	for _, call := range calls {
 		callIDs = append(callIDs, call.CallID)

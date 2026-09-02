@@ -323,7 +323,7 @@ func acceptMixedRLTrustedCapture(
 	require.NoError(t, err)
 }
 
-func listMixedRLProvisionalGraph(t *testing.T, h mixedRLRepositoryHarness, runID pgtype.UUID) ([]db.InteractionDagRunSegment, []db.InteractionDagSegmentProviderCall) {
+func listMixedRLProvisionalGraph(t *testing.T, h mixedRLRepositoryHarness, runID pgtype.UUID) ([]db.ListMixedRLRunSegmentsCanonicalRow, []db.InteractionDagSegmentProviderCall) {
 	t.Helper()
 	segments, err := h.runs.queries.ListMixedRLRunSegmentsCanonical(h.ctx, runID)
 	require.NoError(t, err)

@@ -52,6 +52,13 @@ type BusinessMetrics struct {
 	graphMemoryVersionSwitch  prometheus.Counter
 	graphMemoryBacktestBypass prometheus.Gauge
 
+	// Shadow gate rollout (Task 21): canary results, gate phases and audited
+	// transitions carry closed-set labels only — never memory content,
+	// workspace ids, or free-form error text (AC51 observability).
+	shadowGateCanary      *prometheus.GaugeVec
+	shadowGatePhase       *prometheus.GaugeVec
+	shadowGateTransitions *prometheus.CounterVec
+
 	activeMu    sync.Mutex
 	activeTasks map[string]activeTaskLabels
 
@@ -241,6 +248,24 @@ func NewBusinessMetrics() *BusinessMetrics {
 			Name:      "backtest_bypass_ratio",
 			Help:      "Fraction of backtested queries accepted on graph distance alone (no full explore run) in the last consolidation.",
 		}),
+		shadowGateCanary: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: "multica",
+			Subsystem: "shadow_gate",
+			Name:      "canary_ok",
+			Help:      "Latest shadow-rollout canary verdict by closed-set canary name (1 = green, 0 = failed).",
+		}, metricLabels("multica_shadow_gate_canary_ok")),
+		shadowGatePhase: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: "multica",
+			Subsystem: "shadow_gate",
+			Name:      "phase",
+			Help:      "Shadow gate phase ordinal by scope and gate (0 = disabled, 1 = shadow, 2 = enabled).",
+		}, metricLabels("multica_shadow_gate_phase")),
+		shadowGateTransitions: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "multica",
+			Subsystem: "shadow_gate",
+			Name:      "transitions_total",
+			Help:      "Total audited shadow gate phase transitions by gate, phases and trigger.",
+		}, metricLabels("multica_shadow_gate_transitions_total")),
 		activeTasks: map[string]activeTaskLabels{},
 		events:      newBusinessEventMetrics(),
 	}
@@ -257,6 +282,19 @@ func NewBusinessMetrics() *BusinessMetrics {
 	for _, result := range []string{"ok", "fallback", "error"} {
 		m.graphMemoryIngest.WithLabelValues(result).Add(0)
 	}
+	// Prewarm the shadow-gate canary vec so the family is visible before the
+	// first sweep, including the collapsed "other" bucket for unknown names.
+	for _, canary := range []string{
+		"sequence_gap", "outbox_loss", "cross_channel_leak", "sanitizer_fail_open",
+		"retraction_visibility", "cost_latency_budget", "other",
+	} {
+		m.shadowGateCanary.WithLabelValues(canary).Add(0)
+	}
+	// One representative transition/phase series each, so the families are
+	// registry-visible before the first audited move (the full cross product
+	// is intentionally not prewarmed).
+	m.shadowGateTransitions.WithLabelValues("atoms", "disabled", "shadow", "manual").Add(0)
+	m.shadowGatePhase.WithLabelValues("workspace", "atoms").Set(0)
 	return m
 }
 
@@ -291,6 +329,9 @@ func (m *BusinessMetrics) Collectors() []prometheus.Collector {
 		m.graphMemoryIngest,
 		m.graphMemoryVersionSwitch,
 		m.graphMemoryBacktestBypass,
+		m.shadowGateCanary,
+		m.shadowGatePhase,
+		m.shadowGateTransitions,
 	}, m.events.collectors()...)
 }
 
@@ -536,6 +577,53 @@ func (m *BusinessMetrics) RecordGraphBacktestBypass(ratio float64) {
 		return
 	}
 	m.graphMemoryBacktestBypass.Set(ratio)
+}
+
+// RecordShadowGateCanary records the latest verdict of one named canary
+// (Task 21, AC51): 1 = green, 0 = failed. Canary names collapse onto the
+// closed six-name set; no memory content is carried.
+func (m *BusinessMetrics) RecordShadowGateCanary(canary string, ok bool) {
+	if m == nil {
+		return
+	}
+	value := 0.0
+	if ok {
+		value = 1
+	}
+	m.shadowGateCanary.WithLabelValues(NormalizeShadowCanary(canary)).Set(value)
+}
+
+// SetShadowGatePhase records a gate's phase as its ladder ordinal
+// (0 = disabled, 1 = shadow, 2 = enabled) by closed-set scope and gate name.
+// The gauge is process-aggregate across workspaces by design: the per-
+// workspace authority is the audited gate registry, not the metric.
+func (m *BusinessMetrics) SetShadowGatePhase(scope, gate, phase string) {
+	if m == nil {
+		return
+	}
+	ordinal := 0.0
+	switch NormalizeShadowPhase(phase) {
+	case "shadow":
+		ordinal = 1
+	case "enabled":
+		ordinal = 2
+	}
+	scope = NormalizeShadowGateScope(scope)
+	m.shadowGatePhase.WithLabelValues(scope, NormalizeShadowGate(gate)).Set(ordinal)
+}
+
+// RecordShadowGateTransition counts one audited gate phase transition
+// (manual promotion, canary auto-shutdown, or synchronous failure demotion).
+func (m *BusinessMetrics) RecordShadowGateTransition(gate, fromPhase, toPhase, trigger string) {
+	if m == nil {
+		return
+	}
+	m.shadowGateTransitions.WithLabelValues(
+		NormalizeShadowGate(gate),
+		NormalizeShadowPhase(fromPhase),
+		NormalizeShadowPhase(toPhase),
+		NormalizeShadowGateTrigger(trigger),
+	).Inc()
 }
 
 func (m *BusinessMetrics) markTaskInProgress(taskID, source, runtimeMode string) {

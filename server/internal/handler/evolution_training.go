@@ -11,6 +11,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+
+	"github.com/multica-ai/multica/server/internal/service"
 )
 
 const (
@@ -307,6 +309,19 @@ func (h *Handler) UpdateEvolutionModelRuntimeConfig(w http.ResponseWriter, r *ht
 		writeError(w, http.StatusBadRequest, "rollout_percent must be within [0,100]")
 		return
 	}
+	// Task 18 (spec 14.1): enabling a student model (shadow/canary) is model
+	// consumption — before reward calibration flips the global execution
+	// switch and the workspace grant is active, no rollout may run.
+	if req.Mode != "off" {
+		if h.TrainingGovernance == nil {
+			writeError(w, http.StatusServiceUnavailable, "training governance is not configured")
+			return
+		}
+		if err := h.requireTrainingExecutionOpen(r.Context(), wsUUID); err != nil {
+			writeTrainingGovernanceError(w, err)
+			return
+		}
+	}
 	config, err := json.Marshal(defaultObject(req.Config))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid config")
@@ -337,6 +352,30 @@ func (h *Handler) UpdateEvolutionModelRuntimeConfig(w http.ResponseWriter, r *ht
 		return
 	}
 	writeJSON(w, http.StatusOK, item)
+}
+
+// requireTrainingExecutionOpen checks the global execution switch and the
+// workspace tenant grant for model rollout enablement.
+func (h *Handler) requireTrainingExecutionOpen(ctx context.Context, wsUUID pgtype.UUID) error {
+	policy, err := h.TrainingGovernance.TrainingPolicy(ctx)
+	if err != nil {
+		return err
+	}
+	if !policy.ExecutionEnabled {
+		return service.ErrTrainingExecutionDisabled
+	}
+	grant, err := h.TrainingGovernance.CurrentGrant(ctx, wsUUID.String())
+	if err != nil {
+		return err
+	}
+	switch grant.TenantStatus {
+	case "active":
+		return nil
+	case "revoked":
+		return service.ErrTrainingGrantRevoked
+	default:
+		return service.ErrTrainingGrantPendingOwnerAck
+	}
 }
 
 func (h *Handler) ListEvolutionModelEvalRuns(w http.ResponseWriter, r *http.Request) {

@@ -33,20 +33,6 @@ var (
 	commit  = "unknown"
 )
 
-// graphMemoryDiveModelBackend keeps the process Explore-model default for
-// empty Dive overrides while allowing an approved Dive model to win per run.
-type graphMemoryDiveModelBackend struct {
-	memorygraph.AgentBackend
-	defaultModel string
-}
-
-func (b graphMemoryDiveModelBackend) Execute(ctx context.Context, prompt string, opts agentpkg.ExecOptions) (*agentpkg.Session, error) {
-	if opts.Model == "" {
-		opts.Model = b.defaultModel
-	}
-	return b.AgentBackend.Execute(ctx, prompt, opts)
-}
-
 func newNamedRedisClient(base *redis.Options, suffix string) *redis.Client {
 	opts := *base
 	opts.ClientName = redisClientName(opts.ClientName, suffix)
@@ -285,6 +271,9 @@ func main() {
 	defer analyticsClient.Close()
 
 	queries := db.New(pool)
+	memoryProviderPolicy := service.NewMemoryProviderPolicyResolver(
+		queries, service.LoadMemoryProviderPolicyResolverConfig(os.Getenv),
+	)
 	hub.SetAuthorizer(newScopeAuthorizer(queries))
 	// Order matters: subscriber listeners must register BEFORE notification listeners.
 	// The notification listener queries the subscriber table to determine recipients,
@@ -386,6 +375,7 @@ func main() {
 	h.ReminderNotifier = reminderNotifier
 	h.AgentDeliveryNotifier = agentDeliveryNotifier
 	h.AgentRestartNotifier = agentRestartNotifier
+	h.GraphMemoryConsolidation = service.NewGraphMemoryConsolidationService(queries, pool, "", memoryProviderPolicy)
 
 	srv := &http.Server{
 		Addr:    ":" + port,
@@ -401,49 +391,52 @@ func main() {
 	tc := service.LoadTrainingConfig()
 	var rlSvc *service.GraphMemoryRLSessionService
 	var rewardSink *arealrl.RewardSink
+	// Task 18: training governance owns every training-data consumer. The
+	// global shadow/calibration switches start OFF (migration 472), so no
+	// session opens for source tasks and no reward reaches AReaL until
+	// execution is explicitly enabled.
+	trainingGovernance := service.NewTrainingGovernanceService(pool, nil)
 	if tc.BridgeStubURL != "" {
 		arealClient := arealrl.New(tc.BridgeStubURL, tc.AdminAPIKey)
 		rlSvc = service.NewGraphMemoryRLSessionService(pool, arealClient, arealClient)
-		rewardSink = arealrl.NewRewardSink(rlSvc, arealClient)
-		taskSvc.WithTraining(service.NewTrainingSessionDeps(tc, queries))
+		rewardSink = arealrl.NewRewardSink(rlSvc, arealClient,
+			arealrl.WithRewardSinkExecutionGate(func(ctx context.Context) (bool, error) {
+				policy, err := trainingGovernance.TrainingPolicy(ctx)
+				if err != nil {
+					return false, err
+				}
+				return policy.ExecutionEnabled, nil
+			}))
+		trainingDeps := service.NewTrainingSessionDeps(tc, queries)
+		trainingDeps.Governance = trainingGovernance
+		taskSvc.WithTraining(trainingDeps)
 		slog.Info("training bridge configured", "stub_url", tc.BridgeStubURL)
 	} else {
 		slog.Info("training bridge not configured (AREAL_BRIDGE_STUB_URL unset) — training hooks disabled")
 	}
 
-	// The Dive backend follows the PI environment contract. An approved provider
-	// selects its registered backend; the approved model wins per execution and
-	// an empty override inherits MULTICA_PI_MODEL through the adapter above.
+	// Dive constructs only the provider/model selected by the Workspace policy.
 	diveWorker := service.NewGraphMemoryDiveWorker(
-		pool, service.NewGraphMemoryDiveService(pool), rlSvc, service.LoadGraphMemoryLimits(os.Getenv), "",
-		func(_ context.Context, model, provider string) (memorygraph.AgentBackend, error) {
-			provider = strings.TrimSpace(provider)
-			if provider == "" {
-				provider = "pi"
-			}
+		pool, service.NewGraphMemoryDiveService(pool), rlSvc, service.LoadGraphMemoryLimits(os.Getenv), "", memoryProviderPolicy,
+		func(_ context.Context, policy service.ResolvedMemoryProvider) (memorygraph.AgentBackend, error) {
 			cfg := agentpkg.Config{}
-			if provider == "pi" {
+			if policy.Provider == "pi" {
 				path := strings.TrimSpace(os.Getenv("MULTICA_PI_PATH"))
 				if path == "" {
 					path = "pi"
 				}
 				cfg.ExecutablePath = path
 			}
-			backend, err := agentpkg.New(provider, cfg)
-			if err != nil {
-				return nil, err
-			}
-			return graphMemoryDiveModelBackend{
-				AgentBackend: backend, defaultModel: strings.TrimSpace(os.Getenv("MULTICA_PI_MODEL")),
-			}, nil
+			return agentpkg.New(policy.Provider, cfg)
 		},
 	)
 
-	// Graph memory reviewer activation (design §5.1, review P0-1): the
-	// ingest hook routes closed interaction-dag segments into the
-	// per-workspace memory_graph staging area. Nil-safe per workspace (no
-	// memory_graph dir -> skip).
-	taskSvc.SetSegmentIngestHook(service.NewGraphMemoryIngestHook(queries, pool, "", businessMetrics))
+	// Graph memory projection (Task 8): the best-effort segment-ingest hook
+	// is RETIRED as a production path — no live writes flow through
+	// SetSegmentIngestHook anymore. Closed segments reach the per-workspace
+	// memory_graph staging exclusively through the durable pipeline:
+	// publisher (sanitized payload + atoms + projection request) ->
+	// graph_memory_projection_outbox -> GraphMemoryProjectionJob below.
 	// Server-authoritative graph memory recall (spec §1/§3/§14): the daemon
 	// recall endpoint resolves identity/scope/version/K server-side and
 	// answers 202 only after the durable ledger commit. The env default
@@ -452,24 +445,28 @@ func main() {
 	h.GraphMemoryRecall = service.NewGraphMemoryRecallService(
 		pool, service.LoadGraphMemoryLimits(os.Getenv), "", "", service.GraphMemoryHybridSeeder{})
 	h.GraphMemoryAgentControl = service.NewPostgresGraphMemoryAgentControlPlane(pool)
-	h.GraphMemoryAgentGateway = service.NewGraphMemoryAgentGateway(pool)
+	h.GraphMemoryAgentGateway = service.NewGraphMemoryAgentGateway(pool, memoryProviderPolicy)
 	// Submitted memory-agent runs are the conversational turns of agent-mode
 	// channels; record each as a channel-scoped interaction_dag segment so
 	// graph-memory staging receives them (the task-close seams never see
 	// these runs — they create no agent_inbox_event rows).
 	h.GraphMemoryAgentGateway.SetSubmittedRunSink(service.NewGraphMemoryRunSegmentRecorder(pool))
-	// Recall execution uses the same PI environment contract as the graph
-	// scheduler. The model is also passed through to Explore audit records.
+	// Recall execution constructs only the provider/model selected by the
+	// same Workspace policy resolver used by the gateway and Dive worker.
 	h.GraphMemoryRecallExecutor = service.NewGraphMemoryRecallExecutor(
-		pool, service.NewGraphMemoryDiveService(pool),
-		func(context.Context, *service.GraphMemoryRecallPlan) (memorygraph.AgentBackend, error) {
-			path := strings.TrimSpace(os.Getenv("MULTICA_PI_PATH"))
-			if path == "" {
-				path = "pi"
+		pool, service.NewGraphMemoryDiveService(pool), memoryProviderPolicy,
+		func(_ context.Context, policy service.ResolvedMemoryProvider) (memorygraph.AgentBackend, error) {
+			cfg := agentpkg.Config{}
+			if policy.Provider == "pi" {
+				path := strings.TrimSpace(os.Getenv("MULTICA_PI_PATH"))
+				if path == "" {
+					path = "pi"
+				}
+				cfg.ExecutablePath = path
 			}
-			return agentpkg.New("pi", agentpkg.Config{ExecutablePath: path})
+			return agentpkg.New(policy.Provider, cfg)
 		},
-		nil, nil, strings.TrimSpace(os.Getenv("MULTICA_PI_MODEL")),
+		nil, nil,
 	)
 	// LRM-1049: Autopilot scheduler/listeners/failure-monitor are retired.
 	// Reminder owns agent self-wake; API paths return 410.
@@ -541,7 +538,7 @@ func main() {
 	// per-workspace scoped_writer_ready gate (jobs_graph_memory.go) keeps it
 	// inert until the scoped writer acceptance gates pass, so no
 	// process-level switch is needed or permitted to activate it early.
-	if err := schedulerMgr.Register(scheduler.GraphMemoryJobs(pool, businessMetrics)); err != nil {
+	if err := schedulerMgr.Register(scheduler.GraphMemoryJobs(pool, businessMetrics, memoryProviderPolicy)); err != nil {
 		slog.Warn("scheduler: failed to register graph memory consolidation job", "error", err)
 	} else {
 		schedulerRegistered = true
@@ -557,6 +554,33 @@ func main() {
 		} else {
 			schedulerRegistered = true
 		}
+	}
+	// The canonical interaction DAG publish outbox drains independently of the
+	// Graph read paths: the job only advances the durable migration 454
+	// lifecycle and reports aggregate health counters (spec 7.1/7.2).
+	interactionDAGPublisher := service.NewInteractionDAGPublisher(pool)
+	if err := schedulerMgr.Register(scheduler.InteractionDAGPublishJob(pool, interactionDAGPublisher)); err != nil {
+		slog.Warn("scheduler: failed to register interaction DAG publish job", "error", err)
+	} else {
+		schedulerRegistered = true
+	}
+	// Task 22: approximate historical backfill — the last rollout step
+	// (spec §19.11). Runs only behind the final shadow gate, rate-limited
+	// independently of the realtime publish pipeline.
+	legacyBackfill := service.NewLegacyBackfillService(pool, service.NewShadowGateService(pool))
+	if err := schedulerMgr.Register(scheduler.LegacyBackfillJob(pool, legacyBackfill)); err != nil {
+		slog.Warn("scheduler: failed to register interaction DAG legacy backfill job", "error", err)
+	} else {
+		schedulerRegistered = true
+	}
+	// Event-time graph projection (Task 8): drains the Task 7 projection
+	// outbox through leases — the only production availability path for
+	// graph writes. No fallback scanner exists.
+	graphMemoryProjector := service.NewGraphMemoryProjector(pool)
+	if err := schedulerMgr.Register(scheduler.GraphMemoryProjectionJob(pool, graphMemoryProjector)); err != nil {
+		slog.Warn("scheduler: failed to register graph memory projection job", "error", err)
+	} else {
+		schedulerRegistered = true
 	}
 	if err := schedulerMgr.Register(scheduler.ChannelVoiceTranscriptionJob(h)); err != nil {
 		slog.Warn("scheduler: failed to register channel voice transcription job", "error", err)
@@ -583,6 +607,15 @@ func main() {
 	}
 	if err := schedulerMgr.Register(scheduler.ResearchProductionWindowJob(h)); err != nil {
 		slog.Warn("scheduler: failed to register research production window job", "error", err)
+	} else {
+		schedulerRegistered = true
+	}
+	// Research graph export (unification spec §4.2) registers unconditionally
+	// and stays inert until MULTICA_RESEARCH_GRAPH_EXPORT_ENABLED is set; the
+	// exporter additionally fails closed per workspace outside graph memory
+	// mode, so no workspace exports by default.
+	if err := schedulerMgr.Register(scheduler.ResearchGraphExportJob(pool)); err != nil {
+		slog.Warn("scheduler: failed to register research graph export job", "error", err)
 	} else {
 		schedulerRegistered = true
 	}

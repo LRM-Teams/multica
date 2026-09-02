@@ -47,6 +47,7 @@ const (
 	EdgeTypeSupports         = "supports"
 	EdgeTypeEvidenceFor      = "evidence_for" // cross-level edges of this type are NOT downweighted
 	EdgeTypeDerivedFrom      = "derived_from"
+	EdgeTypeMergedFrom       = "merged_from" // merge_node lineage: superseded input -> merge result (unification spec §4.3)
 
 	// EdgeTypeHasAttachment is the ingest-owned provenance edge from a
 	// segment source node to a file source node (spec §10). It lives in
@@ -85,6 +86,7 @@ const (
 	CreatorIngester     = "ingester"
 	CreatorConsolidator = "consolidator"
 	CreatorMigration    = "migration"
+	CreatorPromoter     = "promoter"
 )
 
 // RelationEdgeTypes is the accepted set for relations.jsonl entries.
@@ -102,6 +104,7 @@ var RelationEdgeTypes = map[string]bool{
 	EdgeTypeSupports:         true,
 	EdgeTypeEvidenceFor:      true,
 	EdgeTypeDerivedFrom:      true,
+	EdgeTypeMergedFrom:       true,
 }
 
 // Node is one graph node: one .md file = one embedding chunk (design §4.2).
@@ -110,6 +113,7 @@ type Node struct {
 	NodeID         string     `yaml:"node_id" json:"node_id"`
 	ContentHash    string     `yaml:"content_hash" json:"content_hash"` // sha256 of Body only
 	SegmentRefs    []string   `yaml:"segment_refs,omitempty" json:"segment_refs,omitempty"`
+	AtomRefs       []string   `yaml:"atom_refs,omitempty" json:"atom_refs,omitempty"`
 	Level          int        `yaml:"level" json:"level"` // -1 = source layer; 0 = most specific statement layer
 	Epistemic      string     `yaml:"epistemic_status" json:"epistemic_status"`
 	EntityRefs     []string   `yaml:"entity_refs,omitempty" json:"entity_refs,omitempty"`
@@ -122,6 +126,9 @@ type Node struct {
 	CreatedBy      string     `yaml:"created_by" json:"created_by"`
 	CreatedVersion int        `yaml:"created_version" json:"created_version"`
 	UpdatedVersion int        `yaml:"updated_version" json:"updated_version"`
+	// PolicyVersion stamps the server policy that authorized a promotion
+	// (empty for ordinary consolidated nodes).
+	PolicyVersion string `yaml:"policy_version,omitempty" json:"policy_version,omitempty"`
 
 	// Scope and provenance (spec §5). Empty Visibility reads as "project"
 	// for pre-scope graphs. Provenance is monotonic: consolidation may merge
@@ -131,6 +138,9 @@ type Node struct {
 	SourceAgentIDs   []string `yaml:"source_agent_ids,omitempty" json:"source_agent_ids,omitempty"`
 	SourceChannelIDs []string `yaml:"source_channel_ids,omitempty" json:"source_channel_ids,omitempty"`
 	SourceTaskIDs    []string `yaml:"source_task_ids,omitempty" json:"source_task_ids,omitempty"`
+	// SourceSessionID names the research session a research-scope node was
+	// exported from (unification spec §4.2); empty on every other node.
+	SourceSessionID string `yaml:"source_session_id,omitempty" json:"source_session_id,omitempty"`
 
 	// Daily-node lifecycle (spec §6). SealedAt is set once by the seal pass
 	// (compare-and-swap: an already-sealed daily is immutable); LateForDate
@@ -141,7 +151,9 @@ type Node struct {
 
 	// Source-layer frontmatter (spec §10). Populated only on level -1
 	// nodes in the shared source store; omitempty keeps version nodes unchanged.
-	SourceKind       string `yaml:"source_kind,omitempty" json:"source_kind,omitempty"`     // "segment" | "file"
+	// Research-scope exports (unification spec §4.2) reuse SourceKind on
+	// level-0 nodes with "research_node" | "research_insight" | "research_result".
+	SourceKind       string `yaml:"source_kind,omitempty" json:"source_kind,omitempty"`     // "segment" | "file" | "research_node" | "research_insight" | "research_result"
 	AttachmentID     string `yaml:"attachment_id,omitempty" json:"attachment_id,omitempty"` // file sources
 	BlobSHA256       string `yaml:"blob_sha256,omitempty" json:"blob_sha256,omitempty"`     // file blob identity; never node identity
 	MIME             string `yaml:"mime,omitempty" json:"mime,omitempty"`
@@ -183,6 +195,16 @@ type ExtractionMeta struct {
 type GraphView struct {
 	AllowProject bool
 	ChannelID    string // exact-channel visibility allowed; "" = none
+	// AllowResearch admits research-visibility nodes (the federated research
+	// recall, unification spec §4.4). Research visibility is never implied by
+	// the other flags: project/channel views fail closed on it.
+	AllowResearch bool
+}
+
+// Active reports whether the view filters at all; the zero GraphView is
+// inactive so legacy callers keep unfiltered retrieval.
+func (v GraphView) Active() bool {
+	return v.AllowProject || v.ChannelID != "" || v.AllowResearch
 }
 
 // Allows reports whether n is visible under v. Empty Visibility reads as
@@ -197,9 +219,42 @@ func (v GraphView) Allows(n *Node) bool {
 		return v.AllowProject
 	case "channel":
 		return v.ChannelID != "" && n.ChannelID == v.ChannelID
+	case "research":
+		return v.AllowResearch
 	default:
 		return false
 	}
+}
+
+// MemoryRefKind names the class of memory a hit resolves to (spec §8.3):
+// graph nodes of the current consolidated graph, or active staging atoms of
+// the Task 7 ledger.
+type MemoryRefKind string
+
+const (
+	MemoryRefGraphNode   MemoryRefKind = "graph_node"
+	MemoryRefStagingAtom MemoryRefKind = "staging_atom"
+)
+
+// MemoryRef is the stable, class-aware pointer every search/explore result
+// carries. Authorization always comes from the caller's plan and the Task 8A
+// read gate — never from these fields.
+type MemoryRef struct {
+	Kind      MemoryRefKind `json:"kind"`
+	NodeID    string        `json:"node_id,omitempty"`
+	SegmentID string        `json:"segment_id,omitempty"`
+	AtomID    string        `json:"atom_id,omitempty"`
+	ChannelID string        `json:"channel_id,omitempty"`
+}
+
+// Key returns the deterministic identity used for tie-breaking and dedupe:
+// "<kind>:<id>". Refs of the same kind with the same id share a key.
+func (m MemoryRef) Key() string {
+	id := m.NodeID
+	if m.Kind == MemoryRefStagingAtom {
+		id = m.AtomID
+	}
+	return string(m.Kind) + ":" + id
 }
 
 // SegmentMeta is the scope/provenance sidecar for one staged segment

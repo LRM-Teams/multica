@@ -156,6 +156,30 @@ type Handler struct {
 	GraphMemoryRecallExecutor *service.GraphMemoryRecallExecutor
 	// GraphMemoryStatus backs the graph governance status API (spec §10).
 	GraphMemoryStatus *service.GraphMemoryStatusService
+	// MemoryExploreV2 backs the external Memory Explore v2 API (plan Task
+	// 13): gated Search/Evidence/History. Nil pool wiring (non-pool tx
+	// starters) leaves every route refusing with "not configured".
+	MemoryExploreV2 *service.MemoryExploreV2Service
+	// GraphMemoryCorrections backs the corrections API (plan Task 15):
+	// owner/admin retract, member/agent candidate flow. Nil without a pool.
+	GraphMemoryCorrections *service.GraphMemoryCorrectionService
+	// GraphMemoryPromotion evaluates durable-evidence Project promotions
+	// (plan Task 15). Nil without a pool.
+	GraphMemoryPromotion *service.GraphMemoryPromotionPolicy
+	// GraphMemoryPromotionPublish publishes allowed promotion decisions
+	// through the Task 14 coordinator. Nil without a pool.
+	GraphMemoryPromotionPublish *service.GraphMemoryConsolidationPublishService
+	// MemoryRetention backs the versioned retention policy API (plan Task
+	// 17): owner/admin reads and CAS updates within the platform caps. Nil
+	// without a pool.
+	MemoryRetention *service.MemoryRetentionService
+	// TrainingGovernance (Task 18, spec 14.1): grant/manifest lifecycle for
+	// every training-data consumer. Nil = training governance not configured.
+	TrainingGovernance *service.TrainingGovernanceService
+	// ChannelProjectBindings is the single production writer of
+	// channel.project_id (plan Task 16); the migration-470 guard rejects
+	// every UPDATE that skips it. Nil without a pool.
+	ChannelProjectBindings *service.ChannelProjectBindingService
 	// GraphMemoryConsolidation runs manual consolidations behind the
 	// graph+ready gate (spec §10). Nil when the handler has no DB pool.
 	GraphMemoryConsolidation *service.GraphMemoryConsolidationService
@@ -301,6 +325,38 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 	if candidate, ok := txStarter.(dbExecutor); ok {
 		executor = candidate
 	}
+	var exploreV2Pool *pgxpool.Pool
+	if pool, ok := txStarter.(*pgxpool.Pool); ok {
+		exploreV2Pool = pool
+	}
+	var memoryRetention *service.MemoryRetentionService
+	var trainingGovernance *service.TrainingGovernanceService
+	var graphMemoryCorrections *service.GraphMemoryCorrectionService
+	var graphMemoryPromotion *service.GraphMemoryPromotionPolicy
+	var graphMemoryPromotionPublish *service.GraphMemoryConsolidationPublishService
+	var channelProjectBindings *service.ChannelProjectBindingService
+	if exploreV2Pool != nil {
+		// Task 18: training governance — every training-data consumer
+		// (grants, selection manifests, execution identity) routes here.
+		trainingGovernance = service.NewTrainingGovernanceService(exploreV2Pool, nil)
+		graphMemoryCorrections = service.NewGraphMemoryCorrectionService(exploreV2Pool)
+		graphMemoryPromotion = service.NewGraphMemoryPromotionPolicy(exploreV2Pool)
+		graphMemoryPromotionPublish = service.NewGraphMemoryConsolidationPublishService(exploreV2Pool)
+		channelProjectBindings = service.NewChannelProjectBindingService(exploreV2Pool)
+		// Task 17: retention policy + archive streams. The archive half
+		// stays disabled until MULTICA_ARCHIVE_MASTER_KEY is configured;
+		// policy and trace sweeps work either way.
+		archiveCipher, cipherErr := service.ArchiveCipherFromEnv()
+		if cipherErr != nil {
+			slog.Warn("memory archive cipher unavailable", "error", cipherErr)
+		}
+		var archive *service.MemoryArchiveService
+		if root, rootErr := service.GraphMemoryWorkspacesRootPath(); rootErr == nil {
+			archive = service.NewMemoryArchiveService(exploreV2Pool, archiveCipher,
+				service.NewFilesystemArchiveObjectStore(root))
+		}
+		memoryRetention = service.NewMemoryRetentionService(exploreV2Pool, archive)
+	}
 	var updateDB updatePostgresDB
 	if candidate, ok := txStarter.(updatePostgresDB); ok {
 		updateDB = candidate
@@ -330,43 +386,50 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 	issueSvc := service.NewIssueService(queries, txStarter, bus, analyticsClient, taskSvc)
 	taskSvc.IssueExecution = issueSvc.Execution
 	h := &Handler{
-		Queries:                queries,
-		DB:                     executor,
-		TxStarter:              txStarter,
-		Hub:                    hub,
-		DaemonHub:              daemonHub,
-		RunnerPresenceSource:   daemonHub,
-		RunnerPresenceMu:       &sync.Mutex{},
-		runnerObservations:     newRunnerObservationStore(),
-		runnerStartRetry:       newRunnerStartRetryScheduler(),
-		agentRestarts:          newAgentRestartStore(),
-		Bus:                    bus,
-		TaskService:            taskSvc,
-		AgentFleetRankService:  agentFleetRankService,
-		GraphMemoryStatus:      service.NewGraphMemoryStatusService(queries, ""),
-		GraphMemoryAudit:       service.NewGraphMemoryAuditService(""),
-		GraphMemoryLimits:      service.LoadGraphMemoryLimits(os.Getenv),
-		AgentHonorService:      service.NewAgentHonorService(queries, agentFleetRankService),
-		IssueService:           issueSvc,
-		IssueExecution:         issueSvc.Execution,
-		HonorService:           service.NewHonorService(queries),
-		EmailService:           emailService,
-		UpdateStore:            NewPostgresUpdateStore(updateDB),
-		UpdateIntentStore:      NewPostgresUpdateIntentStore(updateDB),
-		RestartStore:           NewInMemoryRestartStore(),
-		RuntimeReleaseSource:   NewCachedRuntimeReleaseSource(DefaultRuntimeReleaseCacheTTL),
-		ModelListStore:         NewInMemoryModelListStore(),
-		LocalSkillListStore:    NewInMemoryLocalSkillListStore(),
-		LocalSkillImportStore:  NewInMemoryLocalSkillImportStore(),
-		LivenessStore:          NewNoopLivenessStore(),
-		MemberPresenceStore:    NewMemoryMemberPresenceStore(),
-		HeartbeatScheduler:     NewPassthroughHeartbeatScheduler(queries),
-		Storage:                store,
-		CFSigner:               cfSigner,
-		Analytics:              analyticsClient,
-		WebhookRateLimiter:     NewMemoryWebhookRateLimiter(DefaultWebhookRateLimit()),
-		WebhookIPRateLimiter:   NewMemoryWebhookIPRateLimiter(DefaultWebhookIPRateLimit()),
-		ResearchReportRenderer: newResearchReportRenderer(cfg),
+		Queries:                     queries,
+		DB:                          executor,
+		TxStarter:                   txStarter,
+		GraphMemoryCorrections:      graphMemoryCorrections,
+		GraphMemoryPromotion:        graphMemoryPromotion,
+		GraphMemoryPromotionPublish: graphMemoryPromotionPublish,
+		MemoryRetention:             memoryRetention,
+		TrainingGovernance:          trainingGovernance,
+		ChannelProjectBindings:      channelProjectBindings,
+		Hub:                         hub,
+		DaemonHub:                   daemonHub,
+		RunnerPresenceSource:        daemonHub,
+		RunnerPresenceMu:            &sync.Mutex{},
+		runnerObservations:          newRunnerObservationStore(),
+		runnerStartRetry:            newRunnerStartRetryScheduler(),
+		agentRestarts:               newAgentRestartStore(),
+		Bus:                         bus,
+		TaskService:                 taskSvc,
+		AgentFleetRankService:       agentFleetRankService,
+		GraphMemoryStatus:           service.NewGraphMemoryStatusServiceWithPool(exploreV2Pool, queries, ""),
+		MemoryExploreV2:             service.NewMemoryExploreV2Service(exploreV2Pool),
+		GraphMemoryAudit:            service.NewGraphMemoryAuditService(""),
+		GraphMemoryLimits:           service.LoadGraphMemoryLimits(os.Getenv),
+		AgentHonorService:           service.NewAgentHonorService(queries, agentFleetRankService),
+		IssueService:                issueSvc,
+		IssueExecution:              issueSvc.Execution,
+		HonorService:                service.NewHonorService(queries),
+		EmailService:                emailService,
+		UpdateStore:                 NewPostgresUpdateStore(updateDB),
+		UpdateIntentStore:           NewPostgresUpdateIntentStore(updateDB),
+		RestartStore:                NewInMemoryRestartStore(),
+		RuntimeReleaseSource:        NewCachedRuntimeReleaseSource(DefaultRuntimeReleaseCacheTTL),
+		ModelListStore:              NewInMemoryModelListStore(),
+		LocalSkillListStore:         NewInMemoryLocalSkillListStore(),
+		LocalSkillImportStore:       NewInMemoryLocalSkillImportStore(),
+		LivenessStore:               NewNoopLivenessStore(),
+		MemberPresenceStore:         NewMemoryMemberPresenceStore(),
+		HeartbeatScheduler:          NewPassthroughHeartbeatScheduler(queries),
+		Storage:                     store,
+		CFSigner:                    cfSigner,
+		Analytics:                   analyticsClient,
+		WebhookRateLimiter:          NewMemoryWebhookRateLimiter(DefaultWebhookRateLimit()),
+		WebhookIPRateLimiter:        NewMemoryWebhookIPRateLimiter(DefaultWebhookIPRateLimit()),
+		ResearchReportRenderer:      newResearchReportRenderer(cfg),
 		CloudRuntime: cloudruntime.NewClient(cloudruntime.Config{
 			BaseURL: cfg.CloudRuntimeFleetURL,
 			Timeout: cfg.CloudRuntimeFleetTimeout,
@@ -374,7 +437,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		cfg: cfg,
 	}
 	if pool, ok := txStarter.(*pgxpool.Pool); ok {
-		h.GraphMemoryConsolidation = service.NewGraphMemoryConsolidationService(queries, pool, "")
+		h.GraphMemoryConsolidation = service.NewGraphMemoryConsolidationService(queries, pool, "", nil)
 		h.GraphMemoryAudit = service.NewGraphMemoryAuditServiceWithPool(pool, "")
 		h.GraphMemoryBlobs = service.NewGraphMemoryBlobService(pool)
 		h.WorkGraph = workgraph.NewStore(pool)
@@ -440,6 +503,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		}
 		h.WorkGraph.OnGraphDelta = h.wakeGoalCoordinatorForGraphDelta
 		researchStore := researchrun.NewPostgresStore(pool)
+		researchStore.SetBackgroundKnowledgeProvider(service.NewResearchBackgroundKnowledgeService(pool, ""))
 		dispatcher := &researchRunDispatcher{handler: h}
 		h.ResearchRun = researchrun.NewEngineWithRuntimeAdapters(researchStore, dispatcher, &researchRunProjector{handler: h}, researchReportStorageAdapter{store: h.Storage}, h.ResearchReportRenderer, cfg.ResearchReportFrameAncestors, &researchV6AgentLifecycleAdapter{handler: h}, &researchV6InboxDispatchAdapter{dispatcher: dispatcher}, researchrun.NewHTTPRetrievalAdapter(researchrun.HTTPRetrievalAdapterConfig{}))
 		taskSvc.OnTaskCompleted = h.syncWendyWorkGraphAfterTaskSuccess

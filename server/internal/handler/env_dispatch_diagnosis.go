@@ -483,7 +483,11 @@ func (a diagnosisDAGWriterAdapter) UpsertDiagnosisStepReward(ctx context.Context
 }
 
 func (a diagnosisDAGWriterAdapter) GetDiagnosisStepReward(ctx context.Context, projectID, segmentID string, seq int32) (int, string, bool, error) {
-	rewards, err := a.store.ListInteractionDAGStepRewardsForProject(ctx, projectID)
+	workspaceID, err := a.store.GetUniversalDAGProjectWorkspace(ctx, projectID)
+	if err != nil {
+		return 0, "", false, err
+	}
+	rewards, err := a.store.ListInteractionDAGStepRewardsForProject(ctx, db.ListInteractionDAGStepRewardsForProjectParams{WorkspaceID: workspaceID, ProjectID: projectID})
 	if err != nil {
 		return 0, "", false, err
 	}
@@ -496,7 +500,11 @@ func (a diagnosisDAGWriterAdapter) GetDiagnosisStepReward(ctx context.Context, p
 }
 
 func (a diagnosisDAGWriterAdapter) CountDiagnosisStepRewards(ctx context.Context, projectID, segmentID string) (int, error) {
-	rewards, err := a.store.ListInteractionDAGStepRewardsForProject(ctx, projectID)
+	workspaceID, err := a.store.GetUniversalDAGProjectWorkspace(ctx, projectID)
+	if err != nil {
+		return 0, err
+	}
+	rewards, err := a.store.ListInteractionDAGStepRewardsForProject(ctx, db.ListInteractionDAGStepRewardsForProjectParams{WorkspaceID: workspaceID, ProjectID: projectID})
 	if err != nil {
 		return 0, err
 	}

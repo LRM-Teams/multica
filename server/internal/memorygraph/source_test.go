@@ -269,7 +269,7 @@ func TestSourceLayerImmutableUnderManagement(t *testing.T) {
 
 	cfg := DefaultConsolidateConfig()
 	cfg.TTVTrajectories = 1
-	c := NewConsolidator(store, nil, cfg, "test", nil, nil)
+	c := NewConsolidator(store, nil, cfg, testConsolidateScope(), nil, nil)
 	ops := []ConsolidateOp{
 		{Op: OpUpdateNode, NodeID: "src-seg-imm", Node: &Node{NodeID: "src-seg-imm", Body: "mutated"}},
 		{Op: OpDeleteNode, NodeID: "src-seg-imm"},

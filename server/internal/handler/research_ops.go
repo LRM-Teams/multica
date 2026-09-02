@@ -876,23 +876,16 @@ func ternary(cond bool, a, b string) string {
 }
 
 func (h *Handler) stopResearchSessionWakes(ctx context.Context, workspaceID, sessionID pgtype.UUID) error {
-	title := researchChatSessionTitle(sessionID)
-	rows, err := h.Queries.CancelInFlightChatTasksByResearchTitle(ctx, db.CancelInFlightChatTasksByResearchTitleParams{
-		WorkspaceID: workspaceID,
-		Title:       title,
-	})
-	if err != nil {
+	if h.TaskService == nil {
+		return nil
+	}
+	if err := h.TaskService.CancelResearchWakes(ctx, workspaceID, researchChatSessionTitle(sessionID)); err != nil {
 		slog.Warn("research stop: cancel wakes failed",
 			"session_id", uuidToString(sessionID),
 			"error", err,
 		)
 		return err
 	}
-	if h.TaskService == nil {
-		return nil
-	}
-	// Rows are already cancelled in SQL; finalize chat/research snapshot + broadcast.
-	h.TaskService.FinalizeCancelledResearchWakes(ctx, rows)
 	return nil
 }
 
@@ -1629,14 +1622,13 @@ func (h *Handler) ArchiveResearchFleetMemberHandler(w http.ResponseWriter, r *ht
 		ArchivedBy: lead.AgentID,
 	})
 	// Stop further wakes: cancel in-flight inbox tasks for this agent.
-	if cancelled, cerr := h.Queries.CancelAgentTasksByAgent(r.Context(), updated.AgentID); cerr != nil {
-		slog.Warn("research archive: cancel wakes failed",
-			"agent_id", uuidToString(updated.AgentID),
-			"error", cerr,
-		)
-	} else if h.TaskService != nil {
-		h.TaskService.CaptureCancelledTasks(r.Context(), cancelled)
-		h.TaskService.ReconcileAgentStatus(r.Context(), updated.AgentID)
+	if h.TaskService != nil {
+		if _, cerr := h.TaskService.CancelTasksForAgent(r.Context(), updated.AgentID); cerr != nil {
+			slog.Warn("research archive: cancel wakes failed",
+				"agent_id", uuidToString(updated.AgentID),
+				"error", cerr,
+			)
+		}
 	}
 
 	if !fixture {

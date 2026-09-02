@@ -101,6 +101,9 @@ import {
   GraphMemoryStatusCard,
   GraphMemoryTttCard,
   LegacyCurationNotApplicableCard,
+  MemoryHealthCard,
+  RetentionCard,
+  TrainingGovernanceCard,
 } from "./graph-memory-cards";
 
 const COPY = {
@@ -132,6 +135,7 @@ const COPY = {
   graphBackoff: "backoff",
   graphVersion: "version",
   graphStaging: "staging",
+  graphNodes: "nodes",
   graphRecall24h: "recalls (24h)",
   graphHitRate: "hit rate",
   graphAudit: "Graph memory audit",
@@ -175,6 +179,41 @@ const COPY = {
   graphTttParseError: "Profile could not be parsed",
   graphTttRetry: "Retry",
   graphTttAdminOnly: "Only workspace owners and admins can change TTT settings",
+  graphTrainingGovernance: "Training governance",
+  graphTrainingGovernanceHint: "Tenant training only runs after the workspace owner acknowledges it; pooled training needs a separate explicit opt-in.",
+  graphTrainingStatusPendingOwnerAck: "Awaiting owner acknowledgement",
+  graphTrainingStatusActive: "Active",
+  graphTrainingStatusRevoked: "Revoked",
+  graphTrainingStatusDisabled: "Disabled",
+  graphTrainingPolicyVersion: "v{version}",
+  graphTrainingAck: "Acknowledge tenant training",
+  graphTrainingAckSaved: "Tenant training acknowledged",
+  graphTrainingRevoke: "Revoke training",
+  graphTrainingRevoked: "Training grant revoked",
+  graphTrainingSelection: "Training selection",
+  graphTrainingExecution: "Training execution",
+  graphTrainingPolicySaved: "Training policy updated",
+  graphTrainingConflict: "Training governance changed elsewhere, refreshed",
+  graphTrainingAdminOnly: "Only workspace owners and admins can manage training governance",
+  graphRetention: "Memory retention",
+  graphRetentionHint: "How long interaction trajectories, archives and traces stay hot, bounded by the platform caps.",
+  graphRetentionVersion: "Policy version",
+  graphRetentionCaps: "Platform caps",
+  graphRetentionTrajectoryHot: "Trajectory hot days",
+  graphRetentionArchive: "Archive days",
+  graphRetentionTraceHot: "Trace hot days",
+  graphRetentionSave: "Save retention policy",
+  graphRetentionSaved: "Retention policy updated",
+  graphRetentionConflict: "Retention policy changed elsewhere, refreshed",
+  graphRetentionCapError: "Values exceed the platform caps",
+  graphHealth: "Memory pipeline health",
+  graphHealthHint: "Ledger-backed view of publish backlog, consolidation, migration and reward delivery.",
+  graphHealthStaging: "staging backlog",
+  graphHealthBackoff: "consolidation backoff",
+  graphHealthRecallErrors: "recall errors",
+  graphHealthOutboxFailed: "reward delivery failed",
+  graphHealthDiveFailed: "dive jobs failed",
+  graphHealthClean: "No ledger failures in the last 24 hours",
   memoryOpsHint: "Active agents self-review first; team curation then promotes clean shared knowledge. The top three stats are the workspace funnel: local proposals → DB pending → team knowledge.",
   funnelHint: "Funnel: left = latest self-review candidates; middle = DB pending candidates ({skills} skills); right = team_knowledge registry rows (not copied to every agent).",
   curatorOps: "Curator operations",
@@ -817,6 +856,8 @@ export function EvolutionCenterPage() {
                   currentUserId={userId}
                 />
                 <GraphMemoryTttCard wsId={wsId} isAdmin={isWorkspaceAdmin} />
+                <TrainingGovernanceCard wsId={wsId} isAdmin={isWorkspaceAdmin} />
+                <RetentionCard wsId={wsId} isAdmin={isWorkspaceAdmin} />
                 {isGraphMemory ? (
                   <>
                     <GraphMemoryStatusCard wsId={wsId} />
@@ -846,6 +887,7 @@ export function EvolutionCenterPage() {
               </div>
               <div className="grid gap-4">
                 {isGraphMemory && <GraphMemoryAuditCard wsId={wsId} />}
+                {isGraphMemory && <MemoryHealthCard wsId={wsId} />}
                 <EvolutionTrendCard dailyMetrics={dailyMetrics} />
                 <TaskEfficiencyCard efficiency={taskEfficiency} />
                 <UnitMetricsCard metrics={unitMetrics} />

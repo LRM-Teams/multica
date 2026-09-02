@@ -44,7 +44,7 @@ var (
 // pinned graph version (spec §3 step 5). Production wires the hybrid
 // retriever; tests inject fakes.
 type GraphMemorySeedRetriever interface {
-	Seeds(ctx context.Context, dir string, version int, query string, view memorygraph.GraphView) ([]string, error)
+	Seeds(ctx context.Context, workspaceID, dir string, version int, query string, view memorygraph.GraphView) ([]string, error)
 }
 
 // Recall task shapes (recovery spec A1): a recall's TaskID resolves against
@@ -115,10 +115,24 @@ type GraphMemoryRecallPlan struct {
 	// executor hands them to Explorer.ExploreWithSeeds so the hybrid search
 	// runs exactly once per recall (spec P0 §4.1).
 	Seeds []string
+	// Research is the federated workspace research target (spec §4.4): an
+	// additional read-only graph searched with its own research-only view.
+	// Nil when the workspace has no research graph; research is never a
+	// fallback — it only joins a plan that already resolved a primary scope.
+	Research *GraphMemoryRecallResearch
 	// Replayed marks a plan adopted from the already-committed ledger row
 	// (idempotent replay): no new rows were written and no provider work
 	// happened for it (A23).
 	Replayed bool
+}
+
+// GraphMemoryRecallResearch is the research-graph half of a federated recall
+// (unification spec §4.4): the pinned version searched by filtered
+// retrieval (no second LLM explore) with a research-only view.
+type GraphMemoryRecallResearch struct {
+	Dir     string
+	Version int
+	View    memorygraph.GraphView
 }
 
 // GraphMemoryRecallOutcome is the non-fatal wrapper result (spec §1: a
@@ -252,9 +266,15 @@ func (s *GraphMemoryRecallService) Begin(ctx context.Context, req GraphMemoryRec
 	}); err != nil {
 		return nil, fmt.Errorf("graph memory recall: %w", err)
 	}
-	version, err := memorygraph.NewStore(dir).CurrentVersion()
+	recallStore := memorygraph.NewStore(dir)
+	var version int
+	if wsUUID, wsErr := parseUUIDColumn("workspace_id", req.WorkspaceID); wsErr == nil {
+		version, err = activeGraphVersionForStore(ctx, s.pool, wsUUID, graphKind, ownerID, recallStore)
+	} else {
+		version, err = recallStore.CurrentVersion()
+	}
 	if err != nil {
-		return nil, fmt.Errorf("graph memory recall: current version: %w", err)
+		return nil, fmt.Errorf("graph memory recall: active version: %w", err)
 	}
 
 	view := memorygraph.GraphView{}
@@ -266,6 +286,12 @@ func (s *GraphMemoryRecallService) Begin(ctx context.Context, req GraphMemoryRec
 	} else {
 		view.ChannelID = ownerID
 	}
+
+	// Federated research target (spec §4.4): the workspace research graph
+	// joins as a read-only second target. Resolution happens only after a
+	// primary scope resolved — research is never a fallback — and any
+	// absence or failure degrades to no federation, never a recall error.
+	research := s.researchTarget(req.WorkspaceID)
 
 	// K is per recall (A22: no workspace semaphore): 1 when TTT is off, else
 	// the saved concurrency clamped to the server ceiling.
@@ -292,7 +318,7 @@ func (s *GraphMemoryRecallService) Begin(ctx context.Context, req GraphMemoryRec
 
 	var seeds []string
 	if s.seeder != nil {
-		seeds, err = s.seeder.Seeds(ctx, dir, version, req.Query, view)
+		seeds, err = s.seeder.Seeds(ctx, req.WorkspaceID, dir, version, req.Query, view)
 		if err != nil {
 			return nil, fmt.Errorf("graph memory recall: seed retrieval: %w", err)
 		}
@@ -316,6 +342,7 @@ func (s *GraphMemoryRecallService) Begin(ctx context.Context, req GraphMemoryRec
 		TraceID:      req.TraceID,
 		TaskShape:    task.Shape,
 		Seeds:        seeds,
+		Research:     research,
 	}
 	if err := s.persistPlan(ctx, plan, wsUUID, taskUUID, rtUUID, graphOwnerID, seeds); err != nil {
 		return nil, err
@@ -458,6 +485,39 @@ func (s *GraphMemoryRecallService) resolveGraphScope(ctx context.Context, wsUUID
 		}
 	}
 	return "", pgtype.UUID{}, ErrGraphMemoryRecallNoScope
+}
+
+// researchTarget resolves the workspace research graph as a federated
+// recall target (spec §4.4). It fails closed to nil on anything but a
+// fully valid research graph — missing directory, mismatched identity
+// marker, or unreadable version — because federation is additive: a missing
+// research graph must never block or fail the primary recall.
+func (s *GraphMemoryRecallService) researchTarget(workspaceID string) *GraphMemoryRecallResearch {
+	root := s.root
+	if root == "" {
+		var err error
+		if root, err = graphMemoryWorkspacesRoot(); err != nil {
+			return nil
+		}
+	}
+	dir, err := memorygraph.DirForScope(root, workspaceID, memorygraph.GraphDirKindResearch, workspaceID)
+	if err != nil {
+		return nil
+	}
+	if err := memorygraph.VerifyGraphIdentity(dir, memorygraph.GraphIdentity{
+		WorkspaceID: workspaceID, Kind: string(memorygraph.GraphDirKindResearch), OwnerID: workspaceID,
+	}); err != nil {
+		return nil
+	}
+	version, err := memorygraph.NewStore(dir).CurrentVersion()
+	if err != nil {
+		return nil
+	}
+	return &GraphMemoryRecallResearch{
+		Dir:     dir,
+		Version: version,
+		View:    memorygraph.GraphView{AllowResearch: true},
+	}
 }
 
 // persistPlan writes the recall row, K trajectories, one round-0 seed batch
@@ -645,6 +705,10 @@ func (s *GraphMemoryRecallService) loadExistingPlan(ctx context.Context, plan *G
 	plan.GraphVersion = int(version)
 	plan.K = int(k)
 	plan.TaskShape = taskShape
+	// Federated research target re-resolves on replay (spec §4.4): the
+	// ledger pins the primary version; the research half is a read-only
+	// addition and may resolve the research graph's current version.
+	plan.Research = s.researchTarget(plan.WorkspaceID)
 	return nil
 }
 

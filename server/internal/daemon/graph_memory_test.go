@@ -69,8 +69,8 @@ func TestGraphExecutionMemoriesTaskOverrideBeatsEnv(t *testing.T) {
 		cfg:    Config{MemoryType: MemoryTypeGraph},
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
-	if out := d.graphExecutionMemories(context.Background(), Task{MemoryType: MemoryTypeLegacy, ChatMessage: "hello"}, d.logger); out != nil {
-		t.Fatalf("graphExecutionMemories = %v, want nil under task-scoped legacy override", out)
+	if current, research := d.graphExecutionMemories(context.Background(), Task{MemoryType: MemoryTypeLegacy, ChatMessage: "hello"}, d.logger); current != nil || research != nil {
+		t.Fatalf("graphExecutionMemories = (%v, %v), want nil under task-scoped legacy override", current, research)
 	}
 }
 
@@ -79,7 +79,7 @@ func TestGraphExecutionMemoriesEnvLegacySkipsRecall(t *testing.T) {
 		cfg:    Config{MemoryType: MemoryTypeLegacy},
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
-	if out := d.graphExecutionMemories(context.Background(), Task{ChatMessage: "hello"}, d.logger); out != nil {
-		t.Fatalf("graphExecutionMemories = %v, want nil under env legacy", out)
+	if current, research := d.graphExecutionMemories(context.Background(), Task{ChatMessage: "hello"}, d.logger); current != nil || research != nil {
+		t.Fatalf("graphExecutionMemories = (%v, %v), want nil under env legacy", current, research)
 	}
 }

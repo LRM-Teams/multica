@@ -11,6 +11,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/multica-ai/multica/server/internal/memorygraph"
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -52,4 +54,28 @@ func resolveGraphMemoryType(ctx context.Context, queries *db.Queries, workspaceI
 // graphMemoryEnvMemoryType reads the process-level memory_type default.
 func graphMemoryEnvMemoryType() string {
 	return strings.ToLower(strings.TrimSpace(os.Getenv("MULTICA_MEMORY_TYPE")))
+}
+
+// researchGraphDir resolves the workspace research graph directory for the
+// unification spec (§4.1), creating it with its immutable identity marker on
+// first use. It is a named workspace scope: exactly one per workspace, owned
+// by the workspace itself, resolved explicitly by the research exporter,
+// maintenance rounds, and federated recall — never a fallback. A workspace
+// that is not in graph memory mode resolves no research graph (fail closed).
+// Identity stamping matters because every identity-verified reader (federated
+// recall, the Director background provider) fails closed on a marker-less
+// directory, and the exporter is usually the graph's first creator.
+func researchGraphDir(ctx context.Context, queries *db.Queries, workspaceID pgtype.UUID) (string, error) {
+	if !workspaceID.Valid {
+		return "", fmt.Errorf("graph_scope_unresolved: invalid workspace id")
+	}
+	if resolveGraphMemoryType(ctx, queries, workspaceID, graphMemoryEnvMemoryType()) != "graph" {
+		return "", fmt.Errorf("graph_scope_unresolved: workspace is not in graph memory mode")
+	}
+	root, err := graphMemoryWorkspacesRoot()
+	if err != nil {
+		return "", err
+	}
+	ws := util.UUIDToString(workspaceID)
+	return memorygraph.EnsureScopedDir(root, ws, memorygraph.GraphDirKindResearch, ws)
 }

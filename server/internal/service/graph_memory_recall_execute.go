@@ -18,17 +18,22 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/multica-ai/multica/server/internal/memorygraph"
+	"github.com/multica-ai/multica/server/internal/util"
 )
 
 const (
 	graphMemoryRecallMaxSummaryChars  = 4000
 	graphMemoryRecallMaxCitationCount = 16
 	graphMemoryRecallTruncationMarker = "…[truncated]"
+
+	// Bounded research federation (spec §4.4): filtered retrieval only, no
+	// second Explore, no provider call.
+	researchRecallTopK         = 5
+	researchRecallMaxBodyChars = 600
 )
 
-// GraphMemoryRecallBackendFactory creates the provider backend for one
-// server-authoritative recall plan.
-type GraphMemoryRecallBackendFactory func(context.Context, *GraphMemoryRecallPlan) (memorygraph.AgentBackend, error)
+// GraphMemoryRecallBackendFactory constructs only the already-resolved backend.
+type GraphMemoryRecallBackendFactory func(ctx context.Context, policy ResolvedMemoryProvider) (memorygraph.AgentBackend, error)
 
 // GraphMemoryRecallInjection is the bounded result returned to a daemon. Its
 // content is rendered server-side so clients never run Explore locally.
@@ -37,25 +42,30 @@ type GraphMemoryRecallInjection struct {
 	Summary   string                 `json:"summary"`
 	Citations []memorygraph.Citation `json:"citations"`
 	Content   string                 `json:"content"`
-	Rounds    int                    `json:"rounds"`
-	Version   int                    `json:"version"`
+	// Research carries the federated research-graph section (spec §4.4) as
+	// its own injection so the daemon can express the 16 KiB trim order
+	// (historical first, then current, then research). Citations already
+	// include the qualified research entries.
+	Research string `json:"research"`
+	Rounds   int    `json:"rounds"`
+	Version  int    `json:"version"`
 }
 
 // GraphMemoryRecallExecutor owns synchronous Explore execution after Begin has
 // durably created the recall ledger rows.
 type GraphMemoryRecallExecutor struct {
-	pool           *pgxpool.Pool
-	dive           *GraphMemoryDiveService
-	backendFactory GraphMemoryRecallBackendFactory
-	embedder       *memorygraph.CachedEmbedder
-	traces         *memorygraph.TraceRecorder
-	model          string
-	priorFlights   singleflight.Group
+	pool         *pgxpool.Pool
+	dive         *GraphMemoryDiveService
+	policy       *MemoryProviderPolicyResolver
+	backendFor   GraphMemoryRecallBackendFactory
+	embedder     *memorygraph.CachedEmbedder
+	traces       *memorygraph.TraceRecorder
+	priorFlights singleflight.Group
 }
 
-func NewGraphMemoryRecallExecutor(pool *pgxpool.Pool, dive *GraphMemoryDiveService, backendFactory GraphMemoryRecallBackendFactory, embedder *memorygraph.CachedEmbedder, traces *memorygraph.TraceRecorder, model string) *GraphMemoryRecallExecutor {
+func NewGraphMemoryRecallExecutor(pool *pgxpool.Pool, dive *GraphMemoryDiveService, policy *MemoryProviderPolicyResolver, backendFor GraphMemoryRecallBackendFactory, embedder *memorygraph.CachedEmbedder, traces *memorygraph.TraceRecorder) *GraphMemoryRecallExecutor {
 	return &GraphMemoryRecallExecutor{
-		pool: pool, dive: dive, backendFactory: backendFactory, embedder: embedder, traces: traces, model: model,
+		pool: pool, dive: dive, policy: policy, backendFor: backendFor, embedder: embedder, traces: traces,
 	}
 }
 
@@ -66,23 +76,37 @@ func (e *GraphMemoryRecallExecutor) Execute(ctx context.Context, plan *GraphMemo
 	if e == nil || e.pool == nil {
 		return nil, fmt.Errorf("graph memory recall executor is not configured")
 	}
+	workspaceUUID, err := util.ParseUUID(plan.WorkspaceID)
+	if err != nil {
+		return e.executionFailure(ctx, plan, "provider policy: workspace id: "+err.Error(), "")
+	}
+	resolved, err := e.policy.Resolve(ctx, workspaceUUID, ProviderDive)
+	if err != nil {
+		return e.executionFailure(ctx, plan, "provider policy: "+err.Error(), "")
+	}
+
 	store := memorygraph.NewStore(plan.GraphDir)
 	if _, err := store.OpenSnapshot(plan.GraphVersion); err != nil {
-		return e.executionFailure(ctx, plan, "pinned graph unavailable: "+err.Error())
+		return e.executionFailure(ctx, plan, "pinned graph unavailable: "+err.Error(), resolved.Model)
 	}
 
 	retrievalCfg := memorygraph.DefaultRetrievalConfig()
 	retrievalCfg.View = plan.GraphView
 	retr := memorygraph.NewHybridRetriever(store, e.embedder, retrievalCfg)
 	if err := retr.RebuildForVersion(ctx, plan.GraphVersion); err != nil {
-		return e.executionFailure(ctx, plan, "pinned retriever unavailable: "+err.Error())
+		return e.executionFailure(ctx, plan, "pinned retriever unavailable: "+err.Error(), resolved.Model)
 	}
-	if e.backendFactory == nil {
-		return e.executionFailure(ctx, plan, "agent backend is not configured")
+	// Task 13 adoption: while the workspace's atom_search gate is green the
+	// walk's retriever carries the active-atom staging channel too (the same
+	// snapshot the seeder used). Any snapshot failure is non-fatal — the
+	// legacy graph-only walk continues unchanged.
+	installActiveAtomSnapshotIfAdopted(ctx, e.pool, workspaceUUID, plan.GraphView.ChannelID, retr)
+	if e.backendFor == nil {
+		return e.executionFailure(ctx, plan, "agent backend is not configured", resolved.Model)
 	}
-	backend, err := e.backendFactory(ctx, plan)
+	backend, err := e.backendFor(ctx, resolved)
 	if err != nil {
-		return e.executionFailure(ctx, plan, "agent backend: "+err.Error())
+		return e.executionFailure(ctx, plan, "agent backend: "+err.Error(), resolved.Model)
 	}
 
 	cfg := memorygraph.DefaultExploreConfig()
@@ -93,8 +117,8 @@ func (e *GraphMemoryRecallExecutor) Execute(ctx context.Context, plan *GraphMemo
 	if plan.Tunables.ExploreNodesPerExpansion > 0 {
 		cfg.ViewsPerExpansion = plan.Tunables.ExploreNodesPerExpansion
 	}
-	cfg.Model = e.model
-	explorer := memorygraph.NewExplorer(store, retr, backend, cfg, "pi", e.traces)
+	cfg.Model = resolved.Model
+	explorer := memorygraph.NewExplorer(store, retr, backend, cfg, resolved.Provider, e.traces)
 	explorer.PinVersion(plan.GraphVersion)
 	priorStore := memorygraph.NewPriorRecordStore(filepath.Join(plan.GraphDir, "continuation"))
 	ownerKey := graphPriorOwnerKey(plan)
@@ -102,11 +126,11 @@ func (e *GraphMemoryRecallExecutor) Execute(ctx context.Context, plan *GraphMemo
 	if rec, err := priorStore.Load(ownerKey); err != nil {
 		slog.Warn("graph memory recall: prior record load failed; continuing without prior", "recall_id", plan.RecallID, "error", err)
 	} else if rec != nil && rec.GraphVersion == plan.GraphVersion {
-		brief = e.priorBrief(ctx, plan, rec, priorStore, ownerKey, backend)
+		brief = e.priorBrief(ctx, plan, rec, priorStore, ownerKey, backend, resolved.Model)
 	}
 	result, err := explorer.ExploreWithPrior(ctx, plan.Query, plan.Seeds, brief)
 	if err != nil {
-		return e.executionFailure(ctx, plan, "explore: "+err.Error())
+		return e.executionFailure(ctx, plan, "explore: "+err.Error(), resolved.Model)
 	}
 	if err := memorygraph.NewQueryRecorder(store, "daemon").RecordRecall(memorygraph.QueryLogEntry{
 		TraceID:   plan.TraceID,
@@ -121,7 +145,7 @@ func (e *GraphMemoryRecallExecutor) Execute(ctx context.Context, plan *GraphMemo
 	}); err != nil {
 		slog.Warn("graph memory recall: query log append failed", "trace_id", plan.TraceID, "error", err)
 	}
-	if err := e.persistRuns(ctx, plan.RecallID, result.AgentRuns); err != nil {
+	if err := e.persistRuns(ctx, plan.RecallID, result.AgentRuns, resolved.Model); err != nil {
 		return nil, err
 	}
 	if err := e.enqueueDive(ctx, plan.RecallID); err != nil {
@@ -137,10 +161,135 @@ func (e *GraphMemoryRecallExecutor) Execute(ctx context.Context, plan *GraphMemo
 			slog.Warn("graph memory recall: prior record save failed", "recall_id", plan.RecallID, "error", err)
 		}
 	}
-	if !result.Found {
+	// Research federation (spec §4.4) joins after the primary explore: the
+	// research graph supplements scope-resolved recall but never substitutes
+	// for it. A primary miss plus research hits still surfaces knowledge.
+	researchContent, researchCitations := e.researchRecall(ctx, plan)
+	if !result.Found && researchContent == "" {
 		return &GraphMemoryRecallInjection{Version: plan.GraphVersion, Rounds: result.Rounds}, nil
 	}
-	return graphMemoryRecallInjection(store, plan.GraphVersion, result.Summary, result.NodeIDs, result.Rounds), nil
+	injection := &GraphMemoryRecallInjection{Version: plan.GraphVersion, Rounds: result.Rounds}
+	if result.Found {
+		injection = graphMemoryRecallInjection(store, plan.GraphVersion, result.Summary, result.NodeIDs, result.Rounds)
+	}
+	if researchContent != "" {
+		injection.Research = researchContent
+		injection.Citations = append(injection.Citations, researchCitations...)
+		injection.Found = true
+	}
+	return injection, nil
+}
+
+// researchRecall runs filtered retrieval over the federated research graph:
+// one bounded hybrid search under a research-only view, no second Explore and
+// no provider call (spec §4.4). Hits are recorded in the research graph's own
+// query log so federated reads drive its maintenance rounds. Every failure
+// degrades to empty — federation is additive and never blocks recall.
+func (e *GraphMemoryRecallExecutor) researchRecall(ctx context.Context, plan *GraphMemoryRecallPlan) (string, []memorygraph.Citation) {
+	if plan.Research == nil || strings.TrimSpace(plan.Query) == "" {
+		return "", nil
+	}
+	store := memorygraph.NewStore(plan.Research.Dir)
+	if _, err := store.OpenSnapshot(plan.Research.Version); err != nil {
+		slog.Warn("graph memory recall: research snapshot unavailable", "recall_id", plan.RecallID, "error", err)
+		return "", nil
+	}
+	cfg := memorygraph.DefaultRetrievalConfig()
+	cfg.View = plan.Research.View
+	cfg.TopK = researchRecallTopK
+	retr := memorygraph.NewHybridRetriever(store, e.embedder, cfg)
+	if err := retr.RebuildForVersion(ctx, plan.Research.Version); err != nil {
+		slog.Warn("graph memory recall: research retriever unavailable", "recall_id", plan.RecallID, "error", err)
+		return "", nil
+	}
+	docs, err := retr.Search(ctx, plan.Query)
+	if err != nil || len(docs) == 0 {
+		return "", nil
+	}
+	graph, err := memorygraph.LoadGraph(store, plan.Research.Version)
+	if err != nil {
+		return "", nil
+	}
+	hits := make([]researchRecallHit, 0, len(docs))
+	nodeIDs := make([]string, 0, len(docs))
+	for _, doc := range docs {
+		node := graph.Node(doc.ID)
+		if node == nil {
+			continue
+		}
+		nodeIDs = append(nodeIDs, node.NodeID)
+		hits = append(hits, researchRecallHit{
+			Citation: memorygraph.Citation{NodeID: node.NodeID, Level: node.Level, Epistemic: node.Epistemic},
+			Body:     node.Body,
+		})
+	}
+	if len(hits) == 0 {
+		return "", nil
+	}
+	if err := memorygraph.NewQueryRecorder(store, "daemon").RecordRecall(memorygraph.QueryLogEntry{
+		TraceID:   plan.TraceID,
+		Query:     plan.Query,
+		Timestamp: time.Now().UTC(),
+		Version:   plan.Research.Version,
+		NodeIDs:   nodeIDs,
+		Found:     true,
+	}); err != nil {
+		slog.Warn("graph memory recall: research query log append failed", "trace_id", plan.TraceID, "error", err)
+	}
+	section, qualified := researchRecallSection(plan.WorkspaceID, hits, nil)
+	return section, qualified
+}
+
+// researchRecallHit is one research retrieval hit with its markdown body for
+// the rendered section.
+type researchRecallHit struct {
+	Citation memorygraph.Citation
+	Body     string
+}
+
+// researchQualifiedNodeID graph-qualifies a research node id so citations
+// stay distinguishable from primary-graph ids: research:<workspace>/node:<id>.
+func researchQualifiedNodeID(workspaceID, nodeID string) string {
+	return "research:" + workspaceID + "/node:" + nodeID
+}
+
+// researchRecallSection renders the federated research section and returns
+// the merged citation list: qualified research entries first, then the bare
+// primary citations unchanged.
+func researchRecallSection(workspaceID string, hits []researchRecallHit, primary []memorygraph.Citation) (string, []memorygraph.Citation) {
+	if len(hits) == 0 {
+		return "", primary
+	}
+	citations := make([]memorygraph.Citation, 0, len(hits)+len(primary))
+	var b strings.Builder
+	b.WriteString("## Research Memory\n")
+	for _, hit := range hits {
+		qualifiedID := researchQualifiedNodeID(workspaceID, hit.Citation.NodeID)
+		citations = append(citations, memorygraph.Citation{
+			NodeID: qualifiedID, Level: hit.Citation.Level, Epistemic: hit.Citation.Epistemic,
+		})
+		b.WriteString("\n- ")
+		b.WriteString(qualifiedID)
+		var qualifiers []string
+		if hit.Citation.Epistemic != "" {
+			qualifiers = append(qualifiers, hit.Citation.Epistemic)
+		}
+		if len(qualifiers) > 0 {
+			b.WriteString(" (")
+			b.WriteString(strings.Join(qualifiers, ", "))
+			b.WriteString(")")
+		}
+		body := strings.TrimSpace(hit.Body)
+		if body != "" {
+			if runes := []rune(body); len(runes) > researchRecallMaxBodyChars {
+				body = string(runes[:researchRecallMaxBodyChars]) + graphMemoryRecallTruncationMarker
+			}
+			b.WriteString(": ")
+			b.WriteString(body)
+		}
+	}
+	citations = append(citations, primary...)
+	return b.String(), citations
 }
 
 // graphPriorOwnerKey is the per-channel continuation key: workspace +
@@ -155,7 +304,7 @@ func graphPriorOwnerKey(plan *GraphMemoryRecallPlan) string {
 // priorBrief resolves the query-aware brief for this recall: exact-match
 // cache on the normalized query, then a singleflight-compressed miss. Every
 // failure degrades to nil so recall continues without prior evidence.
-func (e *GraphMemoryRecallExecutor) priorBrief(ctx context.Context, plan *GraphMemoryRecallPlan, rec *memorygraph.PriorRecord, store *memorygraph.PriorRecordStore, ownerKey string, backend memorygraph.AgentBackend) *memorygraph.PriorBrief {
+func (e *GraphMemoryRecallExecutor) priorBrief(ctx context.Context, plan *GraphMemoryRecallPlan, rec *memorygraph.PriorRecord, store *memorygraph.PriorRecordStore, ownerKey string, backend memorygraph.AgentBackend, model string) *memorygraph.PriorBrief {
 	key := memorygraph.NormalizeRecallKey(plan.Query)
 	if key == "" {
 		return nil
@@ -167,7 +316,7 @@ func (e *GraphMemoryRecallExecutor) priorBrief(ctx context.Context, plan *GraphM
 	flightKey := ownerKey + "|" + strconv.Itoa(rec.GraphVersion) + "|" + key
 	started := time.Now()
 	v, err, _ := e.priorFlights.Do(flightKey, func() (any, error) {
-		return memorygraph.NewPriorCompressor(backend, e.model, memorygraph.DefaultPriorCompressionTimeout).
+		return memorygraph.NewPriorCompressor(backend, model, memorygraph.DefaultPriorCompressionTimeout).
 			Compress(ctx, plan.Query, rec.Transcript)
 	})
 	if err != nil {
@@ -191,8 +340,8 @@ func (e *GraphMemoryRecallExecutor) priorBrief(ctx context.Context, plan *GraphM
 	return brief
 }
 
-func (e *GraphMemoryRecallExecutor) executionFailure(ctx context.Context, plan *GraphMemoryRecallPlan, reason string) (*GraphMemoryRecallInjection, error) {
-	if err := e.persistFailure(ctx, plan.RecallID, reason); err != nil {
+func (e *GraphMemoryRecallExecutor) executionFailure(ctx context.Context, plan *GraphMemoryRecallPlan, reason, model string) (*GraphMemoryRecallInjection, error) {
+	if err := e.persistFailure(ctx, plan.RecallID, reason, model); err != nil {
 		return nil, err
 	}
 	if err := e.enqueueDive(ctx, plan.RecallID); err != nil {
@@ -209,7 +358,7 @@ func (e *GraphMemoryRecallExecutor) enqueueDive(ctx context.Context, recallID st
 	return err
 }
 
-func (e *GraphMemoryRecallExecutor) persistFailure(ctx context.Context, recallID, reason string) error {
+func (e *GraphMemoryRecallExecutor) persistFailure(ctx context.Context, recallID, reason, model string) error {
 	tx, err := e.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -220,7 +369,7 @@ func (e *GraphMemoryRecallExecutor) persistFailure(ctx context.Context, recallID
 		SET status = 'error', error_kind = 'error', summary = '', viewed_node_ids = '[]'::jsonb,
 			submitted_node_ids = '[]'::jsonb, rounds = 0, model = $2, terminal_at = now(), updated_at = now()
 		WHERE recall_id = $1
-	`, recallID, e.model); err != nil {
+	`, recallID, model); err != nil {
 		return fmt.Errorf("graph memory recall: mark trajectories failed (%s): %w", reason, err)
 	}
 	if _, err := tx.Exec(ctx, `
@@ -232,7 +381,7 @@ func (e *GraphMemoryRecallExecutor) persistFailure(ctx context.Context, recallID
 	return tx.Commit(ctx)
 }
 
-func (e *GraphMemoryRecallExecutor) persistRuns(ctx context.Context, recallID string, runs []memorygraph.ExploreRun) error {
+func (e *GraphMemoryRecallExecutor) persistRuns(ctx context.Context, recallID string, runs []memorygraph.ExploreRun, model string) error {
 	tx, err := e.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -260,7 +409,7 @@ func (e *GraphMemoryRecallExecutor) persistRuns(ctx context.Context, recallID st
 			SET status = $3, error_kind = $4, summary = $5, viewed_node_ids = $6,
 				submitted_node_ids = $7, rounds = $8, model = $9, terminal_at = now(), updated_at = now()
 			WHERE recall_id = $1 AND seed_index = $2
-		`, recallID, run.Seed, status, errorKind, run.Summary, viewed, submitted, run.Rounds, e.model); err != nil {
+		`, recallID, run.Seed, status, errorKind, run.Summary, viewed, submitted, run.Rounds, model); err != nil {
 			return fmt.Errorf("graph memory recall: persist trajectory %d: %w", run.Seed, err)
 		}
 	}

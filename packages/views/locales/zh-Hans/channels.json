@@ -891,6 +891,17 @@
     "citations": "记忆来源",
     "citation_version": "图版本 v{version}",
     "citation_loading": "正在加载来源…",
-    "citation_empty": "没有可用的来源快照"
+    "citation_empty": "没有可用的来源快照",
+    "citation_class_consolidated": "已巩固记忆",
+    "citation_class_recent_unreviewed": "近期未审查观察",
+    "citation_class_historical": "历史/已被取代的证据",
+    "citation_class_restricted": "受限来源",
+    "citation_class_retracted": "已撤回来源",
+    "citation_restricted_note": "该受限来源的详情已被扣留。",
+    "citation_retracted_note": "该来源已被撤回，内容不可用。",
+    "migration_title": "记忆迁移",
+    "migration_phase": "阶段：{phase}",
+    "migration_generation": "第 {generation} 代",
+    "migration_copied": "已复制 {count} 个 Atom"
   }
 }

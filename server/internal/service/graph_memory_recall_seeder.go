@@ -15,7 +15,9 @@ import (
 type GraphMemoryHybridSeeder struct{}
 
 // Seeds returns the round-0 candidate node ids for one pinned graph version.
-func (GraphMemoryHybridSeeder) Seeds(ctx context.Context, dir string, version int, query string, view memorygraph.GraphView) ([]string, error) {
+// The workspace id is accepted for interface parity; the legacy hybrid
+// channel is workspace-unscoped by construction.
+func (GraphMemoryHybridSeeder) Seeds(ctx context.Context, workspaceID, dir string, version int, query string, view memorygraph.GraphView) ([]string, error) {
 	store := memorygraph.NewStore(dir)
 	cfg := memorygraph.DefaultRetrievalConfig()
 	cfg.View = view

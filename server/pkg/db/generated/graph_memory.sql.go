@@ -11,6 +11,23 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const abortGraphMemoryChannelMigration = `-- name: AbortGraphMemoryChannelMigration :exec
+UPDATE graph_memory_channel_migration_state
+SET phase = 'aborted', error = $3, updated_at = now()
+WHERE channel_id = $1 AND binding_generation = $2
+`
+
+type AbortGraphMemoryChannelMigrationParams struct {
+	ChannelID         pgtype.UUID `json:"channel_id"`
+	BindingGeneration int64       `json:"binding_generation"`
+	Error             string      `json:"error"`
+}
+
+func (q *Queries) AbortGraphMemoryChannelMigration(ctx context.Context, arg AbortGraphMemoryChannelMigrationParams) error {
+	_, err := q.db.Exec(ctx, abortGraphMemoryChannelMigration, arg.ChannelID, arg.BindingGeneration, arg.Error)
+	return err
+}
+
 const appendGraphMemoryChannelLineage = `-- name: AppendGraphMemoryChannelLineage :exec
 INSERT INTO graph_memory_channel_lineage
   (workspace_id, channel_id, generation, graph_kind, graph_owner_id)
@@ -36,6 +53,219 @@ func (q *Queries) AppendGraphMemoryChannelLineage(ctx context.Context, arg Appen
 	return err
 }
 
+const archiveDueGraphMemoryBlobs = `-- name: ArchiveDueGraphMemoryBlobs :many
+SELECT b.id, b.workspace_id, b.storage_url, b.blob_sha256, b.size_bytes, b.created_at
+FROM graph_memory_blob b
+WHERE b.workspace_id = $1
+  AND b.status = 'active'
+  AND b.created_at <= $2
+  AND EXISTS (
+      SELECT 1 FROM graph_memory_blob_ref r
+      WHERE r.blob_id = b.id AND r.released_at IS NULL AND r.ref_kind = 'graph_source'
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM memory_archive_manifest m
+      WHERE m.blob_id = b.id AND m.workspace_id = b.workspace_id
+  )
+LIMIT $3
+`
+
+type ArchiveDueGraphMemoryBlobsParams struct {
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	LimitCount  int32              `json:"limit_count"`
+}
+
+type ArchiveDueGraphMemoryBlobsRow struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	StorageUrl  string             `json:"storage_url"`
+	BlobSha256  string             `json:"blob_sha256"`
+	SizeBytes   int64              `json:"size_bytes"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+// Active blobs backing at least one open graph_source ref, older than the
+// caller's policy cutoff: the hot physical trajectory/source layer.
+func (q *Queries) ArchiveDueGraphMemoryBlobs(ctx context.Context, arg ArchiveDueGraphMemoryBlobsParams) ([]ArchiveDueGraphMemoryBlobsRow, error) {
+	rows, err := q.db.Query(ctx, archiveDueGraphMemoryBlobs, arg.WorkspaceID, arg.CreatedAt, arg.LimitCount)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ArchiveDueGraphMemoryBlobsRow{}
+	for rows.Next() {
+		var i ArchiveDueGraphMemoryBlobsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.StorageUrl,
+			&i.BlobSha256,
+			&i.SizeBytes,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const cASPublishGraphMemoryGeneration = `-- name: CASPublishGraphMemoryGeneration :execrows
+INSERT INTO graph_memory_publication (
+    workspace_id, graph_kind, graph_owner_id, current_generation,
+    graph_version, file_manifest_hash, published_by
+) VALUES (
+    $1, $2, $3,
+    $4 + 1,
+    $5, $6, $7
+) ON CONFLICT (workspace_id, graph_kind, graph_owner_id) DO UPDATE
+SET current_generation = $4 + 1,
+    graph_version = $5,
+    file_manifest_hash = $6,
+    published_at = now(),
+    published_by = $7
+WHERE graph_memory_publication.current_generation = $4
+`
+
+type CASPublishGraphMemoryGenerationParams struct {
+	WorkspaceID      pgtype.UUID `json:"workspace_id"`
+	GraphKind        string      `json:"graph_kind"`
+	GraphOwnerID     pgtype.UUID `json:"graph_owner_id"`
+	BaseGeneration   interface{} `json:"base_generation"`
+	GraphVersion     int32       `json:"graph_version"`
+	FileManifestHash string      `json:"file_manifest_hash"`
+	PublishedBy      string      `json:"published_by"`
+}
+
+// The publication CAS: generation advances only while the row still holds
+// the base generation the candidate planned against. Zero rows affected
+// means a concurrent publication won and this candidate is stale.
+func (q *Queries) CASPublishGraphMemoryGeneration(ctx context.Context, arg CASPublishGraphMemoryGenerationParams) (int64, error) {
+	result, err := q.db.Exec(ctx, cASPublishGraphMemoryGeneration,
+		arg.WorkspaceID,
+		arg.GraphKind,
+		arg.GraphOwnerID,
+		arg.BaseGeneration,
+		arg.GraphVersion,
+		arg.FileManifestHash,
+		arg.PublishedBy,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const channelMigrationGateOpen = `-- name: ChannelMigrationGateOpen :one
+SELECT EXISTS (
+    SELECT 1 FROM memory_read_phase_gate
+    WHERE workspace_id = $1 AND channel_migration_enabled AND retraction_canary_ok
+)
+`
+
+func (q *Queries) ChannelMigrationGateOpen(ctx context.Context, workspaceID pgtype.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, channelMigrationGateOpen, workspaceID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
+const claimGraphMemoryChannelMigration = `-- name: ClaimGraphMemoryChannelMigration :exec
+UPDATE graph_memory_channel_migration_state
+SET phase = 'copying', updated_at = now()
+WHERE channel_id = $1 AND binding_generation = $2
+  AND phase IN ('pending', 'copying')
+`
+
+type ClaimGraphMemoryChannelMigrationParams struct {
+	ChannelID         pgtype.UUID `json:"channel_id"`
+	BindingGeneration int64       `json:"binding_generation"`
+}
+
+// Worker claim: pending -> copying (idempotent replay finishes a stuck
+// copying row instead of duplicating it).
+func (q *Queries) ClaimGraphMemoryChannelMigration(ctx context.Context, arg ClaimGraphMemoryChannelMigrationParams) error {
+	_, err := q.db.Exec(ctx, claimGraphMemoryChannelMigration, arg.ChannelID, arg.BindingGeneration)
+	return err
+}
+
+const claimGraphMemoryProjectionOutbox = `-- name: ClaimGraphMemoryProjectionOutbox :many
+WITH claimable AS (
+  SELECT workspace_id, segment_id
+  FROM graph_memory_projection_outbox
+  WHERE status = 'pending'
+     OR (status = 'retry' AND next_attempt_at <= now())
+     OR (status = 'processing' AND lease_expires_at < now())
+  ORDER BY updated_at, segment_id
+  LIMIT $1
+  FOR UPDATE SKIP LOCKED
+), leased AS (
+  UPDATE graph_memory_projection_outbox AS outbox
+  SET status = 'processing',
+      lease_owner = $2,
+      lease_expires_at = $3,
+      next_attempt_at = NULL,
+      updated_at = now()
+  FROM claimable
+  WHERE outbox.workspace_id = claimable.workspace_id
+    AND outbox.segment_id = claimable.segment_id
+  RETURNING outbox.workspace_id, outbox.segment_id, outbox.request_hash,
+            outbox.attempts, outbox.route_generation
+)
+SELECT leased.workspace_id, leased.segment_id, leased.request_hash,
+       leased.attempts, leased.route_generation
+FROM leased
+ORDER BY leased.segment_id
+`
+
+type ClaimGraphMemoryProjectionOutboxParams struct {
+	MaxRows        int32              `json:"max_rows"`
+	LeaseOwner     pgtype.Text        `json:"lease_owner"`
+	LeaseExpiresAt pgtype.Timestamptz `json:"lease_expires_at"`
+}
+
+type ClaimGraphMemoryProjectionOutboxRow struct {
+	WorkspaceID     pgtype.UUID `json:"workspace_id"`
+	SegmentID       string      `json:"segment_id"`
+	RequestHash     string      `json:"request_hash"`
+	Attempts        int32       `json:"attempts"`
+	RouteGeneration pgtype.Int8 `json:"route_generation"`
+}
+
+// Leases claimable graph projection requests: pending rows, retry rows whose
+// backoff elapsed, and processing rows whose lease expired. Concurrent
+// projectors claim disjoint sets. This outbox is the ONLY work-discovery
+// surface for graph projection (Task 8): nothing scans segments or atoms.
+func (q *Queries) ClaimGraphMemoryProjectionOutbox(ctx context.Context, arg ClaimGraphMemoryProjectionOutboxParams) ([]ClaimGraphMemoryProjectionOutboxRow, error) {
+	rows, err := q.db.Query(ctx, claimGraphMemoryProjectionOutbox, arg.MaxRows, arg.LeaseOwner, arg.LeaseExpiresAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ClaimGraphMemoryProjectionOutboxRow{}
+	for rows.Next() {
+		var i ClaimGraphMemoryProjectionOutboxRow
+		if err := rows.Scan(
+			&i.WorkspaceID,
+			&i.SegmentID,
+			&i.RequestHash,
+			&i.Attempts,
+			&i.RouteGeneration,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const closeGraphMemoryChannelLineage = `-- name: CloseGraphMemoryChannelLineage :exec
 UPDATE graph_memory_channel_lineage SET valid_to = now()
 WHERE channel_id = $1 AND generation = $2 AND valid_to IS NULL
@@ -49,6 +279,153 @@ type CloseGraphMemoryChannelLineageParams struct {
 func (q *Queries) CloseGraphMemoryChannelLineage(ctx context.Context, arg CloseGraphMemoryChannelLineageParams) error {
 	_, err := q.db.Exec(ctx, closeGraphMemoryChannelLineage, arg.ChannelID, arg.Generation)
 	return err
+}
+
+const completeGraphMemoryProjection = `-- name: CompleteGraphMemoryProjection :execrows
+UPDATE graph_memory_projection_outbox
+SET status = 'completed',
+    lease_owner = NULL,
+    lease_expires_at = NULL,
+    next_attempt_at = NULL,
+    last_error = NULL,
+    completed_at = now(),
+    updated_at = now()
+WHERE workspace_id = $1
+  AND segment_id = $2
+  AND status = 'processing'
+`
+
+type CompleteGraphMemoryProjectionParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	SegmentID   string      `json:"segment_id"`
+}
+
+func (q *Queries) CompleteGraphMemoryProjection(ctx context.Context, arg CompleteGraphMemoryProjectionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, completeGraphMemoryProjection, arg.WorkspaceID, arg.SegmentID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const countPublishedSegmentsForTask = `-- name: CountPublishedSegmentsForTask :one
+SELECT count(*) FROM interaction_dag_segment
+WHERE workspace_id = $1 AND agent_run_id = $2 AND content_status = 'published'
+`
+
+type CountPublishedSegmentsForTaskParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	AgentRunID  pgtype.UUID `json:"agent_run_id"`
+}
+
+// Completed non-rolled-back outcome evidence: the canonical task has at
+// least one published (not retracted/dead-lettered) DAG segment.
+func (q *Queries) CountPublishedSegmentsForTask(ctx context.Context, arg CountPublishedSegmentsForTaskParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countPublishedSegmentsForTask, arg.WorkspaceID, arg.AgentRunID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countScopeUncoveredActiveAtoms = `-- name: CountScopeUncoveredActiveAtoms :one
+SELECT
+    COUNT(*) FILTER (WHERE NOT EXISTS (
+        SELECT 1
+        FROM graph_memory_publication_coverage cov
+        JOIN graph_memory_publication_index idx
+          ON idx.workspace_id = cov.workspace_id
+         AND idx.graph_kind = cov.graph_kind
+         AND idx.graph_owner_id = cov.graph_owner_id
+         AND idx.active_generation = cov.generation
+        WHERE cov.workspace_id = atom.workspace_id
+          AND cov.graph_kind = $1
+          AND cov.graph_owner_id = $2
+          AND cov.atom_id = atom.atom_id
+    ))::bigint AS uncovered_count,
+    COUNT(*)::bigint AS total_count
+FROM graph_memory_atom atom
+WHERE atom.workspace_id = $3
+  AND (
+        ($4::text <> '' AND atom.channel_id::text = $4)
+     OR ($4::text = '' AND atom.channel_id IS NULL AND atom.project_id IS NOT NULL)
+  )
+  AND NOT EXISTS (
+        SELECT 1 FROM quarantined_pending_recompute q
+        WHERE q.workspace_id = atom.workspace_id
+          AND q.consumer_kind = 'graph_memory_atom' AND q.consumer_id = atom.atom_id
+  )
+`
+
+type CountScopeUncoveredActiveAtomsParams struct {
+	GraphKind      string      `json:"graph_kind"`
+	GraphOwnerID   pgtype.UUID `json:"graph_owner_id"`
+	WorkspaceID    pgtype.UUID `json:"workspace_id"`
+	ScopeChannelID string      `json:"scope_channel_id"`
+}
+
+type CountScopeUncoveredActiveAtomsRow struct {
+	UncoveredCount int64 `json:"uncovered_count"`
+	TotalCount     int64 `json:"total_count"`
+}
+
+// Task 14 scheduler trigger input: the scope's active atoms the active
+// publication generation has not covered yet, plus the scope's total
+// active atom count (the failure-backoff watermark). Staging files are
+// never replayed; a quarantined atom leaves both counts.
+func (q *Queries) CountScopeUncoveredActiveAtoms(ctx context.Context, arg CountScopeUncoveredActiveAtomsParams) (CountScopeUncoveredActiveAtomsRow, error) {
+	row := q.db.QueryRow(ctx, countScopeUncoveredActiveAtoms,
+		arg.GraphKind,
+		arg.GraphOwnerID,
+		arg.WorkspaceID,
+		arg.ScopeChannelID,
+	)
+	var i CountScopeUncoveredActiveAtomsRow
+	err := row.Scan(&i.UncoveredCount, &i.TotalCount)
+	return i, err
+}
+
+const coverageAtomsForSegments = `-- name: CoverageAtomsForSegments :many
+SELECT cov.atom_id, cov.segment_id
+FROM graph_memory_publication_coverage cov
+JOIN graph_memory_publication_index idx
+  ON idx.workspace_id = cov.workspace_id
+ AND idx.graph_kind = cov.graph_kind
+ AND idx.graph_owner_id = cov.graph_owner_id
+ AND idx.active_generation = cov.generation
+WHERE cov.workspace_id = $1::uuid
+  AND cov.segment_id = ANY ($2::text[])
+`
+
+type CoverageAtomsForSegmentsParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	SegmentIds  []string    `json:"segment_ids"`
+}
+
+type CoverageAtomsForSegmentsRow struct {
+	AtomID    string `json:"atom_id"`
+	SegmentID string `json:"segment_id"`
+}
+
+// Active-generation coverage rows for the given segments, used to build the
+// atom manifest of a publication candidate from DB-authoritative state.
+func (q *Queries) CoverageAtomsForSegments(ctx context.Context, arg CoverageAtomsForSegmentsParams) ([]CoverageAtomsForSegmentsRow, error) {
+	rows, err := q.db.Query(ctx, coverageAtomsForSegments, arg.WorkspaceID, arg.SegmentIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CoverageAtomsForSegmentsRow{}
+	for rows.Next() {
+		var i CoverageAtomsForSegmentsRow
+		if err := rows.Scan(&i.AtomID, &i.SegmentID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const createGraphMemoryProfile = `-- name: CreateGraphMemoryProfile :one
@@ -179,6 +556,233 @@ func (q *Queries) CreateGraphMemoryProfile(ctx context.Context, arg CreateGraphM
 	return i, err
 }
 
+const currentMemoryRetentionPolicy = `-- name: CurrentMemoryRetentionPolicy :one
+SELECT workspace_id, version, trajectory_hot_days, archive_days, trace_hot_days, updated_by, created_at
+FROM memory_retention_policy
+WHERE workspace_id = $1
+ORDER BY version DESC
+LIMIT 1
+`
+
+func (q *Queries) CurrentMemoryRetentionPolicy(ctx context.Context, workspaceID pgtype.UUID) (MemoryRetentionPolicy, error) {
+	row := q.db.QueryRow(ctx, currentMemoryRetentionPolicy, workspaceID)
+	var i MemoryRetentionPolicy
+	err := row.Scan(
+		&i.WorkspaceID,
+		&i.Version,
+		&i.TrajectoryHotDays,
+		&i.ArchiveDays,
+		&i.TraceHotDays,
+		&i.UpdatedBy,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const enqueueGraphMemoryProjection = `-- name: EnqueueGraphMemoryProjection :execrows
+INSERT INTO graph_memory_projection_outbox (
+  workspace_id, segment_id, request_hash, route_generation
+) VALUES (
+  $1, $2, $3,
+  $4
+) ON CONFLICT (workspace_id, segment_id) DO NOTHING
+`
+
+type EnqueueGraphMemoryProjectionParams struct {
+	WorkspaceID     pgtype.UUID `json:"workspace_id"`
+	SegmentID       string      `json:"segment_id"`
+	RequestHash     string      `json:"request_hash"`
+	RouteGeneration pgtype.Int8 `json:"route_generation"`
+}
+
+// The durable graph projection request, written in the same publish
+// transaction as the atoms it covers (Task 8 consumes it; nothing scans).
+func (q *Queries) EnqueueGraphMemoryProjection(ctx context.Context, arg EnqueueGraphMemoryProjectionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, enqueueGraphMemoryProjection,
+		arg.WorkspaceID,
+		arg.SegmentID,
+		arg.RequestHash,
+		arg.RouteGeneration,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const ensureBootstrapMemoryRetentionPolicy = `-- name: EnsureBootstrapMemoryRetentionPolicy :execrows
+
+INSERT INTO memory_retention_policy (workspace_id, version, trajectory_hot_days, archive_days, trace_hot_days, updated_by)
+SELECT $1::uuid, 1, 90, 365, 30, 'bootstrap'
+WHERE NOT EXISTS (
+    SELECT 1 FROM memory_retention_policy WHERE workspace_id = $1::uuid
+)
+`
+
+// ===========================================================================
+// Task 17: versioned retention, encrypted archive, restore leases, sweeps.
+// ===========================================================================
+// New workspaces bind to the explicit bootstrap version 1 (90/365/30);
+// no runtime default silently creates or lengthens retention.
+func (q *Queries) EnsureBootstrapMemoryRetentionPolicy(ctx context.Context, workspaceID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, ensureBootstrapMemoryRetentionPolicy, workspaceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const eraseMemoryArchiveManifest = `-- name: EraseMemoryArchiveManifest :execrows
+UPDATE memory_archive_manifest
+SET status = 'erased', erased_at = now()
+WHERE id = $1 AND status = 'archived'
+`
+
+func (q *Queries) EraseMemoryArchiveManifest(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, eraseMemoryArchiveManifest, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const existsWorkspaceMember = `-- name: ExistsWorkspaceMember :one
+SELECT EXISTS (SELECT 1 FROM member WHERE workspace_id = $1 AND user_id = $2)
+`
+
+type ExistsWorkspaceMemberParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	UserID      pgtype.UUID `json:"user_id"`
+}
+
+// Event-time author permission ground: the author is a workspace member.
+func (q *Queries) ExistsWorkspaceMember(ctx context.Context, arg ExistsWorkspaceMemberParams) (bool, error) {
+	row := q.db.QueryRow(ctx, existsWorkspaceMember, arg.WorkspaceID, arg.UserID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
+const failGraphMemoryProjection = `-- name: FailGraphMemoryProjection :execrows
+UPDATE graph_memory_projection_outbox
+SET status = $1,
+    attempts = GREATEST(attempts, $2),
+    lease_owner = NULL,
+    lease_expires_at = NULL,
+    next_attempt_at = NULL,
+    last_error = $3,
+    updated_at = now()
+WHERE workspace_id = $4
+  AND segment_id = $5
+  AND status = 'processing'
+`
+
+type FailGraphMemoryProjectionParams struct {
+	TerminalStatus string      `json:"terminal_status"`
+	Attempts       int32       `json:"attempts"`
+	LastError      pgtype.Text `json:"last_error"`
+	WorkspaceID    pgtype.UUID `json:"workspace_id"`
+	SegmentID      string      `json:"segment_id"`
+}
+
+func (q *Queries) FailGraphMemoryProjection(ctx context.Context, arg FailGraphMemoryProjectionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, failGraphMemoryProjection,
+		arg.TerminalStatus,
+		arg.Attempts,
+		arg.LastError,
+		arg.WorkspaceID,
+		arg.SegmentID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const fenceMemorySourceGuard = `-- name: FenceMemorySourceGuard :execrows
+UPDATE memory_source_guard
+SET retracted_at = now(),
+    retracted_by = $1,
+    reason = $2,
+    updated_at = now()
+WHERE workspace_id = $3
+  AND (source_kind || ':' || source_id) = ANY ($4::text[])
+  AND retracted_at IS NULL
+`
+
+type FenceMemorySourceGuardParams struct {
+	RetractedBy string      `json:"retracted_by"`
+	Reason      string      `json:"reason"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	SourceKeys  []string    `json:"source_keys"`
+}
+
+func (q *Queries) FenceMemorySourceGuard(ctx context.Context, arg FenceMemorySourceGuardParams) (int64, error) {
+	result, err := q.db.Exec(ctx, fenceMemorySourceGuard,
+		arg.RetractedBy,
+		arg.Reason,
+		arg.WorkspaceID,
+		arg.SourceKeys,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const fenceWorkspaceMemorySourceGuards = `-- name: FenceWorkspaceMemorySourceGuards :execrows
+UPDATE memory_source_guard
+SET retracted_at = now(),
+    retracted_by = $1,
+    reason = $2,
+    updated_at = now()
+WHERE workspace_id = $3
+  AND retracted_at IS NULL
+`
+
+type FenceWorkspaceMemorySourceGuardsParams struct {
+	RetractedBy string      `json:"retracted_by"`
+	Reason      string      `json:"reason"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+// Set-based fence of every canonical source in the workspace (Task 8A
+// workspace bulk delete). The UPDATE takes the row locks itself; rows
+// already retracted keep their original attribution.
+func (q *Queries) FenceWorkspaceMemorySourceGuards(ctx context.Context, arg FenceWorkspaceMemorySourceGuardsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, fenceWorkspaceMemorySourceGuards, arg.RetractedBy, arg.Reason, arg.WorkspaceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const finishGraphMemoryChannelMigration = `-- name: FinishGraphMemoryChannelMigration :exec
+UPDATE graph_memory_channel_migration_state
+SET phase = 'completed', copied_atoms = $3, copied_nodes = $4, copied_edges = $5,
+    error = '', updated_at = now()
+WHERE channel_id = $1 AND binding_generation = $2
+`
+
+type FinishGraphMemoryChannelMigrationParams struct {
+	ChannelID         pgtype.UUID `json:"channel_id"`
+	BindingGeneration int64       `json:"binding_generation"`
+	CopiedAtoms       int32       `json:"copied_atoms"`
+	CopiedNodes       int32       `json:"copied_nodes"`
+	CopiedEdges       int32       `json:"copied_edges"`
+}
+
+func (q *Queries) FinishGraphMemoryChannelMigration(ctx context.Context, arg FinishGraphMemoryChannelMigrationParams) error {
+	_, err := q.db.Exec(ctx, finishGraphMemoryChannelMigration,
+		arg.ChannelID,
+		arg.BindingGeneration,
+		arg.CopiedAtoms,
+		arg.CopiedNodes,
+		arg.CopiedEdges,
+	)
+	return err
+}
+
 const finishGraphMemoryConsolidationRun = `-- name: FinishGraphMemoryConsolidationRun :exec
 UPDATE graph_memory_consolidation_run
 SET status = $2, error = $3, details = $4, started_at = COALESCE(started_at, now()), finished_at = now()
@@ -202,6 +806,81 @@ func (q *Queries) FinishGraphMemoryConsolidationRun(ctx context.Context, arg Fin
 	return err
 }
 
+const getChannelMessageForPromotion = `-- name: GetChannelMessageForPromotion :one
+SELECT author_type, author_id, channel_id FROM channel_message
+WHERE id = $1 AND workspace_id = $2
+`
+
+type GetChannelMessageForPromotionParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+type GetChannelMessageForPromotionRow struct {
+	AuthorType string      `json:"author_type"`
+	AuthorID   pgtype.UUID `json:"author_id"`
+	ChannelID  pgtype.UUID `json:"channel_id"`
+}
+
+// Human-confirmation evidence: the message, its author, and its channel.
+func (q *Queries) GetChannelMessageForPromotion(ctx context.Context, arg GetChannelMessageForPromotionParams) (GetChannelMessageForPromotionRow, error) {
+	row := q.db.QueryRow(ctx, getChannelMessageForPromotion, arg.ID, arg.WorkspaceID)
+	var i GetChannelMessageForPromotionRow
+	err := row.Scan(&i.AuthorType, &i.AuthorID, &i.ChannelID)
+	return i, err
+}
+
+const getGraphMemoryChannelBinding = `-- name: GetGraphMemoryChannelBinding :one
+
+SELECT project_id FROM channel WHERE id = $1 AND workspace_id = $2
+`
+
+type GetGraphMemoryChannelBindingParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+// ============ Task 15: durable-evidence Project promotion ============
+// The channel's current project binding (plain read; the locking variant is
+// reserved for route transitions).
+func (q *Queries) GetGraphMemoryChannelBinding(ctx context.Context, arg GetGraphMemoryChannelBindingParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getGraphMemoryChannelBinding, arg.ID, arg.WorkspaceID)
+	var project_id pgtype.UUID
+	err := row.Scan(&project_id)
+	return project_id, err
+}
+
+const getGraphMemoryChannelBindingByGeneration = `-- name: GetGraphMemoryChannelBindingByGeneration :one
+SELECT id, workspace_id, channel_id, generation, old_project_id, new_project_id, route_kind, route_owner_id, route_generation, source_watermark, actor, txid, created_at FROM graph_memory_channel_binding
+WHERE channel_id = $1 AND generation = $2
+`
+
+type GetGraphMemoryChannelBindingByGenerationParams struct {
+	ChannelID  pgtype.UUID `json:"channel_id"`
+	Generation int64       `json:"generation"`
+}
+
+func (q *Queries) GetGraphMemoryChannelBindingByGeneration(ctx context.Context, arg GetGraphMemoryChannelBindingByGenerationParams) (GraphMemoryChannelBinding, error) {
+	row := q.db.QueryRow(ctx, getGraphMemoryChannelBindingByGeneration, arg.ChannelID, arg.Generation)
+	var i GraphMemoryChannelBinding
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ChannelID,
+		&i.Generation,
+		&i.OldProjectID,
+		&i.NewProjectID,
+		&i.RouteKind,
+		&i.RouteOwnerID,
+		&i.RouteGeneration,
+		&i.SourceWatermark,
+		&i.Actor,
+		&i.Txid,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getGraphMemoryChannelBindingForUpdate = `-- name: GetGraphMemoryChannelBindingForUpdate :one
 SELECT project_id FROM channel
 WHERE id = $1 AND workspace_id = $2
@@ -218,6 +897,65 @@ func (q *Queries) GetGraphMemoryChannelBindingForUpdate(ctx context.Context, arg
 	var project_id pgtype.UUID
 	err := row.Scan(&project_id)
 	return project_id, err
+}
+
+const getGraphMemoryChannelMigrationState = `-- name: GetGraphMemoryChannelMigrationState :one
+SELECT workspace_id, channel_id, binding_generation, phase, source_watermark, copied_atoms, copied_nodes, copied_edges, error, created_at, updated_at FROM graph_memory_channel_migration_state
+WHERE channel_id = $1 AND binding_generation = $2
+`
+
+type GetGraphMemoryChannelMigrationStateParams struct {
+	ChannelID         pgtype.UUID `json:"channel_id"`
+	BindingGeneration int64       `json:"binding_generation"`
+}
+
+func (q *Queries) GetGraphMemoryChannelMigrationState(ctx context.Context, arg GetGraphMemoryChannelMigrationStateParams) (GraphMemoryChannelMigrationState, error) {
+	row := q.db.QueryRow(ctx, getGraphMemoryChannelMigrationState, arg.ChannelID, arg.BindingGeneration)
+	var i GraphMemoryChannelMigrationState
+	err := row.Scan(
+		&i.WorkspaceID,
+		&i.ChannelID,
+		&i.BindingGeneration,
+		&i.Phase,
+		&i.SourceWatermark,
+		&i.CopiedAtoms,
+		&i.CopiedNodes,
+		&i.CopiedEdges,
+		&i.Error,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getGraphMemoryChannelMigrationStateForUpdate = `-- name: GetGraphMemoryChannelMigrationStateForUpdate :one
+SELECT workspace_id, channel_id, binding_generation, phase, source_watermark, copied_atoms, copied_nodes, copied_edges, error, created_at, updated_at FROM graph_memory_channel_migration_state
+WHERE channel_id = $1 AND binding_generation = $2
+FOR UPDATE
+`
+
+type GetGraphMemoryChannelMigrationStateForUpdateParams struct {
+	ChannelID         pgtype.UUID `json:"channel_id"`
+	BindingGeneration int64       `json:"binding_generation"`
+}
+
+func (q *Queries) GetGraphMemoryChannelMigrationStateForUpdate(ctx context.Context, arg GetGraphMemoryChannelMigrationStateForUpdateParams) (GraphMemoryChannelMigrationState, error) {
+	row := q.db.QueryRow(ctx, getGraphMemoryChannelMigrationStateForUpdate, arg.ChannelID, arg.BindingGeneration)
+	var i GraphMemoryChannelMigrationState
+	err := row.Scan(
+		&i.WorkspaceID,
+		&i.ChannelID,
+		&i.BindingGeneration,
+		&i.Phase,
+		&i.SourceWatermark,
+		&i.CopiedAtoms,
+		&i.CopiedNodes,
+		&i.CopiedEdges,
+		&i.Error,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const getGraphMemoryChannelRoute = `-- name: GetGraphMemoryChannelRoute :one
@@ -317,6 +1055,61 @@ func (q *Queries) GetGraphMemoryConsolidationRun(ctx context.Context, arg GetGra
 	return i, err
 }
 
+const getGraphMemoryLineageAtGeneration = `-- name: GetGraphMemoryLineageAtGeneration :one
+SELECT workspace_id, channel_id, generation, graph_kind, graph_owner_id,
+       valid_from, valid_to
+FROM graph_memory_channel_lineage
+WHERE workspace_id = $1
+  AND channel_id = $2
+  AND generation = $3
+`
+
+type GetGraphMemoryLineageAtGenerationParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ChannelID   pgtype.UUID `json:"channel_id"`
+	Generation  int64       `json:"generation"`
+}
+
+// Event-time route identity: the lineage row a channel segment was frozen
+// with, whether or later route transitions have since closed it.
+func (q *Queries) GetGraphMemoryLineageAtGeneration(ctx context.Context, arg GetGraphMemoryLineageAtGenerationParams) (GraphMemoryChannelLineage, error) {
+	row := q.db.QueryRow(ctx, getGraphMemoryLineageAtGeneration, arg.WorkspaceID, arg.ChannelID, arg.Generation)
+	var i GraphMemoryChannelLineage
+	err := row.Scan(
+		&i.WorkspaceID,
+		&i.ChannelID,
+		&i.Generation,
+		&i.GraphKind,
+		&i.GraphOwnerID,
+		&i.ValidFrom,
+		&i.ValidTo,
+	)
+	return i, err
+}
+
+const getGraphMemoryMigrationRedirect = `-- name: GetGraphMemoryMigrationRedirect :one
+SELECT new_kind, new_id FROM graph_memory_migration_redirect
+WHERE workspace_id = $1 AND old_kind = $2 AND old_id = $3
+`
+
+type GetGraphMemoryMigrationRedirectParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	OldKind     string      `json:"old_kind"`
+	OldID       string      `json:"old_id"`
+}
+
+type GetGraphMemoryMigrationRedirectRow struct {
+	NewKind string `json:"new_kind"`
+	NewID   string `json:"new_id"`
+}
+
+func (q *Queries) GetGraphMemoryMigrationRedirect(ctx context.Context, arg GetGraphMemoryMigrationRedirectParams) (GetGraphMemoryMigrationRedirectRow, error) {
+	row := q.db.QueryRow(ctx, getGraphMemoryMigrationRedirect, arg.WorkspaceID, arg.OldKind, arg.OldID)
+	var i GetGraphMemoryMigrationRedirectRow
+	err := row.Scan(&i.NewKind, &i.NewID)
+	return i, err
+}
+
 const getGraphMemoryProfile = `-- name: GetGraphMemoryProfile :one
 SELECT workspace_id, memory_type, explore_agents, explore_max_rounds, updated_at, scoped_writer_ready, timezone, ttt_enabled, explore_nodes_per_expansion, max_hierarchy_fanout, max_relation_edges_per_node, dive_max_rounds, dive_max_viewed_nodes, dive_max_source_files, dive_timeout_seconds, w_round, source_max_file_bytes, source_max_total_bytes, source_max_pdf_pages, source_max_av_seconds, source_max_image_megapixels, dive_model, dive_provider, config_version, schema_version, graph_memory_mode, memory_agent_runtime_id, memory_agent_model, memory_agent_thinking, recall_ttt_enabled, consolidation_ttt_enabled, memory_agent_idle_grace_seconds, memory_agent_max_nodes_per_call, memory_agent_max_nodes_per_minute, memory_agent_max_continuous_turn_seconds, memory_agent_max_tokens_per_hour
 FROM graph_memory_profile
@@ -367,6 +1160,121 @@ func (q *Queries) GetGraphMemoryProfile(ctx context.Context, workspaceID pgtype.
 	return i, err
 }
 
+const getGraphMemoryProjectionForUpdate = `-- name: GetGraphMemoryProjectionForUpdate :one
+SELECT workspace_id, segment_id, request_hash, route_generation, status,
+       attempts, lease_owner, lease_expires_at, next_attempt_at, last_error,
+       created_at, updated_at, completed_at
+FROM graph_memory_projection_outbox
+WHERE workspace_id = $1
+  AND segment_id = $2
+FOR UPDATE
+`
+
+type GetGraphMemoryProjectionForUpdateParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	SegmentID   string      `json:"segment_id"`
+}
+
+type GetGraphMemoryProjectionForUpdateRow struct {
+	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
+	SegmentID       string             `json:"segment_id"`
+	RequestHash     string             `json:"request_hash"`
+	RouteGeneration pgtype.Int8        `json:"route_generation"`
+	Status          string             `json:"status"`
+	Attempts        int32              `json:"attempts"`
+	LeaseOwner      pgtype.Text        `json:"lease_owner"`
+	LeaseExpiresAt  pgtype.Timestamptz `json:"lease_expires_at"`
+	NextAttemptAt   pgtype.Timestamptz `json:"next_attempt_at"`
+	LastError       pgtype.Text        `json:"last_error"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	CompletedAt     pgtype.Timestamptz `json:"completed_at"`
+}
+
+func (q *Queries) GetGraphMemoryProjectionForUpdate(ctx context.Context, arg GetGraphMemoryProjectionForUpdateParams) (GetGraphMemoryProjectionForUpdateRow, error) {
+	row := q.db.QueryRow(ctx, getGraphMemoryProjectionForUpdate, arg.WorkspaceID, arg.SegmentID)
+	var i GetGraphMemoryProjectionForUpdateRow
+	err := row.Scan(
+		&i.WorkspaceID,
+		&i.SegmentID,
+		&i.RequestHash,
+		&i.RouteGeneration,
+		&i.Status,
+		&i.Attempts,
+		&i.LeaseOwner,
+		&i.LeaseExpiresAt,
+		&i.NextAttemptAt,
+		&i.LastError,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CompletedAt,
+	)
+	return i, err
+}
+
+const getGraphMemoryPublication = `-- name: GetGraphMemoryPublication :one
+SELECT workspace_id, graph_kind, graph_owner_id, current_generation,
+       graph_version, file_manifest_hash, published_at, published_by
+FROM graph_memory_publication
+WHERE workspace_id = $1
+  AND graph_kind = $2
+  AND graph_owner_id = $3
+`
+
+type GetGraphMemoryPublicationParams struct {
+	WorkspaceID  pgtype.UUID `json:"workspace_id"`
+	GraphKind    string      `json:"graph_kind"`
+	GraphOwnerID pgtype.UUID `json:"graph_owner_id"`
+}
+
+func (q *Queries) GetGraphMemoryPublication(ctx context.Context, arg GetGraphMemoryPublicationParams) (GraphMemoryPublication, error) {
+	row := q.db.QueryRow(ctx, getGraphMemoryPublication, arg.WorkspaceID, arg.GraphKind, arg.GraphOwnerID)
+	var i GraphMemoryPublication
+	err := row.Scan(
+		&i.WorkspaceID,
+		&i.GraphKind,
+		&i.GraphOwnerID,
+		&i.CurrentGeneration,
+		&i.GraphVersion,
+		&i.FileManifestHash,
+		&i.PublishedAt,
+		&i.PublishedBy,
+	)
+	return i, err
+}
+
+const getGraphMemoryPublicationIndex = `-- name: GetGraphMemoryPublicationIndex :one
+SELECT workspace_id, graph_kind, graph_owner_id, active_generation,
+       graph_version, file_manifest_hash, activated_at
+FROM graph_memory_publication_index
+WHERE workspace_id = $1
+  AND graph_kind = $2
+  AND graph_owner_id = $3
+`
+
+type GetGraphMemoryPublicationIndexParams struct {
+	WorkspaceID  pgtype.UUID `json:"workspace_id"`
+	GraphKind    string      `json:"graph_kind"`
+	GraphOwnerID pgtype.UUID `json:"graph_owner_id"`
+}
+
+// Reader authority. Absent row = the scope predates publication; readers
+// fall back to the file-store current pointer (recoverable projection).
+func (q *Queries) GetGraphMemoryPublicationIndex(ctx context.Context, arg GetGraphMemoryPublicationIndexParams) (GraphMemoryPublicationIndex, error) {
+	row := q.db.QueryRow(ctx, getGraphMemoryPublicationIndex, arg.WorkspaceID, arg.GraphKind, arg.GraphOwnerID)
+	var i GraphMemoryPublicationIndex
+	err := row.Scan(
+		&i.WorkspaceID,
+		&i.GraphKind,
+		&i.GraphOwnerID,
+		&i.ActiveGeneration,
+		&i.GraphVersion,
+		&i.FileManifestHash,
+		&i.ActivatedAt,
+	)
+	return i, err
+}
+
 const getGraphMemoryScopedGate = `-- name: GetGraphMemoryScopedGate :one
 SELECT memory_type, scoped_writer_ready, timezone FROM graph_memory_profile
 WHERE workspace_id = $1
@@ -383,6 +1291,371 @@ func (q *Queries) GetGraphMemoryScopedGate(ctx context.Context, workspaceID pgty
 	var i GetGraphMemoryScopedGateRow
 	err := row.Scan(&i.MemoryType, &i.ScopedWriterReady, &i.Timezone)
 	return i, err
+}
+
+const getIssueForPromotion = `-- name: GetIssueForPromotion :one
+SELECT status FROM issue WHERE id = $1 AND workspace_id = $2
+`
+
+type GetIssueForPromotionParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+// Formal-decision evidence: a workspace issue's terminal status.
+func (q *Queries) GetIssueForPromotion(ctx context.Context, arg GetIssueForPromotionParams) (string, error) {
+	row := q.db.QueryRow(ctx, getIssueForPromotion, arg.ID, arg.WorkspaceID)
+	var status string
+	err := row.Scan(&status)
+	return status, err
+}
+
+const getMemoryArchiveManifest = `-- name: GetMemoryArchiveManifest :one
+SELECT id, workspace_id, blob_id, object_ref, key_envelope, cipher_sha256, size_bytes, status, archived_at, erase_due_at, erased_at
+FROM memory_archive_manifest
+WHERE id = $1 AND workspace_id = $2
+`
+
+type GetMemoryArchiveManifestParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) GetMemoryArchiveManifest(ctx context.Context, arg GetMemoryArchiveManifestParams) (MemoryArchiveManifest, error) {
+	row := q.db.QueryRow(ctx, getMemoryArchiveManifest, arg.ID, arg.WorkspaceID)
+	var i MemoryArchiveManifest
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.BlobID,
+		&i.ObjectRef,
+		&i.KeyEnvelope,
+		&i.CipherSha256,
+		&i.SizeBytes,
+		&i.Status,
+		&i.ArchivedAt,
+		&i.EraseDueAt,
+		&i.ErasedAt,
+	)
+	return i, err
+}
+
+const getMemoryExplorePlan = `-- name: GetMemoryExplorePlan :one
+SELECT workspace_id, trajectory_id, pinned_graphs, segment_publish_seq_max,
+       interaction_edge_seq_max, budgets, rollover_count, created_at, updated_at
+FROM memory_explore_plan
+WHERE workspace_id = $1
+  AND trajectory_id = $2
+`
+
+type GetMemoryExplorePlanParams struct {
+	WorkspaceID  pgtype.UUID `json:"workspace_id"`
+	TrajectoryID string      `json:"trajectory_id"`
+}
+
+func (q *Queries) GetMemoryExplorePlan(ctx context.Context, arg GetMemoryExplorePlanParams) (MemoryExplorePlan, error) {
+	row := q.db.QueryRow(ctx, getMemoryExplorePlan, arg.WorkspaceID, arg.TrajectoryID)
+	var i MemoryExplorePlan
+	err := row.Scan(
+		&i.WorkspaceID,
+		&i.TrajectoryID,
+		&i.PinnedGraphs,
+		&i.SegmentPublishSeqMax,
+		&i.InteractionEdgeSeqMax,
+		&i.Budgets,
+		&i.RolloverCount,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getMemoryReadPhaseGate = `-- name: GetMemoryReadPhaseGate :one
+SELECT workspace_id, atoms_enabled, search_v2_enabled, explore_enabled,
+       citations_enabled, atom_consolidation_enabled, retraction_canary_ok, updated_at
+FROM memory_read_phase_gate
+WHERE workspace_id = $1
+`
+
+type GetMemoryReadPhaseGateRow struct {
+	WorkspaceID              pgtype.UUID        `json:"workspace_id"`
+	AtomsEnabled             bool               `json:"atoms_enabled"`
+	SearchV2Enabled          bool               `json:"search_v2_enabled"`
+	ExploreEnabled           bool               `json:"explore_enabled"`
+	CitationsEnabled         bool               `json:"citations_enabled"`
+	AtomConsolidationEnabled bool               `json:"atom_consolidation_enabled"`
+	RetractionCanaryOk       bool               `json:"retraction_canary_ok"`
+	UpdatedAt                pgtype.Timestamptz `json:"updated_at"`
+}
+
+// Absent row = every route disabled (DB default off).
+func (q *Queries) GetMemoryReadPhaseGate(ctx context.Context, workspaceID pgtype.UUID) (GetMemoryReadPhaseGateRow, error) {
+	row := q.db.QueryRow(ctx, getMemoryReadPhaseGate, workspaceID)
+	var i GetMemoryReadPhaseGateRow
+	err := row.Scan(
+		&i.WorkspaceID,
+		&i.AtomsEnabled,
+		&i.SearchV2Enabled,
+		&i.ExploreEnabled,
+		&i.CitationsEnabled,
+		&i.AtomConsolidationEnabled,
+		&i.RetractionCanaryOk,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getSegmentEvidence = `-- name: GetSegmentEvidence :one
+SELECT segment_id, closing_event, trajectory, publish_seq, content_status
+FROM interaction_dag_segment
+WHERE workspace_id = $1
+  AND segment_id = $2
+`
+
+type GetSegmentEvidenceParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	SegmentID   string      `json:"segment_id"`
+}
+
+type GetSegmentEvidenceRow struct {
+	SegmentID     string      `json:"segment_id"`
+	ClosingEvent  pgtype.Text `json:"closing_event"`
+	Trajectory    []byte      `json:"trajectory"`
+	PublishSeq    pgtype.Int8 `json:"publish_seq"`
+	ContentStatus string      `json:"content_status"`
+}
+
+// Evidence source of one segment (Task 11 Step 4): the summary-first fields
+// and the sanitized trajectory payload, at the segment's frozen publish
+// watermark. The source fence is rechecked by the caller.
+func (q *Queries) GetSegmentEvidence(ctx context.Context, arg GetSegmentEvidenceParams) (GetSegmentEvidenceRow, error) {
+	row := q.db.QueryRow(ctx, getSegmentEvidence, arg.WorkspaceID, arg.SegmentID)
+	var i GetSegmentEvidenceRow
+	err := row.Scan(
+		&i.SegmentID,
+		&i.ClosingEvent,
+		&i.Trajectory,
+		&i.PublishSeq,
+		&i.ContentStatus,
+	)
+	return i, err
+}
+
+const getUniversalDAGShadowGate = `-- name: GetUniversalDAGShadowGate :one
+SELECT scope, workspace_id, gate_name, phase, gate_version, policy_version,
+       evidence, updated_by, created_at, updated_at
+FROM universal_dag_shadow_gate
+WHERE scope = $1
+  AND workspace_id = $2
+  AND gate_name = $3
+`
+
+type GetUniversalDAGShadowGateParams struct {
+	Scope       string      `json:"scope"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	GateName    string      `json:"gate_name"`
+}
+
+func (q *Queries) GetUniversalDAGShadowGate(ctx context.Context, arg GetUniversalDAGShadowGateParams) (UniversalDagShadowGate, error) {
+	row := q.db.QueryRow(ctx, getUniversalDAGShadowGate, arg.Scope, arg.WorkspaceID, arg.GateName)
+	var i UniversalDagShadowGate
+	err := row.Scan(
+		&i.Scope,
+		&i.WorkspaceID,
+		&i.GateName,
+		&i.Phase,
+		&i.GateVersion,
+		&i.PolicyVersion,
+		&i.Evidence,
+		&i.UpdatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getUniversalDAGShadowGateForUpdate = `-- name: GetUniversalDAGShadowGateForUpdate :one
+
+SELECT scope, workspace_id, gate_name, phase, gate_version, policy_version,
+       evidence, updated_by, created_at, updated_at
+FROM universal_dag_shadow_gate
+WHERE scope = $1
+  AND workspace_id = $2
+  AND gate_name = $3
+FOR UPDATE
+`
+
+type GetUniversalDAGShadowGateForUpdateParams struct {
+	Scope       string      `json:"scope"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	GateName    string      `json:"gate_name"`
+}
+
+// ===========================================================================
+// Task 21: audited shadow-gate phase registry (spec 15/16/19, AC51/52).
+// Global-scope gates share the table through the nil-uuid sentinel workspace.
+// ===========================================================================
+// Locks the gate row for the caller's audited CAS transition.
+func (q *Queries) GetUniversalDAGShadowGateForUpdate(ctx context.Context, arg GetUniversalDAGShadowGateForUpdateParams) (UniversalDagShadowGate, error) {
+	row := q.db.QueryRow(ctx, getUniversalDAGShadowGateForUpdate, arg.Scope, arg.WorkspaceID, arg.GateName)
+	var i UniversalDagShadowGate
+	err := row.Scan(
+		&i.Scope,
+		&i.WorkspaceID,
+		&i.GateName,
+		&i.Phase,
+		&i.GateVersion,
+		&i.PolicyVersion,
+		&i.Evidence,
+		&i.UpdatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const graphMemoryChannelAtomWatermark = `-- name: GraphMemoryChannelAtomWatermark :one
+SELECT COALESCE(MAX(publish_seq), 0)::bigint AS watermark
+FROM graph_memory_atom
+WHERE workspace_id = $1 AND channel_id = $2 AND visibility = 'channel'
+`
+
+type GraphMemoryChannelAtomWatermarkParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ChannelID   pgtype.UUID `json:"channel_id"`
+}
+
+// High-water publish_seq of the channel's channel-owned atoms at binding
+// time: the worker copies at or below this watermark only.
+func (q *Queries) GraphMemoryChannelAtomWatermark(ctx context.Context, arg GraphMemoryChannelAtomWatermarkParams) (int64, error) {
+	row := q.db.QueryRow(ctx, graphMemoryChannelAtomWatermark, arg.WorkspaceID, arg.ChannelID)
+	var watermark int64
+	err := row.Scan(&watermark)
+	return watermark, err
+}
+
+const insertGraphMemoryAtom = `-- name: InsertGraphMemoryAtom :execrows
+INSERT INTO graph_memory_atom (
+  workspace_id, atom_id, segment_id, body, kind, source_message_seqs,
+  source_tool, tool_trust_class, content_hash, artifact_ref,
+  visibility, channel_id, project_id, publish_seq
+) VALUES (
+  $1, $2, $3,
+  $4, $5, $6::integer[],
+  $7, $8, $9,
+  $10, $11, $12,
+  $13, $14
+) ON CONFLICT (workspace_id, atom_id) DO NOTHING
+`
+
+type InsertGraphMemoryAtomParams struct {
+	WorkspaceID       pgtype.UUID `json:"workspace_id"`
+	AtomID            string      `json:"atom_id"`
+	SegmentID         string      `json:"segment_id"`
+	Body              string      `json:"body"`
+	Kind              string      `json:"kind"`
+	SourceMessageSeqs []int32     `json:"source_message_seqs"`
+	SourceTool        string      `json:"source_tool"`
+	ToolTrustClass    string      `json:"tool_trust_class"`
+	ContentHash       string      `json:"content_hash"`
+	ArtifactRef       pgtype.Text `json:"artifact_ref"`
+	Visibility        string      `json:"visibility"`
+	ChannelID         pgtype.UUID `json:"channel_id"`
+	ProjectID         pgtype.UUID `json:"project_id"`
+	PublishSeq        int64       `json:"publish_seq"`
+}
+
+// One atom of the publish transaction (Task 7). The write-once trigger in
+// migration 466 keeps accepted atoms immutable; re-publish attempts converge
+// through ON CONFLICT DO NOTHING because atom identity is content-addressed.
+func (q *Queries) InsertGraphMemoryAtom(ctx context.Context, arg InsertGraphMemoryAtomParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertGraphMemoryAtom,
+		arg.WorkspaceID,
+		arg.AtomID,
+		arg.SegmentID,
+		arg.Body,
+		arg.Kind,
+		arg.SourceMessageSeqs,
+		arg.SourceTool,
+		arg.ToolTrustClass,
+		arg.ContentHash,
+		arg.ArtifactRef,
+		arg.Visibility,
+		arg.ChannelID,
+		arg.ProjectID,
+		arg.PublishSeq,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const insertGraphMemoryChannelBinding = `-- name: InsertGraphMemoryChannelBinding :one
+INSERT INTO graph_memory_channel_binding (
+    workspace_id, channel_id, generation, old_project_id, new_project_id,
+    route_kind, route_owner_id, route_generation, source_watermark, actor, txid
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+    pg_current_xact_id()::text::bigint
+) RETURNING id
+`
+
+type InsertGraphMemoryChannelBindingParams struct {
+	WorkspaceID     pgtype.UUID `json:"workspace_id"`
+	ChannelID       pgtype.UUID `json:"channel_id"`
+	Generation      int64       `json:"generation"`
+	OldProjectID    pgtype.UUID `json:"old_project_id"`
+	NewProjectID    pgtype.UUID `json:"new_project_id"`
+	RouteKind       string      `json:"route_kind"`
+	RouteOwnerID    pgtype.UUID `json:"route_owner_id"`
+	RouteGeneration int64       `json:"route_generation"`
+	SourceWatermark int64       `json:"source_watermark"`
+	Actor           string      `json:"actor"`
+}
+
+// Written in the same transaction as the channel.project_id UPDATE; the
+// txid column is what the binding guard trigger matches.
+func (q *Queries) InsertGraphMemoryChannelBinding(ctx context.Context, arg InsertGraphMemoryChannelBindingParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, insertGraphMemoryChannelBinding,
+		arg.WorkspaceID,
+		arg.ChannelID,
+		arg.Generation,
+		arg.OldProjectID,
+		arg.NewProjectID,
+		arg.RouteKind,
+		arg.RouteOwnerID,
+		arg.RouteGeneration,
+		arg.SourceWatermark,
+		arg.Actor,
+	)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
+const insertGraphMemoryChannelMigrationState = `-- name: InsertGraphMemoryChannelMigrationState :exec
+INSERT INTO graph_memory_channel_migration_state (
+    workspace_id, channel_id, binding_generation, phase, source_watermark
+) VALUES ($1, $2, $3, 'pending', $4)
+ON CONFLICT (channel_id, binding_generation) DO NOTHING
+`
+
+type InsertGraphMemoryChannelMigrationStateParams struct {
+	WorkspaceID       pgtype.UUID `json:"workspace_id"`
+	ChannelID         pgtype.UUID `json:"channel_id"`
+	BindingGeneration int64       `json:"binding_generation"`
+	SourceWatermark   int64       `json:"source_watermark"`
+}
+
+func (q *Queries) InsertGraphMemoryChannelMigrationState(ctx context.Context, arg InsertGraphMemoryChannelMigrationStateParams) error {
+	_, err := q.db.Exec(ctx, insertGraphMemoryChannelMigrationState,
+		arg.WorkspaceID,
+		arg.ChannelID,
+		arg.BindingGeneration,
+		arg.SourceWatermark,
+	)
+	return err
 }
 
 const insertGraphMemoryConsolidationRun = `-- name: InsertGraphMemoryConsolidationRun :one
@@ -411,6 +1684,870 @@ func (q *Queries) InsertGraphMemoryConsolidationRun(ctx context.Context, arg Ins
 		&i.FinishedAt,
 	)
 	return i, err
+}
+
+const insertGraphMemoryMigrationBlobRef = `-- name: InsertGraphMemoryMigrationBlobRef :exec
+INSERT INTO graph_memory_migration_blob_ref (
+    workspace_id, channel_id, binding_generation, blob_ref
+) VALUES ($1, $2, $3, $4)
+ON CONFLICT DO NOTHING
+`
+
+type InsertGraphMemoryMigrationBlobRefParams struct {
+	WorkspaceID       pgtype.UUID `json:"workspace_id"`
+	ChannelID         pgtype.UUID `json:"channel_id"`
+	BindingGeneration int64       `json:"binding_generation"`
+	BlobRef           string      `json:"blob_ref"`
+}
+
+func (q *Queries) InsertGraphMemoryMigrationBlobRef(ctx context.Context, arg InsertGraphMemoryMigrationBlobRefParams) error {
+	_, err := q.db.Exec(ctx, insertGraphMemoryMigrationBlobRef,
+		arg.WorkspaceID,
+		arg.ChannelID,
+		arg.BindingGeneration,
+		arg.BlobRef,
+	)
+	return err
+}
+
+const insertGraphMemoryPublicationCoverage = `-- name: InsertGraphMemoryPublicationCoverage :execrows
+INSERT INTO graph_memory_publication_coverage (
+    workspace_id, graph_kind, graph_owner_id, generation, atom_id, segment_id
+)
+SELECT $1::uuid, $2, $3::uuid,
+       $4, coverage.atom_id, coverage.segment_id
+FROM (
+  SELECT unnest($5::text[]) AS atom_id,
+         unnest($6::text[]) AS segment_id
+) AS coverage
+ON CONFLICT DO NOTHING
+`
+
+type InsertGraphMemoryPublicationCoverageParams struct {
+	WorkspaceID  pgtype.UUID `json:"workspace_id"`
+	GraphKind    string      `json:"graph_kind"`
+	GraphOwnerID pgtype.UUID `json:"graph_owner_id"`
+	Generation   int64       `json:"generation"`
+	AtomIds      []string    `json:"atom_ids"`
+	SegmentIds   []string    `json:"segment_ids"`
+}
+
+// The exact atom closure this generation consumed; a later retraction joins
+// against it to quarantine precisely the affected published nodes.
+func (q *Queries) InsertGraphMemoryPublicationCoverage(ctx context.Context, arg InsertGraphMemoryPublicationCoverageParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertGraphMemoryPublicationCoverage,
+		arg.WorkspaceID,
+		arg.GraphKind,
+		arg.GraphOwnerID,
+		arg.Generation,
+		arg.AtomIds,
+		arg.SegmentIds,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const insertGraphMemoryPublicationOutcome = `-- name: InsertGraphMemoryPublicationOutcome :exec
+INSERT INTO graph_memory_publication_outcome (
+    workspace_id, graph_kind, graph_owner_id, generation, outcome,
+    graph_version, file_manifest_hash, covered_atom_count,
+    covered_segment_count, node_count, source_keys
+) VALUES (
+    $1, $2, $3,
+    $4, $5, $6,
+    $7, $8,
+    $9, $10,
+    $11::text[]
+)
+ON CONFLICT (workspace_id, graph_kind, graph_owner_id, generation) DO UPDATE
+SET outcome = EXCLUDED.outcome, graph_version = EXCLUDED.graph_version,
+    file_manifest_hash = EXCLUDED.file_manifest_hash,
+    covered_atom_count = EXCLUDED.covered_atom_count,
+    covered_segment_count = EXCLUDED.covered_segment_count,
+    node_count = EXCLUDED.node_count, source_keys = EXCLUDED.source_keys
+`
+
+type InsertGraphMemoryPublicationOutcomeParams struct {
+	WorkspaceID         pgtype.UUID `json:"workspace_id"`
+	GraphKind           string      `json:"graph_kind"`
+	GraphOwnerID        pgtype.UUID `json:"graph_owner_id"`
+	Generation          int64       `json:"generation"`
+	Outcome             string      `json:"outcome"`
+	GraphVersion        int32       `json:"graph_version"`
+	FileManifestHash    string      `json:"file_manifest_hash"`
+	CoveredAtomCount    int32       `json:"covered_atom_count"`
+	CoveredSegmentCount int32       `json:"covered_segment_count"`
+	NodeCount           int32       `json:"node_count"`
+	SourceKeys          []string    `json:"source_keys"`
+}
+
+// What happened to one publication attempt. Aggregate counters only —
+// never node bodies or payloads.
+func (q *Queries) InsertGraphMemoryPublicationOutcome(ctx context.Context, arg InsertGraphMemoryPublicationOutcomeParams) error {
+	_, err := q.db.Exec(ctx, insertGraphMemoryPublicationOutcome,
+		arg.WorkspaceID,
+		arg.GraphKind,
+		arg.GraphOwnerID,
+		arg.Generation,
+		arg.Outcome,
+		arg.GraphVersion,
+		arg.FileManifestHash,
+		arg.CoveredAtomCount,
+		arg.CoveredSegmentCount,
+		arg.NodeCount,
+		arg.SourceKeys,
+	)
+	return err
+}
+
+const insertGraphMemoryPublicationProvenanceRow = `-- name: InsertGraphMemoryPublicationProvenanceRow :exec
+INSERT INTO graph_memory_publication_provenance (
+    workspace_id, graph_kind, graph_owner_id, generation, node_id, atom_ids, segment_ids
+) VALUES (
+    $1, $2, $3,
+    $4, $5,
+    $6::text[], $7::text[]
+)
+ON CONFLICT (workspace_id, graph_kind, graph_owner_id, generation, node_id) DO UPDATE
+SET atom_ids = EXCLUDED.atom_ids, segment_ids = EXCLUDED.segment_ids
+`
+
+type InsertGraphMemoryPublicationProvenanceRowParams struct {
+	WorkspaceID  pgtype.UUID `json:"workspace_id"`
+	GraphKind    string      `json:"graph_kind"`
+	GraphOwnerID pgtype.UUID `json:"graph_owner_id"`
+	Generation   int64       `json:"generation"`
+	NodeID       string      `json:"node_id"`
+	AtomIds      []string    `json:"atom_ids"`
+	SegmentIds   []string    `json:"segment_ids"`
+}
+
+// Reverse provenance: one published node and the atoms/segments it cites.
+func (q *Queries) InsertGraphMemoryPublicationProvenanceRow(ctx context.Context, arg InsertGraphMemoryPublicationProvenanceRowParams) error {
+	_, err := q.db.Exec(ctx, insertGraphMemoryPublicationProvenanceRow,
+		arg.WorkspaceID,
+		arg.GraphKind,
+		arg.GraphOwnerID,
+		arg.Generation,
+		arg.NodeID,
+		arg.AtomIds,
+		arg.SegmentIds,
+	)
+	return err
+}
+
+const insertMemoryArchiveManifest = `-- name: InsertMemoryArchiveManifest :one
+INSERT INTO memory_archive_manifest (
+    workspace_id, blob_id, object_ref, key_envelope, cipher_sha256, size_bytes, erase_due_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, workspace_id, blob_id, object_ref, key_envelope, cipher_sha256, size_bytes, status, archived_at, erase_due_at, erased_at
+`
+
+type InsertMemoryArchiveManifestParams struct {
+	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
+	BlobID       pgtype.UUID        `json:"blob_id"`
+	ObjectRef    string             `json:"object_ref"`
+	KeyEnvelope  string             `json:"key_envelope"`
+	CipherSha256 string             `json:"cipher_sha256"`
+	SizeBytes    int64              `json:"size_bytes"`
+	EraseDueAt   pgtype.Timestamptz `json:"erase_due_at"`
+}
+
+func (q *Queries) InsertMemoryArchiveManifest(ctx context.Context, arg InsertMemoryArchiveManifestParams) (MemoryArchiveManifest, error) {
+	row := q.db.QueryRow(ctx, insertMemoryArchiveManifest,
+		arg.WorkspaceID,
+		arg.BlobID,
+		arg.ObjectRef,
+		arg.KeyEnvelope,
+		arg.CipherSha256,
+		arg.SizeBytes,
+		arg.EraseDueAt,
+	)
+	var i MemoryArchiveManifest
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.BlobID,
+		&i.ObjectRef,
+		&i.KeyEnvelope,
+		&i.CipherSha256,
+		&i.SizeBytes,
+		&i.Status,
+		&i.ArchivedAt,
+		&i.EraseDueAt,
+		&i.ErasedAt,
+	)
+	return i, err
+}
+
+const insertMemoryArchiveRestoreLease = `-- name: InsertMemoryArchiveRestoreLease :one
+INSERT INTO memory_archive_restore_lease (workspace_id, manifest_id, actor, reason, expires_at)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, workspace_id, manifest_id, actor, reason, expires_at, created_at
+`
+
+type InsertMemoryArchiveRestoreLeaseParams struct {
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	ManifestID  pgtype.UUID        `json:"manifest_id"`
+	Actor       string             `json:"actor"`
+	Reason      string             `json:"reason"`
+	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+}
+
+func (q *Queries) InsertMemoryArchiveRestoreLease(ctx context.Context, arg InsertMemoryArchiveRestoreLeaseParams) (MemoryArchiveRestoreLease, error) {
+	row := q.db.QueryRow(ctx, insertMemoryArchiveRestoreLease,
+		arg.WorkspaceID,
+		arg.ManifestID,
+		arg.Actor,
+		arg.Reason,
+		arg.ExpiresAt,
+	)
+	var i MemoryArchiveRestoreLease
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ManifestID,
+		&i.Actor,
+		&i.Reason,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const insertMemoryDeletionAudit = `-- name: InsertMemoryDeletionAudit :execrows
+INSERT INTO memory_deletion_audit (workspace_id, retraction_id, source_kind, source_id, quarantined_count)
+SELECT $1, $2,
+       split_part(key, ':', 1), split_part(key, ':', 2), $3
+FROM unnest($4::text[]) AS t(key)
+`
+
+type InsertMemoryDeletionAuditParams struct {
+	WorkspaceID      pgtype.UUID `json:"workspace_id"`
+	RetractionID     pgtype.UUID `json:"retraction_id"`
+	QuarantinedCount int32       `json:"quarantined_count"`
+	SourceKeys       []string    `json:"source_keys"`
+}
+
+func (q *Queries) InsertMemoryDeletionAudit(ctx context.Context, arg InsertMemoryDeletionAuditParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertMemoryDeletionAudit,
+		arg.WorkspaceID,
+		arg.RetractionID,
+		arg.QuarantinedCount,
+		arg.SourceKeys,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const insertMemoryReadPhaseGate = `-- name: InsertMemoryReadPhaseGate :execrows
+INSERT INTO memory_read_phase_gate (workspace_id)
+VALUES ($1)
+ON CONFLICT (workspace_id) DO NOTHING
+`
+
+// Registers the default-all-off gate row (operator transitions happen via
+// SetMemoryReadPhaseGate).
+func (q *Queries) InsertMemoryReadPhaseGate(ctx context.Context, workspaceID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, insertMemoryReadPhaseGate, workspaceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const insertMemoryRetentionPolicy = `-- name: InsertMemoryRetentionPolicy :one
+INSERT INTO memory_retention_policy (
+    workspace_id, version, trajectory_hot_days, archive_days, trace_hot_days, updated_by
+) VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING workspace_id, version, trajectory_hot_days, archive_days, trace_hot_days, updated_by, created_at
+`
+
+type InsertMemoryRetentionPolicyParams struct {
+	WorkspaceID       pgtype.UUID `json:"workspace_id"`
+	Version           int64       `json:"version"`
+	TrajectoryHotDays int32       `json:"trajectory_hot_days"`
+	ArchiveDays       int32       `json:"archive_days"`
+	TraceHotDays      int32       `json:"trace_hot_days"`
+	UpdatedBy         string      `json:"updated_by"`
+}
+
+func (q *Queries) InsertMemoryRetentionPolicy(ctx context.Context, arg InsertMemoryRetentionPolicyParams) (MemoryRetentionPolicy, error) {
+	row := q.db.QueryRow(ctx, insertMemoryRetentionPolicy,
+		arg.WorkspaceID,
+		arg.Version,
+		arg.TrajectoryHotDays,
+		arg.ArchiveDays,
+		arg.TraceHotDays,
+		arg.UpdatedBy,
+	)
+	var i MemoryRetentionPolicy
+	err := row.Scan(
+		&i.WorkspaceID,
+		&i.Version,
+		&i.TrajectoryHotDays,
+		&i.ArchiveDays,
+		&i.TraceHotDays,
+		&i.UpdatedBy,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const insertMigratedGraphMemoryAtom = `-- name: InsertMigratedGraphMemoryAtom :exec
+INSERT INTO graph_memory_atom (
+    workspace_id, atom_id, segment_id, body, kind, source_message_seqs,
+    source_tool, tool_trust_class, content_hash, visibility, channel_id, publish_seq
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'channel', $10, $11)
+`
+
+type InsertMigratedGraphMemoryAtomParams struct {
+	WorkspaceID       pgtype.UUID `json:"workspace_id"`
+	AtomID            string      `json:"atom_id"`
+	SegmentID         string      `json:"segment_id"`
+	Body              string      `json:"body"`
+	Kind              string      `json:"kind"`
+	SourceMessageSeqs []int32     `json:"source_message_seqs"`
+	SourceTool        string      `json:"source_tool"`
+	ToolTrustClass    string      `json:"tool_trust_class"`
+	ContentHash       string      `json:"content_hash"`
+	ChannelID         pgtype.UUID `json:"channel_id"`
+	PublishSeq        int64       `json:"publish_seq"`
+}
+
+func (q *Queries) InsertMigratedGraphMemoryAtom(ctx context.Context, arg InsertMigratedGraphMemoryAtomParams) error {
+	_, err := q.db.Exec(ctx, insertMigratedGraphMemoryAtom,
+		arg.WorkspaceID,
+		arg.AtomID,
+		arg.SegmentID,
+		arg.Body,
+		arg.Kind,
+		arg.SourceMessageSeqs,
+		arg.SourceTool,
+		arg.ToolTrustClass,
+		arg.ContentHash,
+		arg.ChannelID,
+		arg.PublishSeq,
+	)
+	return err
+}
+
+const insertQuarantinedPendingRecompute = `-- name: InsertQuarantinedPendingRecompute :execrows
+INSERT INTO quarantined_pending_recompute (workspace_id, retraction_id, consumer_kind, consumer_id)
+SELECT $1, $2,
+       split_part(key, ':', 1), substring(key from strpos(key, ':') + 1)
+FROM unnest($3::text[]) AS t(key)
+ON CONFLICT DO NOTHING
+`
+
+type InsertQuarantinedPendingRecomputeParams struct {
+	WorkspaceID  pgtype.UUID `json:"workspace_id"`
+	RetractionID pgtype.UUID `json:"retraction_id"`
+	ConsumerKeys []string    `json:"consumer_keys"`
+}
+
+// Consumer ids may themselves contain ':' (migrated atom copies
+// "<atom>:mig<gen>", daily node ids), so only the FIRST colon separates
+// kind from id.
+func (q *Queries) InsertQuarantinedPendingRecompute(ctx context.Context, arg InsertQuarantinedPendingRecomputeParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertQuarantinedPendingRecompute, arg.WorkspaceID, arg.RetractionID, arg.ConsumerKeys)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const insertRetractionRegistry = `-- name: InsertRetractionRegistry :one
+INSERT INTO retraction_registry (workspace_id, actor, reason, source_count)
+VALUES ($1, $2, $3, $4)
+RETURNING id, workspace_id, actor, reason, source_count, created_at
+`
+
+type InsertRetractionRegistryParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	Actor       string      `json:"actor"`
+	Reason      string      `json:"reason"`
+	SourceCount int32       `json:"source_count"`
+}
+
+func (q *Queries) InsertRetractionRegistry(ctx context.Context, arg InsertRetractionRegistryParams) (RetractionRegistry, error) {
+	row := q.db.QueryRow(ctx, insertRetractionRegistry,
+		arg.WorkspaceID,
+		arg.Actor,
+		arg.Reason,
+		arg.SourceCount,
+	)
+	var i RetractionRegistry
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Actor,
+		&i.Reason,
+		&i.SourceCount,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const insertUniversalDAGGateTransition = `-- name: InsertUniversalDAGGateTransition :exec
+INSERT INTO universal_dag_gate_transition (
+    scope, workspace_id, gate_name, from_phase, to_phase,
+    reason, trigger, evidence, policy_version, actor
+) VALUES (
+    $1, $2, $3,
+    $4, $5,
+    $6, $7, $8::jsonb,
+    $9, $10
+)
+`
+
+type InsertUniversalDAGGateTransitionParams struct {
+	Scope         string      `json:"scope"`
+	WorkspaceID   pgtype.UUID `json:"workspace_id"`
+	GateName      string      `json:"gate_name"`
+	FromPhase     string      `json:"from_phase"`
+	ToPhase       string      `json:"to_phase"`
+	Reason        string      `json:"reason"`
+	Trigger       string      `json:"trigger"`
+	Evidence      []byte      `json:"evidence"`
+	PolicyVersion int64       `json:"policy_version"`
+	Actor         string      `json:"actor"`
+}
+
+// Append-only audit row for every promotion, auto-shutdown and failure
+// demotion (spec 15).
+func (q *Queries) InsertUniversalDAGGateTransition(ctx context.Context, arg InsertUniversalDAGGateTransitionParams) error {
+	_, err := q.db.Exec(ctx, insertUniversalDAGGateTransition,
+		arg.Scope,
+		arg.WorkspaceID,
+		arg.GateName,
+		arg.FromPhase,
+		arg.ToPhase,
+		arg.Reason,
+		arg.Trigger,
+		arg.Evidence,
+		arg.PolicyVersion,
+		arg.Actor,
+	)
+	return err
+}
+
+const insertWorkspaceDeletionAudit = `-- name: InsertWorkspaceDeletionAudit :exec
+INSERT INTO memory_deletion_audit (workspace_id, retraction_id, source_kind, source_id, quarantined_count)
+VALUES ($1, $2, 'workspace', $3, $4)
+`
+
+type InsertWorkspaceDeletionAuditParams struct {
+	WorkspaceID      pgtype.UUID `json:"workspace_id"`
+	RetractionID     pgtype.UUID `json:"retraction_id"`
+	WorkspaceIDText  string      `json:"workspace_id_text"`
+	QuarantinedCount int32       `json:"quarantined_count"`
+}
+
+// One aggregate audit row for the set-based workspace fence.
+func (q *Queries) InsertWorkspaceDeletionAudit(ctx context.Context, arg InsertWorkspaceDeletionAuditParams) error {
+	_, err := q.db.Exec(ctx, insertWorkspaceDeletionAudit,
+		arg.WorkspaceID,
+		arg.RetractionID,
+		arg.WorkspaceIDText,
+		arg.QuarantinedCount,
+	)
+	return err
+}
+
+const isMemoryArchiveFenced = `-- name: IsMemoryArchiveFenced :one
+SELECT EXISTS (
+    SELECT 1
+    FROM memory_archive_manifest m
+    JOIN graph_memory_blob_ref r ON r.blob_id = m.blob_id
+    JOIN memory_source_guard g
+      ON g.workspace_id = m.workspace_id
+     AND g.source_id = r.ref_id::text
+     AND g.retracted_at IS NOT NULL
+    WHERE m.id = $1 AND m.workspace_id = $2
+)
+`
+
+type IsMemoryArchiveFencedParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+// Task 8A fence over archive restore (spec AC 62): the manifest's blob
+// carries graph_source refs; if any of their sources is fenced in the
+// retraction registry, the archive body must never stream again.
+func (q *Queries) IsMemoryArchiveFenced(ctx context.Context, arg IsMemoryArchiveFencedParams) (bool, error) {
+	row := q.db.QueryRow(ctx, isMemoryArchiveFenced, arg.ID, arg.WorkspaceID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
+const listActiveAtomSnapshot = `-- name: ListActiveAtomSnapshot :many
+SELECT atom.atom_id, atom.segment_id, atom.body,
+       COALESCE(atom.channel_id::text, '')::text AS channel_id,
+       atom.publish_seq::bigint, atom.created_at
+FROM graph_memory_atom atom
+WHERE atom.workspace_id = $1
+  AND atom.publish_seq <= $2
+  AND (
+        ($3::text <> '' AND atom.channel_id::text = $3)
+     OR ($3::text = '' AND atom.channel_id IS NULL AND atom.project_id IS NOT NULL)
+  )
+  AND NOT EXISTS (
+        SELECT 1 FROM quarantined_pending_recompute q
+        WHERE q.workspace_id = atom.workspace_id
+          AND q.consumer_kind = 'graph_memory_atom' AND q.consumer_id = atom.atom_id
+  )
+ORDER BY atom.publish_seq DESC, atom.atom_id
+LIMIT $4
+`
+
+type ListActiveAtomSnapshotParams struct {
+	WorkspaceID    pgtype.UUID `json:"workspace_id"`
+	PublishSeqMax  int64       `json:"publish_seq_max"`
+	ScopeChannelID string      `json:"scope_channel_id"`
+	LimitRows      int32       `json:"limit_rows"`
+}
+
+type ListActiveAtomSnapshotRow struct {
+	AtomID         string             `json:"atom_id"`
+	SegmentID      string             `json:"segment_id"`
+	Body           string             `json:"body"`
+	ChannelID      string             `json:"channel_id"`
+	AtomPublishSeq int64              `json:"atom_publish_seq"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+// Task 13 adoption loader: the active atom ledger of one workspace scope at
+// a publish watermark. Retracted atoms are excluded by the Task 8A
+// quarantine closure; the retriever re-asserts the exclusions it can prove
+// locally after InstallAtomSnapshot.
+func (q *Queries) ListActiveAtomSnapshot(ctx context.Context, arg ListActiveAtomSnapshotParams) ([]ListActiveAtomSnapshotRow, error) {
+	rows, err := q.db.Query(ctx, listActiveAtomSnapshot,
+		arg.WorkspaceID,
+		arg.PublishSeqMax,
+		arg.ScopeChannelID,
+		arg.LimitRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListActiveAtomSnapshotRow{}
+	for rows.Next() {
+		var i ListActiveAtomSnapshotRow
+		if err := rows.Scan(
+			&i.AtomID,
+			&i.SegmentID,
+			&i.Body,
+			&i.ChannelID,
+			&i.AtomPublishSeq,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDAGEdgesAroundSegment = `-- name: ListDAGEdgesAroundSegment :many
+SELECT edge.edge_seq, edge.type, edge.src_segment_id, edge.dst_segment_id
+FROM interaction_dag_edge edge
+WHERE edge.workspace_id = $1
+  AND edge.edge_seq <= $2
+  AND (edge.src_segment_id = $3 OR edge.dst_segment_id = $3)
+ORDER BY edge.edge_seq
+LIMIT $4
+`
+
+type ListDAGEdgesAroundSegmentParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	EdgeSeqMax  int64       `json:"edge_seq_max"`
+	SegmentID   string      `json:"segment_id"`
+	LimitRows   int32       `json:"limit_rows"`
+}
+
+type ListDAGEdgesAroundSegmentRow struct {
+	EdgeSeq      int64  `json:"edge_seq"`
+	Type         string `json:"type"`
+	SrcSegmentID string `json:"src_segment_id"`
+	DstSegmentID string `json:"dst_segment_id"`
+}
+
+// Bidirectional interaction-DAG neighborhood of one segment, readable only
+// up to the plan's frozen edge watermark (Task 11).
+func (q *Queries) ListDAGEdgesAroundSegment(ctx context.Context, arg ListDAGEdgesAroundSegmentParams) ([]ListDAGEdgesAroundSegmentRow, error) {
+	rows, err := q.db.Query(ctx, listDAGEdgesAroundSegment,
+		arg.WorkspaceID,
+		arg.EdgeSeqMax,
+		arg.SegmentID,
+		arg.LimitRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListDAGEdgesAroundSegmentRow{}
+	for rows.Next() {
+		var i ListDAGEdgesAroundSegmentRow
+		if err := rows.Scan(
+			&i.EdgeSeq,
+			&i.Type,
+			&i.SrcSegmentID,
+			&i.DstSegmentID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listGraphMemoryAtomsByIDs = `-- name: ListGraphMemoryAtomsByIDs :many
+SELECT atom_id, segment_id, body, channel_id, project_id, tool_trust_class
+FROM graph_memory_atom
+WHERE workspace_id = $1 AND atom_id = ANY($2::text[])
+`
+
+type ListGraphMemoryAtomsByIDsParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	AtomIds     []string    `json:"atom_ids"`
+}
+
+type ListGraphMemoryAtomsByIDsRow struct {
+	AtomID         string      `json:"atom_id"`
+	SegmentID      string      `json:"segment_id"`
+	Body           string      `json:"body"`
+	ChannelID      pgtype.UUID `json:"channel_id"`
+	ProjectID      pgtype.UUID `json:"project_id"`
+	ToolTrustClass string      `json:"tool_trust_class"`
+}
+
+// Promotion evidence resolution: the exact atoms an LLM proposal cites.
+func (q *Queries) ListGraphMemoryAtomsByIDs(ctx context.Context, arg ListGraphMemoryAtomsByIDsParams) ([]ListGraphMemoryAtomsByIDsRow, error) {
+	rows, err := q.db.Query(ctx, listGraphMemoryAtomsByIDs, arg.WorkspaceID, arg.AtomIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListGraphMemoryAtomsByIDsRow{}
+	for rows.Next() {
+		var i ListGraphMemoryAtomsByIDsRow
+		if err := rows.Scan(
+			&i.AtomID,
+			&i.SegmentID,
+			&i.Body,
+			&i.ChannelID,
+			&i.ProjectID,
+			&i.ToolTrustClass,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listGraphMemoryAtomsBySegment = `-- name: ListGraphMemoryAtomsBySegment :many
+SELECT atom_id, segment_id, body, kind, source_message_seqs, source_tool,
+       tool_trust_class, content_hash, artifact_ref, visibility,
+       channel_id, project_id, publish_seq, created_at
+FROM graph_memory_atom
+WHERE workspace_id = $1
+  AND segment_id = $2
+ORDER BY atom_id
+`
+
+type ListGraphMemoryAtomsBySegmentParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	SegmentID   string      `json:"segment_id"`
+}
+
+type ListGraphMemoryAtomsBySegmentRow struct {
+	AtomID            string             `json:"atom_id"`
+	SegmentID         string             `json:"segment_id"`
+	Body              string             `json:"body"`
+	Kind              string             `json:"kind"`
+	SourceMessageSeqs []int32            `json:"source_message_seqs"`
+	SourceTool        string             `json:"source_tool"`
+	ToolTrustClass    string             `json:"tool_trust_class"`
+	ContentHash       string             `json:"content_hash"`
+	ArtifactRef       pgtype.Text        `json:"artifact_ref"`
+	Visibility        string             `json:"visibility"`
+	ChannelID         pgtype.UUID        `json:"channel_id"`
+	ProjectID         pgtype.UUID        `json:"project_id"`
+	PublishSeq        int64              `json:"publish_seq"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) ListGraphMemoryAtomsBySegment(ctx context.Context, arg ListGraphMemoryAtomsBySegmentParams) ([]ListGraphMemoryAtomsBySegmentRow, error) {
+	rows, err := q.db.Query(ctx, listGraphMemoryAtomsBySegment, arg.WorkspaceID, arg.SegmentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListGraphMemoryAtomsBySegmentRow{}
+	for rows.Next() {
+		var i ListGraphMemoryAtomsBySegmentRow
+		if err := rows.Scan(
+			&i.AtomID,
+			&i.SegmentID,
+			&i.Body,
+			&i.Kind,
+			&i.SourceMessageSeqs,
+			&i.SourceTool,
+			&i.ToolTrustClass,
+			&i.ContentHash,
+			&i.ArtifactRef,
+			&i.Visibility,
+			&i.ChannelID,
+			&i.ProjectID,
+			&i.PublishSeq,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listGraphMemoryChannelAtomsForMigration = `-- name: ListGraphMemoryChannelAtomsForMigration :many
+SELECT a.atom_id, a.segment_id, a.body, a.kind, a.source_message_seqs, a.source_tool,
+       a.tool_trust_class, a.content_hash, a.artifact_ref, a.publish_seq, a.created_at
+FROM graph_memory_atom a
+WHERE a.workspace_id = $1 AND a.channel_id = $2 AND a.visibility = 'channel'
+  AND a.publish_seq <= $3
+  AND NOT EXISTS (
+      SELECT 1 FROM graph_memory_migration_redirect r
+      WHERE r.workspace_id = a.workspace_id
+        AND r.old_kind = 'atom' AND r.old_id = a.atom_id)
+ORDER BY a.publish_seq
+LIMIT $4
+`
+
+type ListGraphMemoryChannelAtomsForMigrationParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ChannelID   pgtype.UUID `json:"channel_id"`
+	PublishSeq  int64       `json:"publish_seq"`
+	Limit       int32       `json:"limit"`
+}
+
+type ListGraphMemoryChannelAtomsForMigrationRow struct {
+	AtomID            string             `json:"atom_id"`
+	SegmentID         string             `json:"segment_id"`
+	Body              string             `json:"body"`
+	Kind              string             `json:"kind"`
+	SourceMessageSeqs []int32            `json:"source_message_seqs"`
+	SourceTool        string             `json:"source_tool"`
+	ToolTrustClass    string             `json:"tool_trust_class"`
+	ContentHash       string             `json:"content_hash"`
+	ArtifactRef       pgtype.Text        `json:"artifact_ref"`
+	PublishSeq        int64              `json:"publish_seq"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+}
+
+// Channel-owned atoms at or below the watermark that have not been copied
+// yet (redirect existence = already copied).
+func (q *Queries) ListGraphMemoryChannelAtomsForMigration(ctx context.Context, arg ListGraphMemoryChannelAtomsForMigrationParams) ([]ListGraphMemoryChannelAtomsForMigrationRow, error) {
+	rows, err := q.db.Query(ctx, listGraphMemoryChannelAtomsForMigration,
+		arg.WorkspaceID,
+		arg.ChannelID,
+		arg.PublishSeq,
+		arg.Limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListGraphMemoryChannelAtomsForMigrationRow{}
+	for rows.Next() {
+		var i ListGraphMemoryChannelAtomsForMigrationRow
+		if err := rows.Scan(
+			&i.AtomID,
+			&i.SegmentID,
+			&i.Body,
+			&i.Kind,
+			&i.SourceMessageSeqs,
+			&i.SourceTool,
+			&i.ToolTrustClass,
+			&i.ContentHash,
+			&i.ArtifactRef,
+			&i.PublishSeq,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listGraphMemoryChannelBindings = `-- name: ListGraphMemoryChannelBindings :many
+SELECT id, workspace_id, channel_id, generation, old_project_id, new_project_id, route_kind, route_owner_id, route_generation, source_watermark, actor, txid, created_at FROM graph_memory_channel_binding
+WHERE channel_id = $1
+ORDER BY generation DESC
+LIMIT $2
+`
+
+type ListGraphMemoryChannelBindingsParams struct {
+	ChannelID pgtype.UUID `json:"channel_id"`
+	Limit     int32       `json:"limit"`
+}
+
+func (q *Queries) ListGraphMemoryChannelBindings(ctx context.Context, arg ListGraphMemoryChannelBindingsParams) ([]GraphMemoryChannelBinding, error) {
+	rows, err := q.db.Query(ctx, listGraphMemoryChannelBindings, arg.ChannelID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GraphMemoryChannelBinding{}
+	for rows.Next() {
+		var i GraphMemoryChannelBinding
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.ChannelID,
+			&i.Generation,
+			&i.OldProjectID,
+			&i.NewProjectID,
+			&i.RouteKind,
+			&i.RouteOwnerID,
+			&i.RouteGeneration,
+			&i.SourceWatermark,
+			&i.Actor,
+			&i.Txid,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listGraphMemoryChannelLineage = `-- name: ListGraphMemoryChannelLineage :many
@@ -442,6 +2579,50 @@ func (q *Queries) ListGraphMemoryChannelLineage(ctx context.Context, arg ListGra
 			&i.GraphOwnerID,
 			&i.ValidFrom,
 			&i.ValidTo,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listGraphMemoryChannelMigrationsByPhase = `-- name: ListGraphMemoryChannelMigrationsByPhase :many
+SELECT workspace_id, channel_id, binding_generation, phase, source_watermark, copied_atoms, copied_nodes, copied_edges, error, created_at, updated_at FROM graph_memory_channel_migration_state
+WHERE phase = ANY($1::text[])
+ORDER BY created_at
+LIMIT $2
+`
+
+type ListGraphMemoryChannelMigrationsByPhaseParams struct {
+	Phases     []string `json:"phases"`
+	LimitCount int32    `json:"limit_count"`
+}
+
+func (q *Queries) ListGraphMemoryChannelMigrationsByPhase(ctx context.Context, arg ListGraphMemoryChannelMigrationsByPhaseParams) ([]GraphMemoryChannelMigrationState, error) {
+	rows, err := q.db.Query(ctx, listGraphMemoryChannelMigrationsByPhase, arg.Phases, arg.LimitCount)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GraphMemoryChannelMigrationState{}
+	for rows.Next() {
+		var i GraphMemoryChannelMigrationState
+		if err := rows.Scan(
+			&i.WorkspaceID,
+			&i.ChannelID,
+			&i.BindingGeneration,
+			&i.Phase,
+			&i.SourceWatermark,
+			&i.CopiedAtoms,
+			&i.CopiedNodes,
+			&i.CopiedEdges,
+			&i.Error,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -489,6 +2670,1062 @@ func (q *Queries) ListGraphMemoryConsolidationRuns(ctx context.Context, workspac
 		return nil, err
 	}
 	return items, nil
+}
+
+const listGraphMemoryMigrationRedirectOldIDs = `-- name: ListGraphMemoryMigrationRedirectOldIDs :many
+SELECT old_id FROM graph_memory_migration_redirect
+WHERE workspace_id = $1 AND old_kind = $2
+  AND old_id = ANY($3::text[])
+`
+
+type ListGraphMemoryMigrationRedirectOldIDsParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	OldKind     string      `json:"old_kind"`
+	OldIds      []string    `json:"old_ids"`
+}
+
+// The old refs that already have copies (replay filter + tombstone set).
+func (q *Queries) ListGraphMemoryMigrationRedirectOldIDs(ctx context.Context, arg ListGraphMemoryMigrationRedirectOldIDsParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, listGraphMemoryMigrationRedirectOldIDs, arg.WorkspaceID, arg.OldKind, arg.OldIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var old_id string
+		if err := rows.Scan(&old_id); err != nil {
+			return nil, err
+		}
+		items = append(items, old_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listGraphMemoryMigrationRedirectsByNewID = `-- name: ListGraphMemoryMigrationRedirectsByNewID :many
+SELECT old_kind, old_id FROM graph_memory_migration_redirect
+WHERE workspace_id = $1 AND new_kind = $2
+  AND new_id = ANY($3::text[])
+`
+
+type ListGraphMemoryMigrationRedirectsByNewIDParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	NewKind     string      `json:"new_kind"`
+	NewIds      []string    `json:"new_ids"`
+}
+
+type ListGraphMemoryMigrationRedirectsByNewIDRow struct {
+	OldKind string `json:"old_kind"`
+	OldID   string `json:"old_id"`
+}
+
+// Reverse resolution: deletion through NEW canonical refs must reach the
+// OLD copies' consumers too.
+func (q *Queries) ListGraphMemoryMigrationRedirectsByNewID(ctx context.Context, arg ListGraphMemoryMigrationRedirectsByNewIDParams) ([]ListGraphMemoryMigrationRedirectsByNewIDRow, error) {
+	rows, err := q.db.Query(ctx, listGraphMemoryMigrationRedirectsByNewID, arg.WorkspaceID, arg.NewKind, arg.NewIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListGraphMemoryMigrationRedirectsByNewIDRow{}
+	for rows.Next() {
+		var i ListGraphMemoryMigrationRedirectsByNewIDRow
+		if err := rows.Scan(&i.OldKind, &i.OldID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listGraphMemoryMigrationRedirectsByOldID = `-- name: ListGraphMemoryMigrationRedirectsByOldID :many
+SELECT new_kind, new_id FROM graph_memory_migration_redirect
+WHERE workspace_id = $1 AND old_kind = $2
+  AND old_id = ANY($3::text[])
+`
+
+type ListGraphMemoryMigrationRedirectsByOldIDParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	OldKind     string      `json:"old_kind"`
+	OldIds      []string    `json:"old_ids"`
+}
+
+type ListGraphMemoryMigrationRedirectsByOldIDRow struct {
+	NewKind string `json:"new_kind"`
+	NewID   string `json:"new_id"`
+}
+
+// Forward resolution: a deletion entering through OLD canonical refs must
+// reach the NEW copies too.
+func (q *Queries) ListGraphMemoryMigrationRedirectsByOldID(ctx context.Context, arg ListGraphMemoryMigrationRedirectsByOldIDParams) ([]ListGraphMemoryMigrationRedirectsByOldIDRow, error) {
+	rows, err := q.db.Query(ctx, listGraphMemoryMigrationRedirectsByOldID, arg.WorkspaceID, arg.OldKind, arg.OldIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListGraphMemoryMigrationRedirectsByOldIDRow{}
+	for rows.Next() {
+		var i ListGraphMemoryMigrationRedirectsByOldIDRow
+		if err := rows.Scan(&i.NewKind, &i.NewID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMemoryArchiveManifestsDue = `-- name: ListMemoryArchiveManifestsDue :many
+SELECT id, workspace_id, blob_id, object_ref, key_envelope, cipher_sha256, size_bytes, status, archived_at, erase_due_at, erased_at
+FROM memory_archive_manifest
+WHERE status = 'archived' AND erase_due_at <= $1
+  AND NOT EXISTS (
+      SELECT 1 FROM memory_archive_restore_lease l
+      WHERE l.manifest_id = memory_archive_manifest.id AND l.expires_at > now()
+  )
+LIMIT $2
+`
+
+type ListMemoryArchiveManifestsDueParams struct {
+	EraseDueAt pgtype.Timestamptz `json:"erase_due_at"`
+	LimitCount int32              `json:"limit_count"`
+}
+
+func (q *Queries) ListMemoryArchiveManifestsDue(ctx context.Context, arg ListMemoryArchiveManifestsDueParams) ([]MemoryArchiveManifest, error) {
+	rows, err := q.db.Query(ctx, listMemoryArchiveManifestsDue, arg.EraseDueAt, arg.LimitCount)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []MemoryArchiveManifest{}
+	for rows.Next() {
+		var i MemoryArchiveManifest
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.BlobID,
+			&i.ObjectRef,
+			&i.KeyEnvelope,
+			&i.CipherSha256,
+			&i.SizeBytes,
+			&i.Status,
+			&i.ArchivedAt,
+			&i.EraseDueAt,
+			&i.ErasedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMemoryRetentionWorkspaceIDs = `-- name: ListMemoryRetentionWorkspaceIDs :many
+SELECT DISTINCT workspace_id FROM memory_retention_policy
+`
+
+// Every workspace bound to at least one policy version.
+func (q *Queries) ListMemoryRetentionWorkspaceIDs(ctx context.Context) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listMemoryRetentionWorkspaceIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var workspace_id pgtype.UUID
+		if err := rows.Scan(&workspace_id); err != nil {
+			return nil, err
+		}
+		items = append(items, workspace_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listQuarantinedAtomIDs = `-- name: ListQuarantinedAtomIDs :many
+SELECT consumer_id
+FROM quarantined_pending_recompute
+WHERE workspace_id = $1
+  AND consumer_kind = 'graph_memory_atom'
+`
+
+// Retracted atom ids of one workspace (the re-assertion set handed to
+// InstallAtomSnapshot alongside the active snapshot).
+func (q *Queries) ListQuarantinedAtomIDs(ctx context.Context, workspaceID pgtype.UUID) ([]string, error) {
+	rows, err := q.db.Query(ctx, listQuarantinedAtomIDs, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var consumer_id string
+		if err := rows.Scan(&consumer_id); err != nil {
+			return nil, err
+		}
+		items = append(items, consumer_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSegmentAtomBodies = `-- name: ListSegmentAtomBodies :many
+SELECT atom_id, body
+FROM graph_memory_atom
+WHERE workspace_id = $1
+  AND segment_id = $2
+ORDER BY atom_id
+LIMIT $3
+`
+
+type ListSegmentAtomBodiesParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	SegmentID   string      `json:"segment_id"`
+	LimitRows   int32       `json:"limit_rows"`
+}
+
+type ListSegmentAtomBodiesRow struct {
+	AtomID string `json:"atom_id"`
+	Body   string `json:"body"`
+}
+
+// Summary fallback for canonical segments (Task 11 Step 4): their atoms are
+// the summary until a reviewer writes one.
+func (q *Queries) ListSegmentAtomBodies(ctx context.Context, arg ListSegmentAtomBodiesParams) ([]ListSegmentAtomBodiesRow, error) {
+	rows, err := q.db.Query(ctx, listSegmentAtomBodies, arg.WorkspaceID, arg.SegmentID, arg.LimitRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSegmentAtomBodiesRow{}
+	for rows.Next() {
+		var i ListSegmentAtomBodiesRow
+		if err := rows.Scan(&i.AtomID, &i.Body); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSiblingAtoms = `-- name: ListSiblingAtoms :many
+SELECT atom_id
+FROM graph_memory_atom
+WHERE workspace_id = $1
+  AND segment_id = $2
+  AND atom_id <> $3
+ORDER BY atom_id
+LIMIT $4
+`
+
+type ListSiblingAtomsParams struct {
+	WorkspaceID  pgtype.UUID `json:"workspace_id"`
+	SegmentID    string      `json:"segment_id"`
+	ExceptAtomID string      `json:"except_atom_id"`
+	LimitRows    int32       `json:"limit_rows"`
+}
+
+// Sibling atoms of one segment (same-segment neighborhood, Task 11).
+func (q *Queries) ListSiblingAtoms(ctx context.Context, arg ListSiblingAtomsParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, listSiblingAtoms,
+		arg.WorkspaceID,
+		arg.SegmentID,
+		arg.ExceptAtomID,
+		arg.LimitRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var atom_id string
+		if err := rows.Scan(&atom_id); err != nil {
+			return nil, err
+		}
+		items = append(items, atom_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStagingAtomsAtWatermark = `-- name: ListStagingAtomsAtWatermark :many
+SELECT atom.atom_id, atom.segment_id,
+       COALESCE(atom.channel_id::text, '')::text AS channel_id,
+       COALESCE(atom.project_id::text, '')::text AS project_id,
+       atom.publish_seq::bigint
+FROM graph_memory_atom atom
+WHERE atom.workspace_id = $1
+  AND atom.publish_seq <= $2
+  AND (
+        ($3::text <> '' AND atom.channel_id::text = $3)
+     OR ($3::text = '' AND atom.channel_id IS NULL AND atom.project_id IS NOT NULL)
+  )
+ORDER BY atom.publish_seq DESC, atom.atom_id
+LIMIT $4
+`
+
+type ListStagingAtomsAtWatermarkParams struct {
+	WorkspaceID   pgtype.UUID `json:"workspace_id"`
+	PublishSeqMax int64       `json:"publish_seq_max"`
+	ChannelID     string      `json:"channel_id"`
+	LimitRows     int32       `json:"limit_rows"`
+}
+
+type ListStagingAtomsAtWatermarkRow struct {
+	AtomID         string `json:"atom_id"`
+	SegmentID      string `json:"segment_id"`
+	ChannelID      string `json:"channel_id"`
+	ProjectID      string `json:"project_id"`
+	AtomPublishSeq int64  `json:"atom_publish_seq"`
+}
+
+// Explore v2 seed channel (Task 11): active atoms of the pinned scopes,
+// readable only up to the plan's frozen publish watermark.
+func (q *Queries) ListStagingAtomsAtWatermark(ctx context.Context, arg ListStagingAtomsAtWatermarkParams) ([]ListStagingAtomsAtWatermarkRow, error) {
+	rows, err := q.db.Query(ctx, listStagingAtomsAtWatermark,
+		arg.WorkspaceID,
+		arg.PublishSeqMax,
+		arg.ChannelID,
+		arg.LimitRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListStagingAtomsAtWatermarkRow{}
+	for rows.Next() {
+		var i ListStagingAtomsAtWatermarkRow
+		if err := rows.Scan(
+			&i.AtomID,
+			&i.SegmentID,
+			&i.ChannelID,
+			&i.ProjectID,
+			&i.AtomPublishSeq,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUniversalDAGGateTransitions = `-- name: ListUniversalDAGGateTransitions :many
+SELECT transition_id, scope, workspace_id, gate_name, from_phase, to_phase,
+       reason, trigger, evidence, policy_version, actor, created_at
+FROM universal_dag_gate_transition
+WHERE (scope = 'workspace' AND workspace_id = $1)
+   OR scope = 'global'
+ORDER BY transition_id DESC
+LIMIT $2
+`
+
+type ListUniversalDAGGateTransitionsParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	LimitRows   int32       `json:"limit_rows"`
+}
+
+// Recent transitions of one workspace (its own scope plus global gates).
+func (q *Queries) ListUniversalDAGGateTransitions(ctx context.Context, arg ListUniversalDAGGateTransitionsParams) ([]UniversalDagGateTransition, error) {
+	rows, err := q.db.Query(ctx, listUniversalDAGGateTransitions, arg.WorkspaceID, arg.LimitRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []UniversalDagGateTransition{}
+	for rows.Next() {
+		var i UniversalDagGateTransition
+		if err := rows.Scan(
+			&i.TransitionID,
+			&i.Scope,
+			&i.WorkspaceID,
+			&i.GateName,
+			&i.FromPhase,
+			&i.ToPhase,
+			&i.Reason,
+			&i.Trigger,
+			&i.Evidence,
+			&i.PolicyVersion,
+			&i.Actor,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUniversalDAGShadowGatesForWorkspace = `-- name: ListUniversalDAGShadowGatesForWorkspace :many
+SELECT scope, workspace_id, gate_name, phase, gate_version, policy_version,
+       evidence, updated_by, created_at, updated_at
+FROM universal_dag_shadow_gate
+WHERE (scope = 'workspace' AND workspace_id = $1)
+   OR scope = 'global'
+ORDER BY scope, gate_name
+`
+
+// Every gate row one workspace's governance view needs: its own routes plus
+// the global training gates (nil-uuid sentinel scope).
+func (q *Queries) ListUniversalDAGShadowGatesForWorkspace(ctx context.Context, workspaceID pgtype.UUID) ([]UniversalDagShadowGate, error) {
+	rows, err := q.db.Query(ctx, listUniversalDAGShadowGatesForWorkspace, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []UniversalDagShadowGate{}
+	for rows.Next() {
+		var i UniversalDagShadowGate
+		if err := rows.Scan(
+			&i.Scope,
+			&i.WorkspaceID,
+			&i.GateName,
+			&i.Phase,
+			&i.GateVersion,
+			&i.PolicyVersion,
+			&i.Evidence,
+			&i.UpdatedBy,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockMemorySourceGuardsForUpdate = `-- name: LockMemorySourceGuardsForUpdate :many
+SELECT workspace_id, source_kind, source_id, retracted_at, retracted_by, reason
+FROM memory_source_guard
+WHERE workspace_id = $1
+  AND (source_kind || ':' || source_id) = ANY ($2::text[])
+ORDER BY source_kind, source_id
+FOR UPDATE
+`
+
+type LockMemorySourceGuardsForUpdateParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	SourceKeys  []string    `json:"source_keys"`
+}
+
+type LockMemorySourceGuardsForUpdateRow struct {
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	SourceKind  string             `json:"source_kind"`
+	SourceID    string             `json:"source_id"`
+	RetractedAt pgtype.Timestamptz `json:"retracted_at"`
+	RetractedBy string             `json:"retracted_by"`
+	Reason      string             `json:"reason"`
+}
+
+// Deterministic sorted order: every retraction locks the same key order, so
+// concurrent retractions of overlapping source sets cannot deadlock. Source
+// keys are "kind:id" pairs (kind is a closed lowercase slug, id a uuid).
+func (q *Queries) LockMemorySourceGuardsForUpdate(ctx context.Context, arg LockMemorySourceGuardsForUpdateParams) ([]LockMemorySourceGuardsForUpdateRow, error) {
+	rows, err := q.db.Query(ctx, lockMemorySourceGuardsForUpdate, arg.WorkspaceID, arg.SourceKeys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []LockMemorySourceGuardsForUpdateRow{}
+	for rows.Next() {
+		var i LockMemorySourceGuardsForUpdateRow
+		if err := rows.Scan(
+			&i.WorkspaceID,
+			&i.SourceKind,
+			&i.SourceID,
+			&i.RetractedAt,
+			&i.RetractedBy,
+			&i.Reason,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockMemorySourceGuardsKeyShare = `-- name: LockMemorySourceGuardsKeyShare :many
+
+SELECT workspace_id, source_kind, source_id, retracted_at
+FROM memory_source_guard
+WHERE workspace_id = $1
+  AND (source_kind || ':' || source_id) = ANY ($2::text[])
+ORDER BY source_kind, source_id
+FOR KEY SHARE
+`
+
+type LockMemorySourceGuardsKeyShareParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	SourceKeys  []string    `json:"source_keys"`
+}
+
+type LockMemorySourceGuardsKeyShareRow struct {
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	SourceKind  string             `json:"source_kind"`
+	SourceID    string             `json:"source_id"`
+	RetractedAt pgtype.Timestamptz `json:"retracted_at"`
+}
+
+// ============ Task 14: DB-authoritative publication ledger ============
+// Publication lock: every contributing source is held FOR KEY SHARE in the
+// same deterministic source-key order the deletion path uses for FOR UPDATE,
+// so delete-first aborts the publication and publish-first makes the
+// deletion wait for the transaction that will quarantine the new closure.
+func (q *Queries) LockMemorySourceGuardsKeyShare(ctx context.Context, arg LockMemorySourceGuardsKeyShareParams) ([]LockMemorySourceGuardsKeyShareRow, error) {
+	rows, err := q.db.Query(ctx, lockMemorySourceGuardsKeyShare, arg.WorkspaceID, arg.SourceKeys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []LockMemorySourceGuardsKeyShareRow{}
+	for rows.Next() {
+		var i LockMemorySourceGuardsKeyShareRow
+		if err := rows.Scan(
+			&i.WorkspaceID,
+			&i.SourceKind,
+			&i.SourceID,
+			&i.RetractedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const maxAtomPublishSeq = `-- name: MaxAtomPublishSeq :one
+SELECT COALESCE(max(publish_seq), 0)::bigint
+FROM graph_memory_atom
+WHERE workspace_id = $1
+`
+
+// The workspace's current atom publish watermark (0 when no atom exists).
+func (q *Queries) MaxAtomPublishSeq(ctx context.Context, workspaceID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, maxAtomPublishSeq, workspaceID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const maxGraphMemoryChannelBindingGeneration = `-- name: MaxGraphMemoryChannelBindingGeneration :one
+
+SELECT COALESCE(MAX(generation), 0)::bigint AS max_generation
+FROM graph_memory_channel_binding
+WHERE channel_id = $1
+`
+
+// ---------------------------------------------------------------------------
+// Task 16: channel-owned Graph migration (spec §12). Binding generations,
+// the copy ledger, citation redirects, and blob refs.
+// ---------------------------------------------------------------------------
+func (q *Queries) MaxGraphMemoryChannelBindingGeneration(ctx context.Context, channelID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, maxGraphMemoryChannelBindingGeneration, channelID)
+	var max_generation int64
+	err := row.Scan(&max_generation)
+	return max_generation, err
+}
+
+const memoryExploreWatermarks = `-- name: MemoryExploreWatermarks :one
+SELECT
+    (SELECT COALESCE(MAX(seg.publish_seq), 0)::bigint FROM interaction_dag_segment seg
+      WHERE seg.workspace_id = $1) AS segment_publish_seq_max,
+    (SELECT COALESCE(MAX(edge.edge_seq), 0)::bigint FROM interaction_dag_edge edge
+      WHERE edge.workspace_id = $1) AS interaction_edge_seq_max
+`
+
+type MemoryExploreWatermarksRow struct {
+	SegmentPublishSeqMax  int64 `json:"segment_publish_seq_max"`
+	InteractionEdgeSeqMax int64 `json:"interaction_edge_seq_max"`
+}
+
+// The frozen read ceilings of one workspace: the highest published segment
+// watermark and the highest interaction edge sequence.
+func (q *Queries) MemoryExploreWatermarks(ctx context.Context, workspaceID pgtype.UUID) (MemoryExploreWatermarksRow, error) {
+	row := q.db.QueryRow(ctx, memoryExploreWatermarks, workspaceID)
+	var i MemoryExploreWatermarksRow
+	err := row.Scan(&i.SegmentPublishSeqMax, &i.InteractionEdgeSeqMax)
+	return i, err
+}
+
+const provenanceConsumersForSources = `-- name: ProvenanceConsumersForSources :many
+SELECT DISTINCT consumer_kind, consumer_id
+FROM memory_source_provenance
+WHERE workspace_id = $1
+  AND (source_kind || ':' || source_id) = ANY ($2::text[])
+`
+
+type ProvenanceConsumersForSourcesParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	SourceKeys  []string    `json:"source_keys"`
+}
+
+type ProvenanceConsumersForSourcesRow struct {
+	ConsumerKind string `json:"consumer_kind"`
+	ConsumerID   string `json:"consumer_id"`
+}
+
+// The complete currently published reverse-provenance closure of the fenced
+// sources: every consumer that must be quarantined.
+func (q *Queries) ProvenanceConsumersForSources(ctx context.Context, arg ProvenanceConsumersForSourcesParams) ([]ProvenanceConsumersForSourcesRow, error) {
+	rows, err := q.db.Query(ctx, provenanceConsumersForSources, arg.WorkspaceID, arg.SourceKeys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ProvenanceConsumersForSourcesRow{}
+	for rows.Next() {
+		var i ProvenanceConsumersForSourcesRow
+		if err := rows.Scan(&i.ConsumerKind, &i.ConsumerID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const publishedNodesCoveringAtoms = `-- name: PublishedNodesCoveringAtoms :many
+SELECT prov.workspace_id, prov.graph_kind, prov.graph_owner_id,
+       prov.generation, prov.node_id
+FROM graph_memory_publication_provenance prov
+JOIN graph_memory_publication_index idx
+  ON idx.workspace_id = prov.workspace_id
+ AND idx.graph_kind = prov.graph_kind
+ AND idx.graph_owner_id = prov.graph_owner_id
+ AND idx.active_generation = prov.generation
+WHERE prov.workspace_id = $1::uuid
+  AND prov.atom_ids && $2::text[]
+`
+
+type PublishedNodesCoveringAtomsParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	AtomIds     []string    `json:"atom_ids"`
+}
+
+type PublishedNodesCoveringAtomsRow struct {
+	WorkspaceID  pgtype.UUID `json:"workspace_id"`
+	GraphKind    string      `json:"graph_kind"`
+	GraphOwnerID pgtype.UUID `json:"graph_owner_id"`
+	Generation   int64       `json:"generation"`
+	NodeID       string      `json:"node_id"`
+}
+
+// Retraction join: the published nodes whose provenance cites any of the
+// retracted atoms, scoped to the ACTIVE generation of each graph.
+func (q *Queries) PublishedNodesCoveringAtoms(ctx context.Context, arg PublishedNodesCoveringAtomsParams) ([]PublishedNodesCoveringAtomsRow, error) {
+	rows, err := q.db.Query(ctx, publishedNodesCoveringAtoms, arg.WorkspaceID, arg.AtomIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []PublishedNodesCoveringAtomsRow{}
+	for rows.Next() {
+		var i PublishedNodesCoveringAtomsRow
+		if err := rows.Scan(
+			&i.WorkspaceID,
+			&i.GraphKind,
+			&i.GraphOwnerID,
+			&i.Generation,
+			&i.NodeID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const quarantineWorkspaceProvenance = `-- name: QuarantineWorkspaceProvenance :execrows
+INSERT INTO quarantined_pending_recompute (workspace_id, retraction_id, consumer_kind, consumer_id)
+SELECT p.workspace_id, $1, p.consumer_kind, p.consumer_id
+FROM memory_source_provenance p
+WHERE p.workspace_id = $2
+ON CONFLICT DO NOTHING
+`
+
+type QuarantineWorkspaceProvenanceParams struct {
+	RetractionID pgtype.UUID `json:"retraction_id"`
+	WorkspaceID  pgtype.UUID `json:"workspace_id"`
+}
+
+// Complete quarantined reverse-provenance closure of every source the
+// workspace fence covered.
+func (q *Queries) QuarantineWorkspaceProvenance(ctx context.Context, arg QuarantineWorkspaceProvenanceParams) (int64, error) {
+	result, err := q.db.Exec(ctx, quarantineWorkspaceProvenance, arg.RetractionID, arg.WorkspaceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const registerUniversalDAGShadowGate = `-- name: RegisterUniversalDAGShadowGate :execrows
+INSERT INTO universal_dag_shadow_gate (scope, workspace_id, gate_name, updated_by)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT DO NOTHING
+`
+
+type RegisterUniversalDAGShadowGateParams struct {
+	Scope       string      `json:"scope"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	GateName    string      `json:"gate_name"`
+	UpdatedBy   pgtype.Text `json:"updated_by"`
+}
+
+// Creates the default-disabled row at version 0; conflicts are no-ops so the
+// register step is idempotent inside a promotion transaction.
+func (q *Queries) RegisterUniversalDAGShadowGate(ctx context.Context, arg RegisterUniversalDAGShadowGateParams) (int64, error) {
+	result, err := q.db.Exec(ctx, registerUniversalDAGShadowGate,
+		arg.Scope,
+		arg.WorkspaceID,
+		arg.GateName,
+		arg.UpdatedBy,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const registerWorkspaceMemorySourceGuard = `-- name: RegisterWorkspaceMemorySourceGuard :exec
+INSERT INTO memory_source_guard (workspace_id, source_kind, source_id)
+VALUES ($1, 'workspace', $2)
+ON CONFLICT (workspace_id, source_kind, source_id) DO NOTHING
+`
+
+type RegisterWorkspaceMemorySourceGuardParams struct {
+	WorkspaceID     pgtype.UUID `json:"workspace_id"`
+	WorkspaceIDText string      `json:"workspace_id_text"`
+}
+
+// The workspace's own canonical source row, registered before the set-based
+// workspace fence so a workspace that never published still fences.
+func (q *Queries) RegisterWorkspaceMemorySourceGuard(ctx context.Context, arg RegisterWorkspaceMemorySourceGuardParams) error {
+	_, err := q.db.Exec(ctx, registerWorkspaceMemorySourceGuard, arg.WorkspaceID, arg.WorkspaceIDText)
+	return err
+}
+
+const releaseGraphMemoryBlobRefs = `-- name: ReleaseGraphMemoryBlobRefs :execrows
+UPDATE graph_memory_blob_ref
+SET released_at = now()
+WHERE blob_id = $1 AND released_at IS NULL
+`
+
+func (q *Queries) ReleaseGraphMemoryBlobRefs(ctx context.Context, blobID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, releaseGraphMemoryBlobRefs, blobID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const resolveStagingAtomForRef = `-- name: ResolveStagingAtomForRef :one
+SELECT atom.atom_id,
+       atom.segment_id,
+       segment.agent_run_id::text AS source_id,
+       COALESCE(segment.channel_id_at_event::text, '')::text AS channel_id_at_event,
+       COALESCE(segment.project_id_at_event::text, '')::text AS project_id_at_event
+FROM graph_memory_atom atom
+JOIN interaction_dag_segment segment
+  ON segment.workspace_id = atom.workspace_id
+ AND segment.segment_id = atom.segment_id
+WHERE atom.workspace_id = $1
+  AND atom.atom_id = $2
+`
+
+type ResolveStagingAtomForRefParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	AtomID      string      `json:"atom_id"`
+}
+
+type ResolveStagingAtomForRefRow struct {
+	AtomID           string `json:"atom_id"`
+	SegmentID        string `json:"segment_id"`
+	SourceID         string `json:"source_id"`
+	ChannelIDAtEvent string `json:"channel_id_at_event"`
+	ProjectIDAtEvent string `json:"project_id_at_event"`
+}
+
+// Staging-atom resolution (Task 10 Step 2): atom -> owning segment -> its
+// canonical task_output source, so the resolver can recheck the Task 8A
+// retraction registry on every resolve.
+func (q *Queries) ResolveStagingAtomForRef(ctx context.Context, arg ResolveStagingAtomForRefParams) (ResolveStagingAtomForRefRow, error) {
+	row := q.db.QueryRow(ctx, resolveStagingAtomForRef, arg.WorkspaceID, arg.AtomID)
+	var i ResolveStagingAtomForRefRow
+	err := row.Scan(
+		&i.AtomID,
+		&i.SegmentID,
+		&i.SourceID,
+		&i.ChannelIDAtEvent,
+		&i.ProjectIDAtEvent,
+	)
+	return i, err
+}
+
+const retireGraphMemoryBlob = `-- name: RetireGraphMemoryBlob :execrows
+UPDATE graph_memory_blob
+SET status = 'retired', retired_at = now()
+WHERE id = $1 AND workspace_id = $2 AND status = 'active'
+`
+
+type RetireGraphMemoryBlobParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) RetireGraphMemoryBlob(ctx context.Context, arg RetireGraphMemoryBlobParams) (int64, error) {
+	result, err := q.db.Exec(ctx, retireGraphMemoryBlob, arg.ID, arg.WorkspaceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const retractedMemorySources = `-- name: RetractedMemorySources :many
+SELECT source_kind, source_id
+FROM memory_source_guard
+WHERE workspace_id = $1
+  AND retracted_at IS NOT NULL
+  AND (source_kind || ':' || source_id) = ANY ($2::text[])
+`
+
+type RetractedMemorySourcesParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	SourceKeys  []string    `json:"source_keys"`
+}
+
+type RetractedMemorySourcesRow struct {
+	SourceKind string `json:"source_kind"`
+	SourceID   string `json:"source_id"`
+}
+
+// Read-gate check: which of the requested refs are fenced.
+func (q *Queries) RetractedMemorySources(ctx context.Context, arg RetractedMemorySourcesParams) ([]RetractedMemorySourcesRow, error) {
+	rows, err := q.db.Query(ctx, retractedMemorySources, arg.WorkspaceID, arg.SourceKeys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []RetractedMemorySourcesRow{}
+	for rows.Next() {
+		var i RetractedMemorySourcesRow
+		if err := rows.Scan(&i.SourceKind, &i.SourceID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const retryGraphMemoryProjection = `-- name: RetryGraphMemoryProjection :execrows
+UPDATE graph_memory_projection_outbox
+SET status = 'retry',
+    attempts = $1,
+    lease_owner = NULL,
+    lease_expires_at = NULL,
+    next_attempt_at = $2,
+    last_error = $3,
+    updated_at = now()
+WHERE workspace_id = $4
+  AND segment_id = $5
+  AND status = 'processing'
+  AND attempts = $6
+`
+
+type RetryGraphMemoryProjectionParams struct {
+	Attempts        int32              `json:"attempts"`
+	NextAttemptAt   pgtype.Timestamptz `json:"next_attempt_at"`
+	LastError       pgtype.Text        `json:"last_error"`
+	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
+	SegmentID       string             `json:"segment_id"`
+	CurrentAttempts int32              `json:"current_attempts"`
+}
+
+// CAS-guarded retry bookkeeping for a failed projection attempt.
+func (q *Queries) RetryGraphMemoryProjection(ctx context.Context, arg RetryGraphMemoryProjectionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, retryGraphMemoryProjection,
+		arg.Attempts,
+		arg.NextAttemptAt,
+		arg.LastError,
+		arg.WorkspaceID,
+		arg.SegmentID,
+		arg.CurrentAttempts,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setMemoryReadPhaseGate = `-- name: SetMemoryReadPhaseGate :execrows
+UPDATE memory_read_phase_gate
+SET atoms_enabled = $1,
+    search_v2_enabled = $2,
+    explore_enabled = $3,
+    citations_enabled = $4,
+    atom_consolidation_enabled = $5,
+    retraction_canary_ok = $6,
+    updated_at = now()
+WHERE workspace_id = $7
+`
+
+type SetMemoryReadPhaseGateParams struct {
+	AtomsEnabled             bool        `json:"atoms_enabled"`
+	SearchV2Enabled          bool        `json:"search_v2_enabled"`
+	ExploreEnabled           bool        `json:"explore_enabled"`
+	CitationsEnabled         bool        `json:"citations_enabled"`
+	AtomConsolidationEnabled bool        `json:"atom_consolidation_enabled"`
+	RetractionCanaryOk       bool        `json:"retraction_canary_ok"`
+	WorkspaceID              pgtype.UUID `json:"workspace_id"`
+}
+
+// The only sanctioned way to flip a route on; requires the retraction canary.
+func (q *Queries) SetMemoryReadPhaseGate(ctx context.Context, arg SetMemoryReadPhaseGateParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setMemoryReadPhaseGate,
+		arg.AtomsEnabled,
+		arg.SearchV2Enabled,
+		arg.ExploreEnabled,
+		arg.CitationsEnabled,
+		arg.AtomConsolidationEnabled,
+		arg.RetractionCanaryOk,
+		arg.WorkspaceID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setMemoryReadPhaseGateChannelMigration = `-- name: SetMemoryReadPhaseGateChannelMigration :exec
+UPDATE memory_read_phase_gate
+SET channel_migration_enabled = $2, updated_at = now()
+WHERE workspace_id = $1
+`
+
+type SetMemoryReadPhaseGateChannelMigrationParams struct {
+	WorkspaceID             pgtype.UUID `json:"workspace_id"`
+	ChannelMigrationEnabled bool        `json:"channel_migration_enabled"`
+}
+
+// Operator-approved opt-in for the channel-migration copy route (Task 16).
+func (q *Queries) SetMemoryReadPhaseGateChannelMigration(ctx context.Context, arg SetMemoryReadPhaseGateChannelMigrationParams) error {
+	_, err := q.db.Exec(ctx, setMemoryReadPhaseGateChannelMigration, arg.WorkspaceID, arg.ChannelMigrationEnabled)
+	return err
+}
+
+const tightenMemoryArchiveEraseDue = `-- name: TightenMemoryArchiveEraseDue :execrows
+UPDATE memory_archive_manifest
+SET erase_due_at = $1::timestamptz
+WHERE workspace_id = $2::uuid
+  AND status = 'archived'
+  AND erase_due_at > $1::timestamptz
+`
+
+type TightenMemoryArchiveEraseDueParams struct {
+	EraseDue    pgtype.Timestamptz `json:"erase_due"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+}
+
+// Shortened policy: existing eligible rows may only ever have their
+// erase deadline TIGHTENED (LEAST), never extended past the originally
+// bound date.
+func (q *Queries) TightenMemoryArchiveEraseDue(ctx context.Context, arg TightenMemoryArchiveEraseDueParams) (int64, error) {
+	result, err := q.db.Exec(ctx, tightenMemoryArchiveEraseDue, arg.EraseDue, arg.WorkspaceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const transitionUniversalDAGShadowGate = `-- name: TransitionUniversalDAGShadowGate :execrows
+UPDATE universal_dag_shadow_gate
+SET phase = $1,
+    gate_version = universal_dag_shadow_gate.gate_version + 1,
+    policy_version = $2,
+    evidence = $3::jsonb,
+    updated_by = $4,
+    updated_at = now()
+WHERE scope = $5
+  AND workspace_id = $6
+  AND gate_name = $7
+  AND gate_version = $8
+  AND phase = $9
+`
+
+type TransitionUniversalDAGShadowGateParams struct {
+	ToPhase         string      `json:"to_phase"`
+	PolicyVersion   int64       `json:"policy_version"`
+	Evidence        []byte      `json:"evidence"`
+	UpdatedBy       pgtype.Text `json:"updated_by"`
+	Scope           string      `json:"scope"`
+	WorkspaceID     pgtype.UUID `json:"workspace_id"`
+	GateName        string      `json:"gate_name"`
+	ExpectedVersion int64       `json:"expected_version"`
+	FromPhase       string      `json:"from_phase"`
+}
+
+// The only sanctioned phase move: CAS on (gate_version, from_phase). A stale
+// expected version affects zero rows and the caller must report a conflict.
+func (q *Queries) TransitionUniversalDAGShadowGate(ctx context.Context, arg TransitionUniversalDAGShadowGateParams) (int64, error) {
+	result, err := q.db.Exec(ctx, transitionUniversalDAGShadowGate,
+		arg.ToPhase,
+		arg.PolicyVersion,
+		arg.Evidence,
+		arg.UpdatedBy,
+		arg.Scope,
+		arg.WorkspaceID,
+		arg.GateName,
+		arg.ExpectedVersion,
+		arg.FromPhase,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const updateGraphMemoryProfileCAS = `-- name: UpdateGraphMemoryProfileCAS :one
@@ -671,5 +3908,195 @@ func (q *Queries) UpsertGraphMemoryChannelRoute(ctx context.Context, arg UpsertG
 		arg.CurrentGraphOwnerID,
 		arg.Generation,
 	)
+	return err
+}
+
+const upsertGraphMemoryMigrationRedirect = `-- name: UpsertGraphMemoryMigrationRedirect :exec
+INSERT INTO graph_memory_migration_redirect (
+    workspace_id, old_kind, old_id, new_kind, new_id, binding_generation
+) VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (workspace_id, old_kind, old_id) DO NOTHING
+`
+
+type UpsertGraphMemoryMigrationRedirectParams struct {
+	WorkspaceID       pgtype.UUID `json:"workspace_id"`
+	OldKind           string      `json:"old_kind"`
+	OldID             string      `json:"old_id"`
+	NewKind           string      `json:"new_kind"`
+	NewID             string      `json:"new_id"`
+	BindingGeneration int64       `json:"binding_generation"`
+}
+
+func (q *Queries) UpsertGraphMemoryMigrationRedirect(ctx context.Context, arg UpsertGraphMemoryMigrationRedirectParams) error {
+	_, err := q.db.Exec(ctx, upsertGraphMemoryMigrationRedirect,
+		arg.WorkspaceID,
+		arg.OldKind,
+		arg.OldID,
+		arg.NewKind,
+		arg.NewID,
+		arg.BindingGeneration,
+	)
+	return err
+}
+
+const upsertGraphMemoryPublicationIndex = `-- name: UpsertGraphMemoryPublicationIndex :exec
+INSERT INTO graph_memory_publication_index (
+    workspace_id, graph_kind, graph_owner_id, active_generation,
+    graph_version, file_manifest_hash
+) VALUES (
+    $1, $2, $3,
+    $4, $5, $6
+) ON CONFLICT (workspace_id, graph_kind, graph_owner_id) DO UPDATE
+SET active_generation = EXCLUDED.active_generation,
+    graph_version = EXCLUDED.graph_version,
+    file_manifest_hash = EXCLUDED.file_manifest_hash,
+    activated_at = now()
+`
+
+type UpsertGraphMemoryPublicationIndexParams struct {
+	WorkspaceID      pgtype.UUID `json:"workspace_id"`
+	GraphKind        string      `json:"graph_kind"`
+	GraphOwnerID     pgtype.UUID `json:"graph_owner_id"`
+	ActiveGeneration int64       `json:"active_generation"`
+	GraphVersion     int32       `json:"graph_version"`
+	FileManifestHash string      `json:"file_manifest_hash"`
+}
+
+// Reader-facing active pointer; written in the same transaction as the CAS
+// so an observer of the row observes the complete generation.
+func (q *Queries) UpsertGraphMemoryPublicationIndex(ctx context.Context, arg UpsertGraphMemoryPublicationIndexParams) error {
+	_, err := q.db.Exec(ctx, upsertGraphMemoryPublicationIndex,
+		arg.WorkspaceID,
+		arg.GraphKind,
+		arg.GraphOwnerID,
+		arg.ActiveGeneration,
+		arg.GraphVersion,
+		arg.FileManifestHash,
+	)
+	return err
+}
+
+const upsertMemoryExplorePlan = `-- name: UpsertMemoryExplorePlan :one
+INSERT INTO memory_explore_plan (
+    workspace_id, trajectory_id, pinned_graphs,
+    segment_publish_seq_max, interaction_edge_seq_max, budgets
+) VALUES (
+    $1, $2, $3::jsonb,
+    $4, $5,
+    $6::jsonb
+)
+ON CONFLICT (workspace_id, trajectory_id) DO UPDATE SET
+    pinned_graphs = EXCLUDED.pinned_graphs,
+    segment_publish_seq_max = GREATEST(
+        memory_explore_plan.segment_publish_seq_max, EXCLUDED.segment_publish_seq_max),
+    interaction_edge_seq_max = GREATEST(
+        memory_explore_plan.interaction_edge_seq_max, EXCLUDED.interaction_edge_seq_max),
+    budgets = EXCLUDED.budgets,
+    rollover_count = memory_explore_plan.rollover_count + 1,
+    updated_at = now()
+RETURNING workspace_id, trajectory_id, pinned_graphs, segment_publish_seq_max,
+          interaction_edge_seq_max, budgets, rollover_count, created_at, updated_at
+`
+
+type UpsertMemoryExplorePlanParams struct {
+	WorkspaceID           pgtype.UUID `json:"workspace_id"`
+	TrajectoryID          string      `json:"trajectory_id"`
+	PinnedGraphs          []byte      `json:"pinned_graphs"`
+	SegmentPublishSeqMax  int64       `json:"segment_publish_seq_max"`
+	InteractionEdgeSeqMax int64       `json:"interaction_edge_seq_max"`
+	Budgets               []byte      `json:"budgets"`
+}
+
+// Persists one Explore plan (Task 10). A replayed start for the same
+// trajectory keeps the high-water marks (GREATEST) and counts one rollover;
+// the caller reads the route gate before calling, so a disabled route never
+// reaches this statement.
+func (q *Queries) UpsertMemoryExplorePlan(ctx context.Context, arg UpsertMemoryExplorePlanParams) (MemoryExplorePlan, error) {
+	row := q.db.QueryRow(ctx, upsertMemoryExplorePlan,
+		arg.WorkspaceID,
+		arg.TrajectoryID,
+		arg.PinnedGraphs,
+		arg.SegmentPublishSeqMax,
+		arg.InteractionEdgeSeqMax,
+		arg.Budgets,
+	)
+	var i MemoryExplorePlan
+	err := row.Scan(
+		&i.WorkspaceID,
+		&i.TrajectoryID,
+		&i.PinnedGraphs,
+		&i.SegmentPublishSeqMax,
+		&i.InteractionEdgeSeqMax,
+		&i.Budgets,
+		&i.RolloverCount,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const upsertMemoryRetentionSweepCursor = `-- name: UpsertMemoryRetentionSweepCursor :exec
+INSERT INTO memory_retention_sweep_cursor (
+    workspace_id, last_trajectory_sweep_at, last_trace_sweep_at, last_archive_sweep_at, updated_at
+) VALUES ($1, $2, $3, $4, now())
+ON CONFLICT (workspace_id) DO UPDATE SET
+    last_trajectory_sweep_at = EXCLUDED.last_trajectory_sweep_at,
+    last_trace_sweep_at = EXCLUDED.last_trace_sweep_at,
+    last_archive_sweep_at = EXCLUDED.last_archive_sweep_at,
+    updated_at = now()
+`
+
+type UpsertMemoryRetentionSweepCursorParams struct {
+	WorkspaceID           pgtype.UUID        `json:"workspace_id"`
+	LastTrajectorySweepAt pgtype.Timestamptz `json:"last_trajectory_sweep_at"`
+	LastTraceSweepAt      pgtype.Timestamptz `json:"last_trace_sweep_at"`
+	LastArchiveSweepAt    pgtype.Timestamptz `json:"last_archive_sweep_at"`
+}
+
+func (q *Queries) UpsertMemoryRetentionSweepCursor(ctx context.Context, arg UpsertMemoryRetentionSweepCursorParams) error {
+	_, err := q.db.Exec(ctx, upsertMemoryRetentionSweepCursor,
+		arg.WorkspaceID,
+		arg.LastTrajectorySweepAt,
+		arg.LastTraceSweepAt,
+		arg.LastArchiveSweepAt,
+	)
+	return err
+}
+
+const upsertMemorySourceGuard = `-- name: UpsertMemorySourceGuard :exec
+INSERT INTO memory_source_guard (workspace_id, source_kind, source_id)
+VALUES ($1, $2, $3)
+ON CONFLICT (workspace_id, source_kind, source_id) DO NOTHING
+`
+
+type UpsertMemorySourceGuardParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	SourceKind  string      `json:"source_kind"`
+	SourceID    string      `json:"source_id"`
+}
+
+// Future publishes upsert their source's guard row so retraction can always
+// fence it (Task 8A backfill covers pre-467 sources).
+func (q *Queries) UpsertMemorySourceGuard(ctx context.Context, arg UpsertMemorySourceGuardParams) error {
+	_, err := q.db.Exec(ctx, upsertMemorySourceGuard, arg.WorkspaceID, arg.SourceKind, arg.SourceID)
+	return err
+}
+
+const upsertMemorySourceGuards = `-- name: UpsertMemorySourceGuards :exec
+INSERT INTO memory_source_guard (workspace_id, source_kind, source_id)
+SELECT $1, split_part(key, ':', 1), split_part(key, ':', 2)
+FROM unnest($2::text[]) AS t(key)
+ON CONFLICT DO NOTHING
+`
+
+type UpsertMemorySourceGuardsParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	SourceKeys  []string    `json:"source_keys"`
+}
+
+// RetractSourcesTx registers the sources it is about to fence: a business
+// delete of a source that never published anything still fences it.
+func (q *Queries) UpsertMemorySourceGuards(ctx context.Context, arg UpsertMemorySourceGuardsParams) error {
+	_, err := q.db.Exec(ctx, upsertMemorySourceGuards, arg.WorkspaceID, arg.SourceKeys)
 	return err
 }

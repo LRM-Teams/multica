@@ -32,6 +32,10 @@ func (h *Handler) GraphMemoryAgentTool(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "graph memory agent run is unavailable")
 		case errors.Is(err, service.ErrGraphMemoryAgentQuotaExceeded):
 			writeError(w, http.StatusTooManyRequests, err.Error())
+		case errors.Is(err, service.ErrMemoryRouteDisabled):
+			// A pinned v2 run under a red gate: v2 is unavailable, never
+			// silently served through the v1 payload surface.
+			writeError(w, http.StatusServiceUnavailable, "memory explore v2 is disabled for this workspace")
 		default:
 			writeError(w, http.StatusServiceUnavailable, err.Error())
 		}

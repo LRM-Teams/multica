@@ -42,6 +42,30 @@ func (f *fakeFullBacktestRunner) RunExplore(_ context.Context, version int, quer
 	return f.rounds, f.found, nil
 }
 
+func testConsolidateScope() ProviderScope {
+	return ProviderScope{
+		WorkspaceID: "test-workspace", Purpose: ProviderPurposeConsolidate,
+		Provider: "test", Model: "test-consolidate-model", Region: "test-region", PolicyVersion: "test-policy",
+	}
+}
+
+func mustScopedBacktestRunner(t *testing.T, runner FullBacktestRunner) *ScopedFullBacktestRunner {
+	t.Helper()
+	scoped, err := newScopedFullBacktestRunner(runner, testConsolidateScope())
+	if err != nil {
+		t.Fatalf("newScopedFullBacktestRunner: %v", err)
+	}
+	return scoped
+}
+
+func mustScopedBacktestConfirmer(t *testing.T, confirmer BacktestConfirmer) *ScopedBacktestConfirmer {
+	t.Helper()
+	scoped, err := NewScopedBacktestConfirmer(confirmer, testConsolidateScope())
+	if err != nil {
+		t.Fatalf("NewScopedBacktestConfirmer: %v", err)
+	}
+	return scoped
+}
 func (f *fakeFullBacktestRunner) callCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -170,7 +194,7 @@ func TestEvaluateUncoveredQueryFailsOutright(t *testing.T) {
 		BaselineRounds: 1, BaselineFound: true, JudgeDone: true, JudgeScore: 0.9,
 	}
 	runner := &fakeFullBacktestRunner{t: t, rounds: 1, found: true, forbid: map[string]bool{"alpha": true}}
-	bt := NewBacktester(store, BacktestConfig{Runner: runner})
+	bt := NewBacktester(store, BacktestConfig{Runner: mustScopedBacktestRunner(t, runner)})
 
 	stats := bt.EvaluateCandidate(context.Background(), cand, 1, []*BacktestQuery{q})
 	qs := stats.Queries[0]
@@ -274,7 +298,7 @@ func TestEvaluateCoveredQueryRunsFullBacktest(t *testing.T) {
 		BaselineRounds: 3, BaselineFound: true, JudgeDone: true, JudgeScore: 0.9,
 	}
 	runner := &fakeFullBacktestRunner{t: t, rounds: 4, found: true} // baseline 3 + tolerance 1
-	bt := NewBacktester(store, BacktestConfig{Runner: runner})
+	bt := NewBacktester(store, BacktestConfig{Runner: mustScopedBacktestRunner(t, runner)})
 
 	stats := bt.EvaluateCandidate(context.Background(), cand, 1, []*BacktestQuery{q})
 	if !stats.Passed {
@@ -321,7 +345,7 @@ func TestEvaluateRoundsOverflowRegresses(t *testing.T) {
 	}
 	// 5 rounds > baseline 2 + tolerance 1.
 	runner := &fakeFullBacktestRunner{t: t, rounds: 5, found: true}
-	bt := NewBacktester(store, BacktestConfig{Runner: runner})
+	bt := NewBacktester(store, BacktestConfig{Runner: mustScopedBacktestRunner(t, runner)})
 
 	stats := bt.EvaluateCandidate(context.Background(), cand, 1, []*BacktestQuery{window})
 	if !stats.Passed {
@@ -369,7 +393,7 @@ func TestEvaluateColdStartDegradesStatisticalGates(t *testing.T) {
 
 	// Without cold start the same setup fails the recall gate (0.5 < 1.0 -
 	// 0.02) and marks the gamma rounds overflow.
-	warm := NewBacktester(store, BacktestConfig{Runner: runner})
+	warm := NewBacktester(store, BacktestConfig{Runner: mustScopedBacktestRunner(t, runner)})
 	stats := warm.EvaluateCandidate(context.Background(), cand, 1, []*BacktestQuery{qAlpha, qGamma})
 	if stats.Passed {
 		t.Fatalf("warm candidate passed despite recall 0.5: %v", stats.GateFailures)
@@ -381,7 +405,7 @@ func TestEvaluateColdStartDegradesStatisticalGates(t *testing.T) {
 
 	// Cold start: the recall gate is skipped and the rounds overflow is not
 	// held against the candidate; the alpha miss stays marked regressed.
-	cold := NewBacktester(store, BacktestConfig{Runner: runner, ColdStart: true})
+	cold := NewBacktester(store, BacktestConfig{Runner: mustScopedBacktestRunner(t, runner), ColdStart: true})
 	stats = cold.EvaluateCandidate(context.Background(), cand, 1, []*BacktestQuery{qAlpha, qGamma})
 	if !stats.Passed {
 		t.Fatalf("cold-start candidate failed statistical gates: %v", stats.GateFailures)
@@ -714,7 +738,9 @@ func TestEvaluateCandidateSemanticConfirmationRecoversReplacement(t *testing.T) 
 		}
 		return node.NodeID == "replacement", nil
 	}}
-	stats := NewBacktester(store, BacktestConfig{Confirmer: confirmer}).EvaluateCandidate(context.Background(), candidate, 1, []*BacktestQuery{q})
+	stats := NewBacktester(store, BacktestConfig{
+		Scope: testConsolidateScope(), Confirmer: mustScopedBacktestConfirmer(t, confirmer),
+	}).EvaluateCandidate(context.Background(), candidate, 1, []*BacktestQuery{q})
 	got := stats.Queries[0]
 	if !got.Covered || got.ItemsSatisfied != 1 || got.ConfirmedNodeIDs["item"] != "replacement" {
 		t.Fatalf("query stat = %+v, want semantic replacement confirmation", got)
@@ -764,7 +790,7 @@ func TestEvaluateCandidateRoundsIncludeEverySuccessfulRun(t *testing.T) {
 	}{
 		"one": {rounds: 3, found: true}, "two": {rounds: 5, found: false}, "three": {rounds: 9, found: true},
 	}}
-	stats := NewBacktester(store, BacktestConfig{Runner: runner}).EvaluateCandidate(context.Background(), candidate, 1, queries)
+	stats := NewBacktester(store, BacktestConfig{Runner: mustScopedBacktestRunner(t, runner)}).EvaluateCandidate(context.Background(), candidate, 1, queries)
 	if stats.MeanRounds != float64(17)/3 || math.Abs(stats.P95Rounds-8.6) > 1e-9 {
 		t.Fatalf("mean/p95 = %v/%v, want 17/3 and 8.6", stats.MeanRounds, stats.P95Rounds)
 	}
@@ -781,5 +807,42 @@ func TestBacktestQueriesDeduplicatesWindowTraceID(t *testing.T) {
 	queries, err := BacktestQueries(store, 1)
 	if err != nil || len(queries) != 1 || queries[0].Query != "first" {
 		t.Fatalf("BacktestQueries = %+v, %v; want first trace occurrence once", queries, err)
+	}
+}
+
+type recordingBacktestConfirmer struct {
+	calls int
+}
+
+func (f *recordingBacktestConfirmer) ConfirmNode(_ context.Context, _ string, _ *Node) (bool, error) {
+	f.calls++
+	return true, nil
+}
+
+func TestEvaluateCandidateRejectsMismatchedConfirmerScopeBeforeUse(t *testing.T) {
+	store, candidate := itemBacktestStore(t, struct{ id, body string }{"replacement", "alpha replacement fact"})
+	q := &BacktestQuery{Query: "alpha", BaselineRounds: 1, BaselineFound: true, Items: []BacktestItem{{
+		ID: "item", Statement: "replacement fact", NodeIDs: []string{"old"},
+	}}}
+	runner := &fakeFullBacktestRunner{rounds: 1, found: true}
+	confirmer := &recordingBacktestConfirmer{}
+	mismatched := testConsolidateScope()
+	mismatched.WorkspaceID = "other-workspace"
+	scopedConfirmer, err := NewScopedBacktestConfirmer(confirmer, mismatched)
+	if err != nil {
+		t.Fatalf("NewScopedBacktestConfirmer: %v", err)
+	}
+	stats := NewBacktester(store, BacktestConfig{
+		Runner:    mustScopedBacktestRunner(t, runner),
+		Confirmer: scopedConfirmer,
+	}).EvaluateCandidate(context.Background(), candidate, 1, []*BacktestQuery{q})
+	if stats.Passed || !strings.Contains(strings.Join(stats.GateFailures, ";"), "scope identity") {
+		t.Fatalf("candidate = %+v, want confirmer scope identity rejection", stats)
+	}
+	if confirmer.calls != 0 {
+		t.Fatalf("confirmer calls = %d, want 0", confirmer.calls)
+	}
+	if got := runner.callCount(); got != 0 {
+		t.Fatalf("runner calls = %d, want 0", got)
 	}
 }

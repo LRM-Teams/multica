@@ -12,6 +12,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/logger"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
+	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -745,6 +746,15 @@ func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 		)
 	`, requester.WorkspaceID); err != nil {
 		slog.Warn("delete workspace runtime update intents failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
+		writeError(w, http.StatusInternalServerError, "failed to delete workspace")
+		return
+	}
+	// Task 8A: set-based fence of every canonical memory source in the
+	// workspace, in the same transaction as the workspace delete.
+	if err := service.NewMemoryRetractionService().RetractWorkspaceSourcesTx(
+		r.Context(), tx, requester.WorkspaceID,
+		"member:"+requestUserID(r), "workspace deleted"); err != nil {
+		slog.Warn("fence workspace memory sources failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
 		writeError(w, http.StatusInternalServerError, "failed to delete workspace")
 		return
 	}

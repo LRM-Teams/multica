@@ -1116,14 +1116,32 @@ func (a *envDispatchDepsAdapter) GetProjectByEnvID(ctx context.Context, envID, w
 // DeleteProject deletes the project row; cascades to issues / chat / tasks
 // via FK. Idempotent: a missing row is treated as success.
 func (a *envDispatchDepsAdapter) DeleteProject(ctx context.Context, projectID, workspaceID string) error {
-	err := a.h.Queries.DeleteProject(ctx, db.DeleteProjectParams{
-		ID:          parseUUID(projectID),
-		WorkspaceID: parseUUID(workspaceID),
-	})
-	if err == nil || errors.Is(err, pgx.ErrNoRows) {
-		return nil
+	// Task 8A: fence the project's canonical memory sources in the same
+	// transaction as the business delete. The deps interface carries no
+	// actor, so the route is the attributable principal.
+	wsUUID := parseUUID(workspaceID)
+	projUUID := parseUUID(projectID)
+	tx, err := a.h.TxStarter.Begin(ctx)
+	if err != nil {
+		return stackerr.Wrap(err, "start retraction transaction")
 	}
-	return stackerr.Wrap(err, "delete project")
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := a.h.fenceMemorySourcesTx(ctx, tx, wsUUID,
+		[]service.MemorySourceRef{memorySourceRef(wsUUID, service.MemorySourceProject, projUUID)},
+		"env_dispatch_cleanup", "project deleted via env dispatch cleanup"); err != nil {
+		return stackerr.Wrap(err, "fence project memory")
+	}
+	err = a.h.Queries.WithTx(tx).DeleteProject(ctx, db.DeleteProjectParams{
+		ID:          projUUID,
+		WorkspaceID: wsUUID,
+	})
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return stackerr.Wrap(err, "delete project")
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return stackerr.Wrap(err, "commit project delete")
+	}
+	return nil
 }
 
 func (a *envDispatchDepsAdapter) ResolveMessageRoster(ctx context.Context, workspaceID, agentID string, specs []service.PerAgentEnvSpec) (service.MessageRoster, error) {

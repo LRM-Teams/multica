@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -186,4 +188,89 @@ func TestSanitizeOfflineResolveLine_DoesNotIntroduceRawFields(t *testing.T) {
 func serviceHash(raw []byte) string {
 	sum := sha256.Sum256(raw)
 	return fmt.Sprintf("sha256:%x", sum[:])
+}
+
+// TestOfflineTrajectoriesResolveRequiresTrainingManifest pins the Task 18
+// Step 5 gate on the Mixed-RL NDJSON resolver: with the global switch off
+// the route fail-closes as training_disabled even when a manifest id is
+// supplied, and with the switch on but no manifest it demands one
+// (manifest_required) before any frozen payload is read.
+func TestOfflineTrajectoriesResolveRequiresTrainingManifest(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("test database unavailable")
+	}
+	ctx := context.Background()
+	restoreTrainingPolicy(t)
+	workspaceID := createGraphMemoryTestWorkspace(t)
+	var projectID pgtype.UUID
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO project (workspace_id, title) VALUES ($1, 'offline-resolve-gate') RETURNING id`,
+		workspaceID).Scan(&projectID); err != nil {
+		t.Fatalf("seed gate project: %v", err)
+	}
+	// The run's (run_id, frozen_snapshot_id) pair must reference a frozen
+	// snapshot row; both FKs are DEFERRABLE, so the two inserts share one
+	// transaction and the references resolve at commit.
+	seedTx, err := testPool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin seed tx: %v", err)
+	}
+	defer seedTx.Rollback(ctx)
+	var runID pgtype.UUID
+	if err := seedTx.QueryRow(ctx, `
+		INSERT INTO env_dispatch_run (
+		  project_id, workspace_id, training_mode, status,
+		  initial_message_submitted_at, timeout_deadline_at,
+		  frozen_snapshot_id, snapshot_hash, frozen_at
+		) VALUES (
+		  $1, $2, false, 'completed',
+		  now() - interval '1 hour', now() - interval '30 minutes',
+		  'sha256:offline-gate', 'sha256:offline-gate-hash', now()
+		)
+		RETURNING run_id`, projectID, workspaceID).Scan(&runID); err != nil {
+		t.Fatalf("seed frozen mixed run: %v", err)
+	}
+	if _, err := seedTx.Exec(ctx, `
+		INSERT INTO interaction_dag_frozen_snapshot (
+		  snapshot_id, run_id, run_status, schema_version, normalization_version,
+		  segment_count, call_count, edge_count, canonical_manifest, snapshot_hash
+		) VALUES (
+		  'sha256:offline-gate', $1, 'completed', 'gate-v1', 'gate-norm-v1',
+		  0, 0, 0, '{}'::jsonb, 'sha256:offline-gate-hash'
+		)`, runID); err != nil {
+		t.Fatalf("seed frozen snapshot: %v", err)
+	}
+	if err := seedTx.Commit(ctx); err != nil {
+		t.Fatalf("commit seed tx: %v", err)
+	}
+
+	svc := service.NewOfflineTrajectoryService(db.New(testPool))
+	gov := service.NewTrainingGovernanceService(testPool, nil)
+	req := service.OfflineResolveRequest{
+		RunID: runID, WorkspaceID: workspaceID,
+		SnapshotID: "sha256:offline-gate", CallIDs: []string{},
+		TrainingManifestID: uuid.NewString(),
+	}
+
+	// Switch off -> training_disabled even with a manifest id supplied.
+	off := false
+	if _, err := gov.SetTrainingPolicy(ctx, service.TrainingPolicyPatch{SelectionEnabled: &off}, "offline-gate"); err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.Resolve(ctx, req)
+	var gateErr *service.OfflineResolveError
+	if !errors.As(err, &gateErr) || gateErr.Code != "training_disabled" {
+		t.Fatalf("disabled resolve error = %v, want training_disabled", err)
+	}
+
+	// Switch on but no manifest -> manifest_required.
+	on := true
+	if _, err := gov.SetTrainingPolicy(ctx, service.TrainingPolicyPatch{SelectionEnabled: &on}, "offline-gate"); err != nil {
+		t.Fatal(err)
+	}
+	req.TrainingManifestID = ""
+	_, err = svc.Resolve(ctx, req)
+	if !errors.As(err, &gateErr) || gateErr.Code != "manifest_required" {
+		t.Fatalf("manifestless resolve error = %v, want manifest_required", err)
+	}
 }

@@ -24,6 +24,10 @@ type DirectorBriefFacts struct {
 	WorkItems, Discussions, Reports  []any
 	UnresolvedDisputes, Steering     []any
 	ReportPlan                       map[string]any
+	// BackgroundKnowledge carries the recalled memory-graph entries
+	// (unification spec §5): maps with node_id, graph, epistemic,
+	// observed_at_date and a bounded summary. Empty means no background.
+	BackgroundKnowledge []any
 }
 
 type CompiledDirectorBrief struct {
@@ -65,8 +69,9 @@ func (contextCompilerModule) CompileDirectorBrief(facts DirectorBriefFacts, now 
 			"workspace_id": facts.WorkspaceID, "run_id": facts.RunID, "director_assignment_id": facts.AssignmentID,
 			"director_generation": facts.DirectorGeneration, "state_version": facts.StateVersion, "through_event_sequence": facts.ThroughSequence,
 			"page": pageDescriptor, "goal": facts.Goal, "created_at": createdAt,
-			"research": map[string]any{"overview": "Current fresh Branch Frontier summaries.", "branch_count": len(facts.Branches), "branches": branches, "terminal_summaries": facts.TerminalSummaries, "unresolved_disputes": facts.UnresolvedDisputes},
-			"control":  map[string]any{"director_state": facts.DirectorState, "active_team_count": len(facts.Team), "team_hard_cap": 50, "creation_threshold": 20, "team": facts.Team, "work_items": work, "discussions": facts.Discussions, "reports": facts.Reports, "report_plan": reportPlan, "latest_steering": facts.Steering, "changes": []any{}},
+			"background_knowledge": compileV6BackgroundKnowledgeBlock(facts),
+			"research":             map[string]any{"overview": "Current fresh Branch Frontier summaries.", "branch_count": len(facts.Branches), "branches": branches, "terminal_summaries": facts.TerminalSummaries, "unresolved_disputes": facts.UnresolvedDisputes},
+			"control":              map[string]any{"director_state": facts.DirectorState, "active_team_count": len(facts.Team), "team_hard_cap": 50, "creation_threshold": 20, "team": facts.Team, "work_items": work, "discussions": facts.Discussions, "reports": facts.Reports, "report_plan": reportPlan, "latest_steering": facts.Steering, "changes": []any{}},
 		}
 		canonical, err := marshalV6CanonicalJSON(page)
 		if err != nil {
@@ -98,6 +103,23 @@ func (contextCompilerModule) CompileDirectorBrief(facts DirectorBriefFacts, now 
 		encoded[index] = raw
 	}
 	return CompiledDirectorBrief{BriefID: briefID, BriefHash: briefHash, Pages: encoded, PageHashes: hashes, PageKeys: keys}, nil
+}
+
+// v6BackgroundKnowledgeGuidance is the fixed header of the background block:
+// recalled memory is planning reference, never evidence, and the Director
+// folds anything an agent needs into work item descriptions (spec §5).
+const v6BackgroundKnowledgeGuidance = "背景知识来自工作区记忆图的召回，仅供规划参考，不作为证据；每条标注认识论状态与观察日期。需要传递给 Agent 的背景请融入 work item 描述，不要作为任务证据下发。"
+
+// compileV6BackgroundKnowledgeBlock renders the stable background block for
+// every brief page: the guidance plus the bounded entry list. An empty fact
+// list still renders the empty block so the brief shape never varies by
+// workspace memory mode.
+func compileV6BackgroundKnowledgeBlock(facts DirectorBriefFacts) map[string]any {
+	entries := facts.BackgroundKnowledge
+	if entries == nil {
+		entries = []any{}
+	}
+	return map[string]any{"guidance": v6BackgroundKnowledgeGuidance, "entries": entries}
 }
 
 func sliceV6Any(values []any, start, limit int) []any {

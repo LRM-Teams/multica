@@ -301,14 +301,23 @@ func newMigrationPool(ctx context.Context, dbURL string, noticeOutput io.Writer)
 func main() {
 	logger.Init()
 
+	const usage = "Usage: go run ./cmd/migrate <up|down|universal-dag-preflight --check-only>"
 	if len(os.Args) < 2 {
-		fmt.Println("Usage: go run ./cmd/migrate <up|down>")
+		fmt.Println(usage)
 		os.Exit(1)
 	}
 
-	direction := os.Args[1]
-	if direction != "up" && direction != "down" {
-		fmt.Println("Usage: go run ./cmd/migrate <up|down>")
+	command := os.Args[1]
+	switch command {
+	case "up", "down":
+		// Existing migration commands keep their prior argument behavior.
+	case "universal-dag-preflight":
+		if err := validateUniversalDAGPreflightArgs(os.Args[2:]); err != nil {
+			fmt.Println(usage)
+			os.Exit(1)
+		}
+	default:
+		fmt.Println(usage)
 		os.Exit(1)
 	}
 
@@ -330,6 +339,23 @@ func main() {
 		os.Exit(1)
 	}
 
+	if command == "universal-dag-preflight" {
+		exitCode, err := executeUniversalDAGPreflightCommand(
+			ctx,
+			os.Args[2:],
+			postgresUniversalDAGPreflightSource{pool: pool},
+			os.Stdout,
+		)
+		if err != nil {
+			slog.Error("universal DAG preflight failed", "error", err)
+		}
+		if exitCode != 0 {
+			os.Exit(exitCode)
+		}
+		return
+	}
+
+	direction := command
 	files, err := migrations.Files(direction)
 	if err != nil {
 		slog.Error("failed to find migration files", "error", err)

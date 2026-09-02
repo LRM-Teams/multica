@@ -126,7 +126,10 @@ func (h *Handler) AgentTransportPrepareAction(w http.ResponseWriter, r *http.Req
 		r.Context(), source, target, buildAgentCreationProposalContent(name), []protocol.MessagePart{actionPart}, nil,
 		clientRequestID, 0, pgtype.UUID{}, false,
 		func(ctx context.Context, tx pgx.Tx, message ChannelMessageResponse) error {
-			return seedAgentActionMessageTx(ctx, tx, origin.workspaceID, message.ID, origin.agentID, name, description, req.PreferredComputer)
+			if err := seedAgentActionMessageTx(ctx, tx, origin.workspaceID, message.ID, origin.agentID, name, description, req.PreferredComputer); err != nil {
+				return err
+			}
+			return h.recordAgentTransportVisibleMessageTx(ctx, tx, source, target, message)
 		},
 		channelMessageKindHint{},
 	)

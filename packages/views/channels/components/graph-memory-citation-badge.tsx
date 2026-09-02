@@ -5,6 +5,10 @@ import { useQuery } from "@tanstack/react-query";
 import { Database, Loader2 } from "lucide-react";
 import { api } from "@multica/core/api";
 import {
+  graphMemoryCitationClass,
+  type GraphMemoryCitationClass,
+} from "@multica/core/api/schemas";
+import {
   Popover,
   PopoverContent,
   PopoverDescription,
@@ -22,6 +26,13 @@ export function GraphMemoryCitationBadge({ workspaceId, messageId, count }: { wo
     enabled: open && Boolean(workspaceId && messageId),
     staleTime: Number.POSITIVE_INFINITY,
   });
+  const classLabels: Record<GraphMemoryCitationClass, string> = {
+    consolidated: t(($) => $.graph_memory.citation_class_consolidated),
+    "recent-unreviewed": t(($) => $.graph_memory.citation_class_recent_unreviewed),
+    historical: t(($) => $.graph_memory.citation_class_historical),
+    restricted: t(($) => $.graph_memory.citation_class_restricted),
+    retracted: t(($) => $.graph_memory.citation_class_retracted),
+  };
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
@@ -45,16 +56,30 @@ export function GraphMemoryCitationBadge({ workspaceId, messageId, count }: { wo
           <p className="text-xs text-muted-foreground">{t(($) => $.graph_memory.citation_empty)}</p>
         ) : (
           <div className="max-h-80 space-y-2 overflow-y-auto">
-            {data?.items.map((citation) => (
-              <article key={citation.id} className="rounded-md border border-border/70 bg-muted/25 p-2.5">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="truncate text-xs font-medium text-foreground">{citation.title || citation.node_id}</p>
-                  <span className="shrink-0 text-[10px] text-muted-foreground">{t(($) => $.graph_memory.citation_version, { version: citation.graph_version })}</span>
-                </div>
-                <p className="mt-1 line-clamp-4 whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground">{citation.excerpt || citation.first_paragraph}</p>
-                <p className="mt-1 truncate font-mono text-[10px] text-muted-foreground/80">{citation.node_id} · {citation.content_hash}</p>
-              </article>
-            ))}
+            {data?.items.map((citation) => {
+              // Restricted snapshots must not leak excerpt or content hashes;
+              // retracted snapshots show a marker instead of the sentinel body.
+              const citationClass = graphMemoryCitationClass(citation);
+              const restricted = citationClass === "restricted";
+              const retracted = citationClass === "retracted";
+              return (
+                <article key={citation.id} data-citation-class={citationClass} className="rounded-md border border-border/70 bg-muted/25 p-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="truncate text-xs font-medium text-foreground">{citation.title || citation.node_id}</p>
+                    <span className="shrink-0 text-[10px] text-muted-foreground">{t(($) => $.graph_memory.citation_version, { version: citation.graph_version })}</span>
+                  </div>
+                  <p className="mt-1 inline-block rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">{classLabels[citationClass]}</p>
+                  {restricted ? (
+                    <p className="mt-1 text-xs italic text-muted-foreground">{t(($) => $.graph_memory.citation_restricted_note)}</p>
+                  ) : retracted ? (
+                    <p className="mt-1 text-xs italic text-muted-foreground">{t(($) => $.graph_memory.citation_retracted_note)}</p>
+                  ) : (
+                    <p className="mt-1 line-clamp-4 whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground">{citation.excerpt || citation.first_paragraph}</p>
+                  )}
+                  <p className="mt-1 truncate font-mono text-[10px] text-muted-foreground/80">{citation.node_id}{restricted ? "" : ` · ${citation.content_hash}`}</p>
+                </article>
+              );
+            })}
           </div>
         )}
       </PopoverContent>

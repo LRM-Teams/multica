@@ -32,6 +32,20 @@ type graphMemoryLineageResponse struct {
 	RoutingMode string                     `json:"routing_mode"`
 	Current     *graphMemoryLineageCurrent `json:"current"`
 	Lineage     []graphMemoryLineageEntry  `json:"lineage"`
+	// Migration is the latest binding generation and its copy progress
+	// (spec §12: the binding records the migration generation and source
+	// watermark). Nil when the channel never changed projects through the
+	// binding service.
+	Migration *graphMemoryLineageMigration `json:"migration,omitempty"`
+}
+
+// graphMemoryLineageMigration carries aggregate progress counters only —
+// no atom bodies, no actor, no error payloads.
+type graphMemoryLineageMigration struct {
+	BindingGeneration int64  `json:"binding_generation"`
+	SourceWatermark   int64  `json:"source_watermark"`
+	Phase             string `json:"phase,omitempty"`
+	CopiedAtoms       int64  `json:"copied_atoms,omitempty"`
 }
 
 // GetGraphMemoryChannelLineage serves
@@ -126,6 +140,31 @@ func (h *Handler) GetGraphMemoryChannelLineage(w http.ResponseWriter, r *http.Re
 		}
 	default:
 		writeError(w, http.StatusInternalServerError, "failed to load graph memory channel route")
+		return
+	}
+
+	// Task 16: the lineage also surfaces the latest migration binding —
+	// generation, source watermark and the copy worker's phase — so the
+	// dual-read state is observable without touching the database.
+	var migration graphMemoryLineageMigration
+	err = h.DB.QueryRow(r.Context(), `
+		SELECT b.generation, b.source_watermark,
+		       COALESCE(s.phase, ''), COALESCE(s.copied_atoms, 0)
+		FROM graph_memory_channel_binding b
+		LEFT JOIN graph_memory_channel_migration_state s
+		  ON s.channel_id = b.channel_id AND s.binding_generation = b.generation
+		WHERE b.workspace_id = $1 AND b.channel_id = $2
+		ORDER BY b.generation DESC
+		LIMIT 1`, workspaceUUID, channelID).
+		Scan(&migration.BindingGeneration, &migration.SourceWatermark,
+			&migration.Phase, &migration.CopiedAtoms)
+	switch {
+	case err == nil:
+		resp.Migration = &migration
+	case errors.Is(err, pgx.ErrNoRows):
+		// Never bound through the service: no migration section.
+	default:
+		writeError(w, http.StatusInternalServerError, "failed to load graph memory channel migration")
 		return
 	}
 

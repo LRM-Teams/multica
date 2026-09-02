@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -19,10 +18,8 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-// GraphMemoryDiveBackendFactory constructs the agent backend for a Dive run.
-// Model and provider are effective, policy-validated profile values; empty
-// values inherit the Explore configuration at the application wiring layer.
-type GraphMemoryDiveBackendFactory func(ctx context.Context, model, provider string) (memorygraph.AgentBackend, error)
+// GraphMemoryDiveBackendFactory constructs only the already-resolved backend.
+type GraphMemoryDiveBackendFactory func(ctx context.Context, policy ResolvedMemoryProvider) (memorygraph.AgentBackend, error)
 
 // GraphMemoryDiveWorker drives one durable Dive job from its lease through
 // grading, optional online-RL reward outboxing, and completion.
@@ -32,15 +29,15 @@ type GraphMemoryDiveWorker struct {
 	rl         *GraphMemoryRLSessionService
 	limits     GraphMemoryLimits
 	root       string
+	policy     *MemoryProviderPolicyResolver
 	backendFor GraphMemoryDiveBackendFactory
 }
 
-// NewGraphMemoryDiveWorker constructs a worker. A nil RL service disables
-// online-RL reward outboxing; callers use an empty root to use the normal
-// MULTICA_WORKSPACES_ROOT resolution.
-func NewGraphMemoryDiveWorker(pool *pgxpool.Pool, dive *GraphMemoryDiveService, rl *GraphMemoryRLSessionService, limits GraphMemoryLimits, root string, backendFor GraphMemoryDiveBackendFactory) *GraphMemoryDiveWorker {
+// NewGraphMemoryDiveWorker constructs a worker. A nil policy resolver fails
+// closed before any backend construction.
+func NewGraphMemoryDiveWorker(pool *pgxpool.Pool, dive *GraphMemoryDiveService, rl *GraphMemoryRLSessionService, limits GraphMemoryLimits, root string, policy *MemoryProviderPolicyResolver, backendFor GraphMemoryDiveBackendFactory) *GraphMemoryDiveWorker {
 	return &GraphMemoryDiveWorker{
-		pool: pool, dive: dive, rl: rl, limits: limits, root: root, backendFor: backendFor,
+		pool: pool, dive: dive, rl: rl, limits: limits, root: root, policy: policy, backendFor: backendFor,
 	}
 }
 
@@ -66,9 +63,17 @@ func (w *GraphMemoryDiveWorker) RunOnce(ctx context.Context, workerID string) (b
 	if err != nil {
 		return w.retry(ctx, job, workerID, "exec", err)
 	}
-	cfg, provider, wRound, err := w.diveConfig(ctx, job.WorkspaceID)
+	cfg, wRound, err := w.diveConfig(ctx, job.WorkspaceID)
 	if err != nil {
 		return w.retry(ctx, job, workerID, "exec", err)
+	}
+	workspaceUUID, err := util.ParseUUID(job.WorkspaceID)
+	if err != nil {
+		return w.retry(ctx, job, workerID, "backend", err)
+	}
+	resolved, err := w.policy.Resolve(ctx, workspaceUUID, ProviderDive)
+	if err != nil {
+		return w.retry(ctx, job, workerID, "backend", err)
 	}
 	dir, err := w.graphDir(job)
 	if err != nil {
@@ -77,14 +82,15 @@ func (w *GraphMemoryDiveWorker) RunOnce(ctx context.Context, workerID string) (b
 	if w.backendFor == nil {
 		return w.retry(ctx, job, workerID, "backend", errors.New("graph memory dive: backend factory is not configured"))
 	}
-	backend, err := w.backendFor(ctx, cfg.Model, provider)
+	backend, err := w.backendFor(ctx, resolved)
 	if err != nil {
 		return w.retry(ctx, job, workerID, "backend", err)
 	}
 
 	diveCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
-	res, err := memorygraph.NewDiver(memorygraph.NewStore(dir), backend, cfg).Dive(diveCtx, query, job.GraphVersion, runs)
+	scope := resolvedMemoryProviderScope(job.WorkspaceID, ProviderDive, resolved)
+	res, err := memorygraph.NewDiver(memorygraph.NewStore(dir), backend, cfg, scope).Dive(diveCtx, query, job.GraphVersion, runs)
 	if err != nil {
 		return w.retry(ctx, job, workerID, "exec", err)
 	}
@@ -96,9 +102,12 @@ func (w *GraphMemoryDiveWorker) RunOnce(ctx context.Context, workerID string) (b
 		return true, nil
 	}
 
-	// Reload the persisted rewards after ApplyDiveResult so the outbox carries
-	// server-authoritative values, including zero for bypassed runs. The
-	// outbox's trajectory uniqueness makes repeat attempts idempotent.
+	// Reload the persisted reward records after ApplyDiveResult so the
+	// outbox carries server-authoritative values with their delivery
+	// identity (trajectory, reward_kind, revision). Bypassed runs enqueue
+	// their deterministic negative; unavailable records (judge failure)
+	// never enqueue (Task 19, A46). The outbox's identity uniqueness makes
+	// repeat attempts idempotent.
 	if trainingMode == "online_rl" && w.rl != nil {
 		if err := w.enqueueRewards(ctx, job.RecallID); err != nil {
 			return w.retry(ctx, job, workerID, "reward_outbox", err)
@@ -167,29 +176,22 @@ func (w *GraphMemoryDiveWorker) loadRecallRuns(ctx context.Context, recallID str
 	return query, trainingMode, runs, nil
 }
 
-func (w *GraphMemoryDiveWorker) diveConfig(ctx context.Context, workspaceID string) (memorygraph.DiveConfig, string, float64, error) {
+func (w *GraphMemoryDiveWorker) diveConfig(ctx context.Context, workspaceID string) (memorygraph.DiveConfig, float64, error) {
 	ws, err := util.ParseUUID(workspaceID)
 	if err != nil {
-		return memorygraph.DiveConfig{}, "", 0, fmt.Errorf("graph memory dive: workspace id: %w", err)
+		return memorygraph.DiveConfig{}, 0, fmt.Errorf("graph memory dive: workspace id: %w", err)
 	}
 	t := w.limits.Defaults
-	model, provider := "", ""
 	profile, err := db.New(w.pool).GetGraphMemoryProfile(ctx, ws)
 	if err == nil {
 		t = graphMemoryTunablesFromProfile(profile)
-		candidateModel := strings.TrimSpace(profile.DiveModel)
-		candidateProvider := strings.TrimSpace(profile.DiveProvider)
-		if candidateModel != "" && candidateProvider != "" && w.limits.ValidateDiveOverride(candidateProvider, candidateModel) == nil {
-			model, provider = candidateModel, candidateProvider
-		}
 	} else if !errors.Is(err, pgx.ErrNoRows) {
-		return memorygraph.DiveConfig{}, "", 0, fmt.Errorf("graph memory dive: load profile: %w", err)
+		return memorygraph.DiveConfig{}, 0, fmt.Errorf("graph memory dive: load profile: %w", err)
 	}
 	return memorygraph.DiveConfig{
 		MaxRounds: t.DiveMaxRounds, MaxViewedNodes: t.DiveMaxViewedNodes,
 		MaxSourceFiles: t.DiveMaxSourceFiles, Timeout: time.Duration(t.DiveTimeoutSeconds) * time.Second,
-		Model: model,
-	}, provider, t.WRound, nil
+	}, t.WRound, nil
 }
 
 func (w *GraphMemoryDiveWorker) graphDir(job *GraphMemoryDiveJob) (string, error) {
@@ -218,27 +220,35 @@ func (w *GraphMemoryDiveWorker) enqueueRewards(ctx context.Context, recallID str
 	if err != nil {
 		return fmt.Errorf("graph memory dive: recall id: %w", err)
 	}
+	// Only AVAILABLE revisions enqueue: an unavailable judge failure has no
+	// numeric value and must never reach the outbox (A46).
 	rows, err := w.pool.Query(ctx, `
-		SELECT id, reward FROM graph_memory_trajectory
-		WHERE recall_id = $1 AND status IN ('found', 'miss', 'error', 'budget', 'timeout')
-		ORDER BY seed_index
+		SELECT r.trajectory_id, r.reward_kind, r.revision, r.value
+		FROM graph_memory_reward_record r
+		JOIN graph_memory_trajectory t ON t.id = r.trajectory_id
+		WHERE t.recall_id = $1 AND r.status = 'available'
+		ORDER BY t.seed_index, r.revision
 	`, rUUID)
 	if err != nil {
-		return fmt.Errorf("graph memory dive: reread rewards: %w", err)
+		return fmt.Errorf("graph memory dive: reread reward records: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var id pgtype.UUID
-		var reward float64
-		if err := rows.Scan(&id, &reward); err != nil {
-			return fmt.Errorf("graph memory dive: scan reward: %w", err)
+		var (
+			id       pgtype.UUID
+			kind     string
+			revision int
+			value    float64
+		)
+		if err := rows.Scan(&id, &kind, &revision, &value); err != nil {
+			return fmt.Errorf("graph memory dive: scan reward record: %w", err)
 		}
-		if err := w.rl.EnqueueReward(ctx, util.UUIDToString(id), reward); err != nil {
+		if err := w.rl.EnqueueReward(ctx, util.UUIDToString(id), kind, revision, value); err != nil {
 			return err
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("graph memory dive: iterate rewards: %w", err)
+		return fmt.Errorf("graph memory dive: iterate reward records: %w", err)
 	}
 	return nil
 }

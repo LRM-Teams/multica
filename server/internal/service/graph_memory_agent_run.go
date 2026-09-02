@@ -46,7 +46,10 @@ type GraphMemoryAgentToolReservation struct {
 }
 
 type GraphMemoryAgentCitationInput struct {
-	NodeID          string
+	NodeID string
+	// GraphIdentity distinguishes which physical graph the cited node lives
+	// in ("<kind>:<owner>" route graphs, "research:<workspace>" research).
+	GraphIdentity   string
 	GraphVersion    int64
 	Level           string
 	EpistemicStatus string
@@ -225,7 +228,10 @@ func (s *GraphMemoryAgentRunStore) Claim(ctx context.Context, workspaceID, chann
 	return GraphMemoryAgentRunClaim{RunID: runID, TrajectoryID: trajectoryID, FencingToken: fencing, GraphVersion: graphVersion, TargetSeq: targetSeq, InitialQuery: query, TokenBudgetLeft: tokenLimit - used}, nil
 }
 
-func (s *GraphMemoryAgentRunStore) ReserveToolOperation(ctx context.Context, runID string, fencingToken int64, idempotencyKey, operation string, request json.RawMessage) (GraphMemoryAgentToolReservation, error) {
+// ReserveToolOperation reserves one idempotent Agent tool operation for a
+// specific graph (graph_identity, unification spec §4.4): the same client
+// key can reserve one operation per graph under the same trajectory.
+func (s *GraphMemoryAgentRunStore) ReserveToolOperation(ctx context.Context, runID string, fencingToken int64, idempotencyKey, graphIdentity, operation string, request json.RawMessage) (GraphMemoryAgentToolReservation, error) {
 	if s == nil || s.pool == nil {
 		return GraphMemoryAgentToolReservation{}, ErrGraphMemoryAgentRunUnavailable
 	}
@@ -256,7 +262,7 @@ func (s *GraphMemoryAgentRunStore) ReserveToolOperation(ctx context.Context, run
 	err = tx.QueryRow(ctx, `
 		SELECT id::text,operation,request,response,error,status
 		FROM graph_memory_agent_tool_operation
-		WHERE trajectory_id=$1::uuid AND idempotency_key=$2`, trajectoryID, idempotencyKey).Scan(
+		WHERE trajectory_id=$1::uuid AND graph_identity=$2 AND idempotency_key=$3`, trajectoryID, graphIdentity, idempotencyKey).Scan(
 		&existing.OperationID, &existingOperation, &existingRequest, &existing.Response, &existing.Error, &status,
 	)
 	if err == nil {
@@ -276,8 +282,8 @@ func (s *GraphMemoryAgentRunStore) ReserveToolOperation(ctx context.Context, run
 	var operationID string
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO graph_memory_agent_tool_operation
-		 (trajectory_id,idempotency_key,operation,request,status)
-		VALUES($1::uuid,$2,$3,$4::jsonb,'pending') RETURNING id::text`, trajectoryID, idempotencyKey, operation, request).Scan(&operationID); err != nil {
+		 (trajectory_id,graph_identity,idempotency_key,operation,request,status)
+		VALUES($1::uuid,$2,$3,$4,$5::jsonb,'pending') RETURNING id::text`, trajectoryID, graphIdentity, idempotencyKey, operation, request).Scan(&operationID); err != nil {
 		return GraphMemoryAgentToolReservation{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -287,8 +293,10 @@ func (s *GraphMemoryAgentRunStore) ReserveToolOperation(ctx context.Context, run
 }
 
 // ValidateToolOperationQuota enforces per-call, rolling node, and continuous
-// turn limits before an idempotent operation is reserved.
-func (s *GraphMemoryAgentRunStore) ValidateToolOperationQuota(ctx context.Context, runID string, fencingToken int64, operation, idempotencyKey string, request json.RawMessage) error {
+// turn limits before an idempotent operation is reserved. Node budgets are
+// per graph (graph_identity): channel-route exploration never consumes the
+// research graph's quota and vice versa (unification spec §4.4).
+func (s *GraphMemoryAgentRunStore) ValidateToolOperationQuota(ctx context.Context, runID string, fencingToken int64, operation, idempotencyKey, graphIdentity string, request json.RawMessage) error {
 	if s == nil || s.pool == nil || !json.Valid(request) {
 		return ErrGraphMemoryAgentRunUnavailable
 	}
@@ -336,8 +344,9 @@ func (s *GraphMemoryAgentRunStore) ValidateToolOperationQuota(ctx context.Contex
 			FROM graph_memory_agent_tool_operation operation
 			JOIN graph_memory_agent_trajectory trajectory ON trajectory.id=operation.trajectory_id
 			WHERE trajectory.run_id=$1::uuid AND operation.operation='explore'
-			  AND operation.status<>'failed' AND operation.idempotency_key<>$3`,
-			runID, s.now().UTC().Add(-time.Minute), strings.TrimSpace(idempotencyKey)).Scan(&usedMinute, &usedTotal); err != nil {
+			  AND operation.status<>'failed' AND operation.idempotency_key<>$3
+			  AND operation.graph_identity=$4`,
+			runID, s.now().UTC().Add(-time.Minute), strings.TrimSpace(idempotencyKey), graphIdentity).Scan(&usedMinute, &usedTotal); err != nil {
 			return err
 		}
 		if usedMinute+nodeCount > maxPerMinute {
@@ -408,7 +417,7 @@ func (s *GraphMemoryAgentRunStore) AddUsage(ctx context.Context, runID string, f
 	return nil
 }
 
-func (s *GraphMemoryAgentRunStore) ExplorationRounds(ctx context.Context, runID string, fencingToken int64) (int, error) {
+func (s *GraphMemoryAgentRunStore) ExplorationRounds(ctx context.Context, runID string, fencingToken int64, graphIdentity string) (int, error) {
 	if s == nil || s.pool == nil {
 		return 0, ErrGraphMemoryAgentRunUnavailable
 	}
@@ -419,8 +428,9 @@ func (s *GraphMemoryAgentRunStore) ExplorationRounds(ctx context.Context, runID 
 		JOIN graph_memory_agent_trajectory trajectory ON trajectory.run_id=run.id
 		LEFT JOIN graph_memory_agent_tool_operation operation ON operation.trajectory_id=trajectory.id
 		  AND operation.operation='explore' AND operation.status<>'failed'
+		  AND operation.graph_identity=$3
 		WHERE run.id=$1::uuid AND run.fencing_token=$2 AND run.status='running'
-		GROUP BY run.id`, runID, fencingToken).Scan(&rounds)
+		GROUP BY run.id`, runID, fencingToken, graphIdentity).Scan(&rounds)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return 0, ErrGraphMemoryAgentRunFenced
@@ -515,18 +525,21 @@ func (s *GraphMemoryAgentRunStore) finish(ctx context.Context, runID string, fen
 		if strings.TrimSpace(citation.NodeID) == "" || strings.TrimSpace(citation.ContentHash) == "" {
 			return errors.New("citation node id and content hash are required")
 		}
+		// Viewed provenance is graph-qualified: a node id viewed on one graph
+		// is not evidence for a citation on another graph.
+		viewedKey := citation.GraphIdentity + "|" + citation.NodeID
 		tags, _ := json.Marshal(citation.Tags)
 		tag, err := tx.Exec(ctx, `
 			INSERT INTO graph_memory_agent_citation
-			 (workspace_id,channel_id,trajectory_id,node_id,graph_version,level,epistemic_status,tags,title,first_paragraph,excerpt,content_hash)
-			SELECT $1::uuid,$2::uuid,$3::uuid,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12
+			 (workspace_id,channel_id,trajectory_id,node_id,graph_identity,graph_version,level,epistemic_status,tags,title,first_paragraph,excerpt,content_hash)
+			SELECT $1::uuid,$2::uuid,$3::uuid,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13
 			WHERE EXISTS (
 			  SELECT 1 FROM graph_memory_agent_trajectory
-			  WHERE id=$3::uuid AND viewed_node_ids ? $4
+			  WHERE id=$3::uuid AND viewed_node_ids ? $14
 			)
-			ON CONFLICT (trajectory_id,node_id) DO NOTHING`, workspaceID, channelID, trajectoryID,
-			citation.NodeID, citation.GraphVersion, citation.Level, citation.EpistemicStatus, tags,
-			citation.Title, citation.FirstParagraph, truncateUTF8(citation.Excerpt, 2000), citation.ContentHash)
+			ON CONFLICT (trajectory_id,graph_identity,node_id) DO NOTHING`, workspaceID, channelID, trajectoryID,
+			citation.NodeID, citation.GraphIdentity, citation.GraphVersion, citation.Level, citation.EpistemicStatus, tags,
+			citation.Title, citation.FirstParagraph, truncateUTF8(citation.Excerpt, 2000), citation.ContentHash, viewedKey)
 		if err != nil {
 			return err
 		}

@@ -8,6 +8,8 @@ import (
 	"sort"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/multica-ai/multica/server/internal/memorygraph"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -19,20 +21,33 @@ import (
 type GraphMemoryStatusService struct {
 	queries *db.Queries // may be nil in tests
 	root    string      // workspaces root; empty resolves MULTICA_WORKSPACES_ROOT
+	shadow  *ShadowGateService
 }
 
 func NewGraphMemoryStatusService(queries *db.Queries, root string) *GraphMemoryStatusService {
 	return &GraphMemoryStatusService{queries: queries, root: root}
 }
 
+// NewGraphMemoryStatusServiceWithPool adds the Task 21 shadow-gate phases
+// and canary evidence to the governance view (nil pool keeps it file-only).
+func NewGraphMemoryStatusServiceWithPool(pool *pgxpool.Pool, queries *db.Queries, root string) *GraphMemoryStatusService {
+	var shadow *ShadowGateService
+	if pool != nil {
+		shadow = NewShadowGateService(pool)
+	}
+	return &GraphMemoryStatusService{queries: queries, root: root, shadow: shadow}
+}
+
 // GraphMemoryGraphStatus is the per-physical-graph view: versions/current
-// pointer, staging depth, last consolidation, and 24h recall quality.
+// pointer, staging depth, node count, last consolidation, and 24h recall
+// quality.
 type GraphMemoryGraphStatus struct {
-	Kind                 string     `json:"kind"` // "project" | "channel"
+	Kind                 string     `json:"kind"` // "project" | "channel" | "research"
 	OwnerID              string     `json:"owner_id"`
 	CurrentVersion       int        `json:"current_version"`
 	Versions             []int      `json:"versions"`
 	StagingSegments      int        `json:"staging_segments"`
+	NodeCount            int        `json:"node_count"`
 	LastConsolidatedAt   *time.Time `json:"last_consolidated_at,omitempty"`
 	ConsolidationBackoff bool       `json:"consolidation_backoff"`
 	RecallQueries24h     int        `json:"recall_queries_24h"`
@@ -46,6 +61,11 @@ type GraphMemoryStatus struct {
 	ScopedWriterReady bool                     `json:"scoped_writer_ready"`
 	EmptyStart        bool                     `json:"empty_start"`
 	Graphs            []GraphMemoryGraphStatus `json:"graphs"`
+	// Task 21 rollout health: the workspace's shadow gates (plus the global
+	// training gates) and the six named canaries' latest verdicts. Omitted on
+	// schemas without the gate registry or a configured pool.
+	ShadowGates    []ShadowGateStatus   `json:"shadow_gates,omitempty"`
+	ShadowCanaries []ShadowCanaryResult `json:"shadow_canaries,omitempty"`
 }
 
 // graphConsolidationStateFile mirrors the scheduler's state file name
@@ -85,11 +105,27 @@ func (s *GraphMemoryStatusService) Status(ctx context.Context, workspaceID strin
 		if err := store.Init(); err != nil {
 			return
 		}
+		// Reader authority mirrors production: the DB publication index wins;
+		// the file current pointer is only the legacy-scope fallback.
 		g.CurrentVersion, _ = store.CurrentVersion()
+		if s.queries != nil {
+			if ws, wsErr := util.ParseUUID(workspaceID); wsErr == nil {
+				if owner, ownerErr := util.ParseUUID(ownerID); ownerErr == nil {
+					if _, version, _, found, pubErr := activeGraphPublicationRow(ctx, s.queries, ws, string(kind), owner); pubErr == nil && found {
+						g.CurrentVersion = version
+					}
+				}
+			}
+		}
 		g.Versions, _ = store.ListVersions()
 		sort.Ints(g.Versions)
 		if segs, err := store.ListStagingSegments(); err == nil {
 			g.StagingSegments = len(segs)
+		}
+		if g.CurrentVersion > 0 {
+			if graph, err := memorygraph.LoadGraph(store, g.CurrentVersion); err == nil {
+				g.NodeCount = len(graph.Nodes())
+			}
 		}
 		if ds, ok := states[dir]; ok && !ds.LastConsolidated.IsZero() {
 			ts := ds.LastConsolidated
@@ -104,11 +140,38 @@ func (s *GraphMemoryStatusService) Status(ctx context.Context, workspaceID strin
 		st.Graphs = append(st.Graphs, g)
 		st.EmptyStart = false
 	})
+	s.populateShadowHealth(ctx, workspaceID, st)
 	return st, nil
 }
 
+// populateShadowHealth attaches the Task 21 rollout view (gate phases and
+// canary verdicts) when the DB-backed gate service is configured. Pre-474
+// schemas surface no gates rather than failing the whole status view.
+func (s *GraphMemoryStatusService) populateShadowHealth(ctx context.Context, workspaceID string, st *GraphMemoryStatus) {
+	if s.shadow == nil {
+		return
+	}
+	ws, err := util.ParseUUID(workspaceID)
+	if err != nil {
+		return
+	}
+	if gates, err := s.shadow.ListGates(ctx, ws); err == nil {
+		st.ShadowGates = gates
+	}
+	if canaries, err := s.shadow.EvaluateEvidence(ctx, ws); err == nil {
+		ordered := make([]ShadowCanaryResult, 0, len(AllShadowCanaries()))
+		for _, canary := range AllShadowCanaries() {
+			if result, ok := canaries[canary]; ok {
+				ordered = append(ordered, result)
+			}
+		}
+		st.ShadowCanaries = ordered
+	}
+}
+
 // forEachWorkspaceGraph walks the canonical per-workspace layout
-// (<root>/<ws>/memory_graph/{projects,channels}/<owner>) and invokes fn for
+// (<root>/<ws>/memory_graph/{projects,channels}/<owner> plus the federated
+// research graph research/<ws>, unification spec §4.4) and invokes fn for
 // every directory whose identity marker matches the workspace scope.
 // Directories with a mismatched or missing identity are skipped (fail
 // closed, spec §3/§12).
@@ -116,7 +179,11 @@ func forEachWorkspaceGraph(root, workspaceID string, fn func(kind memorygraph.Gr
 	for _, sub := range []struct {
 		kind memorygraph.GraphDirKind
 		dir  string
-	}{{memorygraph.GraphDirKindProject, "projects"}, {memorygraph.GraphDirKindChannel, "channels"}} {
+	}{
+		{memorygraph.GraphDirKindProject, "projects"},
+		{memorygraph.GraphDirKindChannel, "channels"},
+		{memorygraph.GraphDirKindResearch, "research"},
+	} {
 		base := filepath.Join(root, workspaceID, "memory_graph", sub.dir)
 		entries, err := os.ReadDir(base)
 		if err != nil {
@@ -124,6 +191,11 @@ func forEachWorkspaceGraph(root, workspaceID string, fn func(kind memorygraph.Gr
 		}
 		for _, e := range entries {
 			if !e.IsDir() {
+				continue
+			}
+			// The research graph is owned by the workspace itself; only that
+			// one directory is a sanctioned research scope.
+			if sub.kind == memorygraph.GraphDirKindResearch && e.Name() != workspaceID {
 				continue
 			}
 			dir := filepath.Join(base, e.Name())

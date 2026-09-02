@@ -17,11 +17,17 @@ import (
 // is used only as a bearer token and must never be logged, embedded in error
 // messages, or otherwise exposed (A29).
 type PendingReward struct {
-	OutboxID     string
-	TrajectoryID string
-	ProxyKey     string
-	Reward       float64
-	Attempts     int
+	OutboxID string
+	// RewardKind and RewardRevision form the delivery identity with
+	// TrajectoryID (Task 19, spec 14.4): (trajectory, reward_kind, revision)
+	// delivers at most once per revision; a re-evaluation is a NEW revision
+	// with its own row and its own delivery.
+	TrajectoryID   string
+	RewardKind     string
+	RewardRevision int
+	ProxyKey       string
+	Reward         float64
+	Attempts       int
 }
 
 // RewardStore is the durable reward-outbox backend. Implementations must
@@ -45,11 +51,12 @@ type RewardStore interface {
 // other 4xx responses fail the row terminally. Proxy keys are redacted from
 // every error the sink stores or returns (A29).
 type RewardSink struct {
-	store       RewardStore
-	client      *Client
-	maxAttempts int
-	backoff     func(attempts int) time.Duration
-	now         func() time.Time
+	store         RewardStore
+	client        *Client
+	maxAttempts   int
+	backoff       func(attempts int) time.Duration
+	now           func() time.Time
+	executionGate func(ctx context.Context) (bool, error)
 }
 
 // RewardSinkOption customizes a RewardSink.
@@ -78,6 +85,18 @@ func WithRewardSinkNow(fn func() time.Time) RewardSinkOption {
 	return func(s *RewardSink) {
 		if fn != nil {
 			s.now = fn
+		}
+	}
+}
+
+// WithRewardSinkExecutionGate sets the model-update gate (Task 18, spec
+// 14.1/14.4): while it reports false, DeliverOnce claims nothing and no
+// set_reward reaches AReaL. The outbox keeps recording rewards durably
+// (shadow phase) until reward calibration enables execution.
+func WithRewardSinkExecutionGate(fn func(ctx context.Context) (bool, error)) RewardSinkOption {
+	return func(s *RewardSink) {
+		if fn != nil {
+			s.executionGate = fn
 		}
 	}
 }
@@ -114,21 +133,72 @@ func defaultRewardBackoff(attempts int) time.Duration {
 // outcomes are recorded in the store; the returned error covers only
 // store-level failures (claim/ack bookkeeping), never individual deliveries.
 func (s *RewardSink) DeliverOnce(ctx context.Context, limit int) (int, error) {
+	if s.executionGate != nil {
+		allowed, err := s.executionGate(ctx)
+		if err != nil {
+			return 0, fmt.Errorf("arealrl: reward execution gate: %w", err)
+		}
+		if !allowed {
+			// Shadow phase: rewards stay durable and pending; no model
+			// update happens before calibration enables execution.
+			return 0, nil
+		}
+	}
 	rows, err := s.store.ClaimPending(ctx, limit)
 	if err != nil {
 		return 0, fmt.Errorf("arealrl: claim pending rewards: %w", err)
 	}
 	delivered := 0
+	// Exactly-once per delivery identity within the batch (Task 19, spec
+	// 14.4): the immutable ledger guarantees one value per (trajectory,
+	// reward_kind, revision), so a replayed duplicate of an identity already
+	// delivered in this batch is acked without a second set_reward, and a
+	// duplicate carrying a different value fails terminally instead of
+	// double-delivering.
+	seen := make(map[string]float64, len(rows))
 	for _, row := range rows {
-		ok, err := s.deliver(ctx, row)
-		if err != nil {
-			return delivered, err
+		identity := row.TrajectoryID + "\x1f" + row.RewardKind + "\x1f" + itoa(row.RewardRevision)
+		value, ok := seen[identity]
+		if !ok {
+			seen[identity] = row.Reward
+			ok2, err := s.deliver(ctx, row)
+			if err != nil {
+				return delivered, err
+			}
+			if ok2 {
+				delivered++
+			}
+			continue
 		}
-		if ok {
-			delivered++
+		if value != row.Reward {
+			if err := s.store.MarkFailed(ctx, row.OutboxID, fmt.Errorf(
+				"arealrl: reward identity conflict for trajectory %s kind %s revision %d", row.TrajectoryID, row.RewardKind, row.RewardRevision)); err != nil {
+				return delivered, fmt.Errorf("arealrl: record reward conflict: %w", err)
+			}
+			continue
 		}
+		if err := s.store.MarkDelivered(ctx, row.OutboxID); err != nil {
+			return delivered, fmt.Errorf("arealrl: record reward ack: %w", err)
+		}
+		delivered++
 	}
 	return delivered, nil
+}
+
+// itoa renders small revision numbers for the identity key without fmt
+// allocations on the hot path.
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var buf [20]byte
+	i := len(buf)
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(buf[i:])
 }
 
 // deliver processes one claimed row and reports whether it was delivered.

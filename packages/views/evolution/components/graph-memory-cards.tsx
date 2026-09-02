@@ -3,12 +3,13 @@
 import { useMemo, useState } from "react";
 import { RuntimeConfigFields } from "../../agents/components/runtime-config-fields";
 import { useRuntimeConfigSelection } from "../../agents/components/use-runtime-config-selection";
-import { GitBranch, Play, RefreshCw, ShieldCheck, Timer } from "lucide-react";
+import { Activity, GitBranch, Play, RefreshCw, ShieldCheck, Timer } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { api, ApiError } from "@multica/core/api";
 import { EMPTY_GRAPH_MEMORY_PROFILE } from "@multica/core/api/schemas";
+import type { TrainingPolicyPatch } from "@multica/core/api/schemas";
 import {
   evolutionKeys,
   graphMemoryAuditOptions,
@@ -110,9 +111,10 @@ export function GraphMemoryStatusCard({ wsId }: { wsId: string }) {
               <span className="font-mono text-xs text-muted-foreground">{graph.owner_id}</span>
               {graph.consolidation_backoff && <Badge variant="outline">{copy("graphBackoff")}</Badge>}
             </div>
-            <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-muted-foreground sm:grid-cols-4">
+            <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-muted-foreground sm:grid-cols-5">
               <span>{copy("graphVersion")}: {graph.current_version}</span>
               <span>{copy("graphStaging")}: {graph.staging_segments}</span>
+              <span>{copy("graphNodes")}: {graph.node_count}</span>
               <span>{copy("graphRecall24h")}: {graph.recall_queries_24h}</span>
               <span>{copy("graphHitRate")}: {Math.round(graph.recall_hit_rate_24h * 100)}%</span>
             </div>
@@ -468,6 +470,314 @@ export function GraphMemoryConsolidationCard({ wsId, isAdmin }: { wsId: string; 
             {latest.error ? ` — ${latest.error}` : ""}
           </div>
         )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// Training governance (plan Task 18 / spec §14.1): owner-only card. The
+// tenant grant needs an explicit CAS acknowledgement before training runs;
+// the switches are the global kill switches surfaced through the same
+// governance endpoint. 409s render an inline conflict state and refetch.
+export function TrainingGovernanceCard({ wsId, isAdmin }: { wsId: string; isAdmin: boolean }) {
+  const copy = useEvolutionCopy();
+  const queryClient = useQueryClient();
+  const key = ["evolution", wsId, "training-governance"] as const;
+  const { data } = useQuery({
+    queryKey: key,
+    queryFn: () => api.getTrainingGovernance(wsId),
+    enabled: isAdmin && Boolean(wsId),
+    retry: false,
+  });
+  const [conflict, setConflict] = useState(false);
+  const refresh = () => queryClient.invalidateQueries({ queryKey: key });
+  const onMutationError = (fallback: string) => (error: Error) => {
+    if (error instanceof ApiError && error.status === 409) {
+      setConflict(true);
+      void refresh();
+      return;
+    }
+    showErrorToast(error instanceof Error ? error.message : fallback);
+  };
+
+  const ack = useMutation({
+    mutationFn: () => api.updateTrainingGrant(wsId, {
+      purpose: "tenant",
+      action: "ack",
+      expected_version: data?.grant.tenant_policy_version ?? 0,
+    }),
+    onSuccess: async () => {
+      setConflict(false);
+      toast.success(copy("graphTrainingAckSaved"));
+      await refresh();
+    },
+    onError: onMutationError(copy("graphTrainingGovernance")),
+  });
+  const revoke = useMutation({
+    mutationFn: () => api.updateTrainingGrant(wsId, {
+      purpose: "tenant",
+      action: "revoke",
+      expected_version: data?.grant.tenant_policy_version ?? 0,
+    }),
+    onSuccess: async () => {
+      setConflict(false);
+      toast.success(copy("graphTrainingRevoked"));
+      await refresh();
+    },
+    onError: onMutationError(copy("graphTrainingGovernance")),
+  });
+  const policy = useMutation({
+    mutationFn: (patch: TrainingPolicyPatch) => api.updateTrainingPolicy(wsId, patch),
+    onSuccess: async () => {
+      setConflict(false);
+      toast.success(copy("graphTrainingPolicySaved"));
+      await refresh();
+    },
+    onError: onMutationError(copy("graphTrainingGovernance")),
+  });
+
+  if (!isAdmin) return null;
+
+  const grantStatus = (status: string): string => {
+    switch (status) {
+      case "pending_owner_ack": return copy("graphTrainingStatusPendingOwnerAck");
+      case "active": return copy("graphTrainingStatusActive");
+      case "revoked": return copy("graphTrainingStatusRevoked");
+      default: return copy("graphTrainingStatusDisabled");
+    }
+  };
+
+  return (
+    <Card className="bg-background/85 backdrop-blur">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <ShieldCheck className="h-4 w-4 text-brand" />{copy("graphTrainingGovernance")}
+        </CardTitle>
+        <p className="text-sm text-muted-foreground">{copy("graphTrainingGovernanceHint")}</p>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {data ? (
+          <>
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <Badge variant={data.grant.tenant_status === "active" ? "secondary" : "outline"}>
+                {grantStatus(data.grant.tenant_status)}
+              </Badge>
+              <span className="text-xs text-muted-foreground">
+                {copy("graphTrainingPolicyVersion").replace("{version}", String(data.grant.tenant_policy_version))}
+              </span>
+              {data.grant.tenant_status === "pending_owner_ack" ? (
+                <Button size="sm" variant="outline" disabled={ack.isPending} onClick={() => ack.mutate()}>
+                  {copy("graphTrainingAck")}
+                </Button>
+              ) : null}
+              {data.grant.tenant_status === "active" || data.grant.tenant_status === "pending_owner_ack" ? (
+                <Button size="sm" variant="ghost" disabled={revoke.isPending} onClick={() => revoke.mutate()}>
+                  {copy("graphTrainingRevoke")}
+                </Button>
+              ) : null}
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <Label htmlFor="training-selection-enabled" className="text-sm">{copy("graphTrainingSelection")}</Label>
+              <Switch
+                id="training-selection-enabled"
+                checked={data.policy.selection_enabled}
+                onCheckedChange={(checked) => policy.mutate({ selection_enabled: checked === true })}
+                disabled={policy.isPending}
+                aria-label={copy("graphTrainingSelection")}
+                title={copy("graphTrainingAdminOnly")}
+              />
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <Label htmlFor="training-execution-enabled" className="text-sm">{copy("graphTrainingExecution")}</Label>
+              <Switch
+                id="training-execution-enabled"
+                checked={data.policy.execution_enabled}
+                onCheckedChange={(checked) => policy.mutate({ execution_enabled: checked === true })}
+                disabled={policy.isPending}
+                aria-label={copy("graphTrainingExecution")}
+                title={copy("graphTrainingAdminOnly")}
+              />
+            </div>
+          </>
+        ) : (
+          <Skeleton className="h-16 rounded-2xl" />
+        )}
+        {conflict ? <p role="alert" className="text-xs text-destructive">{copy("graphTrainingConflict")}</p> : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+// Memory retention (plan Task 17 / spec §13): owner-only card. Values can be
+// shortened at any time; a 422 means the edit exceeds the platform caps and a
+// 409 means the policy version moved on — both render inline and refetch.
+export function RetentionCard({ wsId, isAdmin }: { wsId: string; isAdmin: boolean }) {
+  const copy = useEvolutionCopy();
+  const queryClient = useQueryClient();
+  const key = ["evolution", wsId, "memory-retention"] as const;
+  const { data } = useQuery({
+    queryKey: key,
+    queryFn: () => api.getMemoryRetention(wsId),
+    enabled: isAdmin && Boolean(wsId),
+    retry: false,
+  });
+  const [draft, setDraft] = useState<{ trajectory: string; archive: string; trace: string } | null>(null);
+  const [conflict, setConflict] = useState(false);
+  const [capError, setCapError] = useState(false);
+  const refresh = () => queryClient.invalidateQueries({ queryKey: key });
+
+  const save = useMutation({
+    mutationFn: () => api.updateMemoryRetention(wsId, {
+      trajectory_hot_days: retentionDays(draft?.trajectory, data?.policy.trajectory_hot_days),
+      archive_days: retentionDays(draft?.archive, data?.policy.archive_days),
+      trace_hot_days: retentionDays(draft?.trace, data?.policy.trace_hot_days),
+      expected_version: data?.policy.version ?? 0,
+    }),
+    onSuccess: async () => {
+      setConflict(false);
+      setCapError(false);
+      setDraft(null);
+      toast.success(copy("graphRetentionSaved"));
+      await refresh();
+    },
+    onError: (error) => {
+      if (error instanceof ApiError && error.status === 409) {
+        setConflict(true);
+        setCapError(false);
+        setDraft(null);
+        void refresh();
+        return;
+      }
+      if (error instanceof ApiError && error.status === 422) {
+        setCapError(true);
+        setConflict(false);
+        return;
+      }
+      showErrorToast(error instanceof Error ? error.message : copy("graphRetention"));
+    },
+  });
+
+  if (!isAdmin) return null;
+
+  if (!data) {
+    return (
+      <Card className="bg-background/85 backdrop-blur">
+        <CardHeader><CardTitle>{copy("graphRetention")}</CardTitle></CardHeader>
+        <CardContent><Skeleton className="h-24 rounded-2xl" /></CardContent>
+      </Card>
+    );
+  }
+
+  const trajectoryHot = draft?.trajectory ?? String(data.policy.trajectory_hot_days);
+  const archiveDays = draft?.archive ?? String(data.policy.archive_days);
+  const traceHot = draft?.trace ?? String(data.policy.trace_hot_days);
+
+  return (
+    <Card className="bg-background/85 backdrop-blur">
+      <CardHeader>
+        <CardTitle>{copy("graphRetention")}</CardTitle>
+        <p className="text-sm text-muted-foreground">{copy("graphRetentionHint")}</p>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex flex-wrap gap-x-3 text-xs text-muted-foreground">
+          <span>{copy("graphRetentionVersion")}: {data.policy.version}</span>
+          <span>{copy("graphRetentionCaps")}: {data.caps.trajectory_hot_days} / {data.caps.archive_days} / {data.caps.trace_hot_days}</span>
+        </div>
+        <div className="grid gap-2 sm:grid-cols-3">
+          <div className="space-y-1">
+            <Label htmlFor="graph-retention-trajectory">{copy("graphRetentionTrajectoryHot")}</Label>
+            <Input
+              id="graph-retention-trajectory"
+              type="number"
+              min={1}
+              value={trajectoryHot}
+              onChange={(event) => setDraft({ trajectory: event.target.value, archive: archiveDays, trace: traceHot })}
+              disabled={save.isPending}
+            />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="graph-retention-archive">{copy("graphRetentionArchive")}</Label>
+            <Input
+              id="graph-retention-archive"
+              type="number"
+              min={1}
+              value={archiveDays}
+              onChange={(event) => setDraft({ trajectory: trajectoryHot, archive: event.target.value, trace: traceHot })}
+              disabled={save.isPending}
+            />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="graph-retention-trace">{copy("graphRetentionTraceHot")}</Label>
+            <Input
+              id="graph-retention-trace"
+              type="number"
+              min={1}
+              value={traceHot}
+              onChange={(event) => setDraft({ trajectory: trajectoryHot, archive: archiveDays, trace: event.target.value })}
+              disabled={save.isPending}
+            />
+          </div>
+        </div>
+        <Button variant="outline" disabled={save.isPending} onClick={() => save.mutate()}>
+          {copy("graphRetentionSave")}
+        </Button>
+        {conflict ? <p role="alert" className="text-xs text-destructive">{copy("graphRetentionConflict")}</p> : null}
+        {capError ? <p role="alert" className="text-xs text-destructive">{copy("graphRetentionCapError")}</p> : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+function retentionDays(draft: string | undefined, fallback: number | undefined): number {
+  const parsed = Number.parseInt(draft ?? "", 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return fallback ?? 0;
+  return Math.trunc(parsed);
+}
+
+// Workspace pipeline health (spec §15): status-side backlog/backoff plus the
+// audit ledger's anonymous failure counters — the migration/DLQ health view
+// available without new endpoints (Task 21 adds the dedicated metrics).
+export function MemoryHealthCard({ wsId }: { wsId: string }) {
+  const copy = useEvolutionCopy();
+  const { data: status } = useQuery(graphMemoryStatusOptions(wsId));
+  const { data: audit } = useQuery(graphMemoryAuditOptions(wsId));
+
+  const stagingBacklog = (status?.graphs ?? []).reduce((total, graph) => total + graph.staging_segments, 0);
+  const backoff = (status?.graphs ?? []).some((graph) => graph.consolidation_backoff);
+  const recallErrors = Object.entries(audit?.ledger?.recalls_by_error_kind ?? {})
+    .filter(([, count]) => count > 0);
+  const outboxFailed = audit?.ledger?.reward_outbox_by_status.failed ?? 0;
+  const diveFailed = audit?.ledger?.dive_jobs_by_status.failed ?? 0;
+  const healthy = !backoff && stagingBacklog === 0 && recallErrors.length === 0 && outboxFailed === 0 && diveFailed === 0;
+
+  return (
+    <Card className="bg-background/85 backdrop-blur">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Activity className="h-4 w-4 text-brand" />{copy("graphHealth")}
+        </CardTitle>
+        <p className="text-sm text-muted-foreground">{copy("graphHealthHint")}</p>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        {backoff ? <Badge variant="outline">{copy("graphHealthBackoff")}</Badge> : null}
+        <div className="text-xs text-muted-foreground">
+          <span>{copy("graphHealthStaging")}: {stagingBacklog}</span>
+        </div>
+        {recallErrors.length > 0 ? (
+          <div className="space-y-1 text-xs text-muted-foreground">
+            <p className="font-medium text-foreground">{copy("graphHealthRecallErrors")}</p>
+            {recallErrors.map(([kind, count]) => (
+              <p key={kind} className="font-mono">{kind}: {count}</p>
+            ))}
+          </div>
+        ) : null}
+        <div className="text-xs text-muted-foreground">
+          <span>{copy("graphHealthOutboxFailed")}: {outboxFailed}</span>
+        </div>
+        <div className="text-xs text-muted-foreground">
+          <span>{copy("graphHealthDiveFailed")}: {diveFailed}</span>
+        </div>
+        {healthy ? <p className="text-xs text-muted-foreground">{copy("graphHealthClean")}</p> : null}
       </CardContent>
     </Card>
   );

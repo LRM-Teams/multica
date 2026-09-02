@@ -38,6 +38,10 @@ type GraphMemoryAuditSummary struct {
 	AvgExploreRounds24h float64                `json:"avg_explore_rounds_24h"`
 	JudgedQueries24h    int                    `json:"judged_queries_24h"`
 	Ledger              GraphMemoryAuditLedger `json:"ledger"`
+	// Task 21: the most recent audited shadow-gate transitions visible to
+	// this workspace (its own scope plus the global training gates). Empty
+	// on schemas without the registry or a configured pool.
+	GateTransitions []ShadowGateTransition `json:"gate_transitions,omitempty"`
 }
 
 // GraphMemoryAuditFailure is the most recent Dive failure retained for audit.
@@ -129,6 +133,12 @@ func (s *GraphMemoryAuditService) Summary(ctx context.Context, workspaceID strin
 	if s.pool != nil {
 		if err := s.populateLedger(ctx, workspaceID, cutoff, &sum.Ledger); err != nil {
 			return nil, err
+		}
+		if parsed, parseErr := util.ParseUUID(workspaceID); parseErr == nil {
+			if transitions, err := NewShadowGateService(s.pool).
+				ListTransitions(ctx, parsed, 20); err == nil {
+				sum.GateTransitions = transitions
+			}
 		}
 	}
 	s.populateManagementRejections(root, workspaceID, &sum.Ledger)

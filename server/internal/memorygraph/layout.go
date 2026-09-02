@@ -14,8 +14,9 @@ import (
 type GraphDirKind string
 
 const (
-	GraphDirKindProject GraphDirKind = "project"
-	GraphDirKindChannel GraphDirKind = "channel"
+	GraphDirKindProject  GraphDirKind = "project"
+	GraphDirKindChannel  GraphDirKind = "channel"
+	GraphDirKindResearch GraphDirKind = "research"
 )
 
 // graphIdentityFile is the immutable identity marker inside every graph
@@ -26,8 +27,8 @@ const graphIdentityFile = ".graph_identity.json"
 // GraphIdentity is the immutable identity of one physical graph.
 type GraphIdentity struct {
 	WorkspaceID string `json:"workspace_id"`
-	Kind        string `json:"kind"`     // "project" | "channel"
-	OwnerID     string `json:"owner_id"` // project-id | channel-id
+	Kind        string `json:"kind"`     // "project" | "channel" | "research"
+	OwnerID     string `json:"owner_id"` // project-id | channel-id | workspace-id (research)
 }
 
 func (k GraphDirKind) subdir() (string, error) {
@@ -36,21 +37,30 @@ func (k GraphDirKind) subdir() (string, error) {
 		return "projects", nil
 	case GraphDirKindChannel:
 		return "channels", nil
+	case GraphDirKindResearch:
+		return "research", nil
 	default:
 		return "", fmt.Errorf("graph_identity_mismatch: unknown graph dir kind %q", string(k))
 	}
 }
 
 // DirForScope returns the canonical graph directory for one scope without
-// creating it: <root>/<ws>/memory_graph/projects/<pid> or
-// <root>/<ws>/memory_graph/channels/<cid>. All IDs must be UUIDs; anything
-// else fails closed. There is no root-level or workspace-wide fallback.
+// creating it: <root>/<ws>/memory_graph/projects/<pid>,
+// <root>/<ws>/memory_graph/channels/<cid>, or
+// <root>/<ws>/memory_graph/research/<ws>. All IDs must be UUIDs; anything
+// else fails closed. The research graph is the one sanctioned workspace-level
+// scope (scope design §3, 2026-08-31 revision): a named scope whose owner is
+// the workspace itself, never a fallback for unresolved project/channel
+// targets.
 func DirForScope(workspacesRoot, workspaceID string, kind GraphDirKind, ownerID string) (string, error) {
 	if _, err := uuid.Parse(strings.TrimSpace(workspaceID)); err != nil {
 		return "", fmt.Errorf("graph_scope_unresolved: invalid workspace id %q", workspaceID)
 	}
 	if _, err := uuid.Parse(strings.TrimSpace(ownerID)); err != nil {
 		return "", fmt.Errorf("graph_scope_unresolved: invalid graph owner id %q", ownerID)
+	}
+	if kind == GraphDirKindResearch && ownerID != workspaceID {
+		return "", fmt.Errorf("graph_scope_unresolved: research graph owner must be the workspace itself, got owner %q for workspace %q", ownerID, workspaceID)
 	}
 	sub, err := kind.subdir()
 	if err != nil {
@@ -111,8 +121,11 @@ func ReadGraphIdentity(dir string) (GraphIdentity, error) {
 	if _, err := uuid.Parse(id.OwnerID); err != nil {
 		return GraphIdentity{}, fmt.Errorf("graph_identity_mismatch: invalid owner id in identity")
 	}
-	if id.Kind != string(GraphDirKindProject) && id.Kind != string(GraphDirKindChannel) {
+	if id.Kind != string(GraphDirKindProject) && id.Kind != string(GraphDirKindChannel) && id.Kind != string(GraphDirKindResearch) {
 		return GraphIdentity{}, fmt.Errorf("graph_identity_mismatch: invalid kind %q", id.Kind)
+	}
+	if id.Kind == string(GraphDirKindResearch) && id.OwnerID != id.WorkspaceID {
+		return GraphIdentity{}, fmt.Errorf("graph_identity_mismatch: research graph owner %q must equal workspace %q", id.OwnerID, id.WorkspaceID)
 	}
 	return id, nil
 }

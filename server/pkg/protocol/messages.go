@@ -591,6 +591,11 @@ const (
 	// DaemonCapabilityWorkspaceDaemonAgentProcess selects the Raft-shaped
 	// agent:start / agent:stop process-control boundary.
 	DaemonCapabilityWorkspaceDaemonAgentProcess = "workspace_daemon_agent_process_v1"
+	// DaemonCapabilityMemoryExploreV2 advertises the agent-native Explore
+	// v2 protocol generation. The capability is necessary but never
+	// sufficient: the server additionally requires its memory_explore_v2
+	// phase gate to be green before generation 2 is negotiated.
+	DaemonCapabilityMemoryExploreV2 = "memory_explore_v2"
 	// DaemonCapabilityWorkspaceDaemonControlPlane selects the current ready
 	// WorkspaceDaemon as the sole carrier for heartbeat actions belonging to
 	// that Workspace. Runtime-multiplexed WS and HTTP heartbeats remain legacy
@@ -789,6 +794,10 @@ type GraphMemoryRecallResponse struct {
 	Citations    []GraphMemoryRecallCitation `json:"citations"`
 	Rounds       int                         `json:"rounds"`
 	Injection    string                      `json:"injection"`
+	// ResearchInjection is the federated research-graph section (unification
+	// spec §4.4), delivered as its own memory context so graph-mode execution
+	// memory can trim research after current (16 KiB order).
+	ResearchInjection string `json:"research_injection"`
 }
 
 // DaemonRegisterPayload is sent from daemon to server on connection.

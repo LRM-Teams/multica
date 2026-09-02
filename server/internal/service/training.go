@@ -116,6 +116,57 @@ type TrainingSessionDeps struct {
 	// construction (NewInteractionDAGService with the real arealrl client) is
 	// wired in U10; U7.2 adds the field + the calls + tests construct it.
 	DAG *InteractionDAGService
+	// Governance (Task 18, spec 14.1): authorizes the ONLY tasks that may
+	// open an AReaL session — distinct replay/training execution tasks whose
+	// manifest-backed identity is recorded in interaction_dag_training_execution.
+	Governance TrainingGovernanceAuthorizer
+}
+
+// TrainingGovernanceAuthorizer authorizes a replay/training task against
+// its recorded manifest execution identity (spec 14.1). The production
+// implementation is *TrainingGovernanceService.
+type TrainingGovernanceAuthorizer interface {
+	AuthorizeTrainingExecutionTask(ctx context.Context, taskID, manifestID string) error
+}
+
+// trainingExecutionContext is the immutable execution identity a distinct
+// replay/training task carries in context.training_execution (Task 18). It
+// is stamped when the training execution begins and never rewritten.
+type trainingExecutionContext struct {
+	ExecutionID string `json:"execution_id"`
+	ManifestID  string `json:"manifest_id"`
+	Purpose     string `json:"purpose"`
+}
+
+// extractTrainingExecutionContext parses the training execution identity
+// from a task context; ok is false for ordinary source tasks.
+func extractTrainingExecutionContext(raw []byte) (*trainingExecutionContext, bool) {
+	if len(raw) == 0 {
+		return nil, false
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, false
+	}
+	v, ok := m["training_execution"]
+	if !ok || len(v) == 0 || string(v) == "null" {
+		return nil, false
+	}
+	var exec trainingExecutionContext
+	if err := json.Unmarshal(v, &exec); err != nil {
+		return nil, false
+	}
+	if exec.ManifestID == "" {
+		return nil, false
+	}
+	return &exec, true
+}
+
+// hasTrainingExecutionContext reports whether the task is a distinct
+// replay/training execution task.
+func hasTrainingExecutionContext(raw []byte) bool {
+	_, ok := extractTrainingExecutionContext(raw)
+	return ok
 }
 
 // trainingDefaultReward is the fallback reward when deps.DefaultReward is
@@ -158,67 +209,66 @@ func (s *TaskService) tryOpenTrainingSession(ctx context.Context, task db.AgentI
 	}
 }
 
-// maybeOpenTrainingSession opens an RL proxy session and injects the areal_proxy
-// config into the task's context when, and only when, the task is the training
-// target for its project. It is safe to call at every task-creation chokepoint.
+// maybeOpenTrainingSession opens an RL proxy session ONLY for a distinct
+// replay/training execution task whose context carries the immutable
+// training_execution identity (Task 18, spec 14.1). Ordinary source tasks
+// never open AReaL: they publish to the Universal DAG under the
+// data-processing policy and receive rewards before any selection.
 //
 // Behavior:
-//  1. deps == nil / no project -> no-op (training not configured for this task).
-//  2. project has no training_dispatch row -> no-op (not a training project).
-//  3. training_dispatch.train_agent_id != agentID -> no-op (not the target).
-//  4. task already has context.areal_proxy -> no-op (idempotent / retry-safe).
-//  5. otherwise: StartSession(sessionRef=taskID, envID) and merge context.areal_proxy.
-//
-// It returns (does NOT swallow) StartSession/persist errors so the caller can
-// log + record. When a task IS a training target but the RL bridge is not
-// configured, that is a loud error rather than a silent un-proxied run.
+//  1. deps == nil -> no-op (training not configured for this deployment).
+//  2. task id is not a UUID -> no-op (malformed identity, nothing to record).
+//  3. task has no context.training_execution -> no-op (ordinary source task).
+//  4. governance authorizer missing -> loud error (execution identity
+//     without governance must never silently run un-proxied).
+//  5. governance refuses (switch off / grant revoked / unknown execution)
+//     -> the refusal is returned so the caller logs it.
+//  6. task already has context.areal_proxy -> no-op (idempotent / retry-safe).
+//  7. otherwise: StartSession(sessionRef=execution_id, envID) and merge
+//     context.areal_proxy.
 func maybeOpenTrainingSession(ctx context.Context, deps *TrainingSessionDeps, taskID, agentID, projectID, envID string) error {
 	if deps == nil {
 		return nil // training not configured for this deployment
 	}
-	if projectID == "" {
-		return nil // no owning project -> cannot resolve a training target
-	}
-	projectUUID, err := util.ParseUUID(projectID)
-	if err != nil {
-		return nil // malformed project id -> not a training target
-	}
-
-	dispatch, err := deps.Lookup.GetTrainingDispatchByProject(ctx, projectUUID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil // not a training project
-		}
-		return fmt.Errorf("training: lookup dispatch for project %s: %w", projectID, err)
-	}
-	if util.UUIDToString(dispatch.TrainAgentID) != agentID {
-		return nil // this task's agent is not the training target
-	}
-
-	// From here the task IS a training target: a missing bridge dep is loud,
-	// never a silent un-proxied run.
-	if deps.RL == nil || deps.ProxyURL == "" {
-		return fmt.Errorf(
-			"training: task %s targets train_agent %s but the RL bridge is not configured (proxy_url/client missing)",
-			taskID, agentID,
-		)
-	}
-
 	taskUUID, err := util.ParseUUID(taskID)
 	if err != nil {
-		return fmt.Errorf("training: parse task id %q: %w", taskID, err)
+		return nil // malformed task id -> no durable identity to authorize
 	}
 
-	// Idempotency: a task that already carries areal_proxy has an open session.
+	// Idempotency + identity: load the task once; the execution identity
+	// lives on the task, not on the caller's arguments.
 	task, err := deps.Store.GetAgentTask(ctx, taskUUID)
 	if err != nil {
 		return fmt.Errorf("training: load task %s: %w", taskID, err)
+	}
+	exec, ok := extractTrainingExecutionContext(task.Context)
+	if !ok {
+		return nil // ordinary source task: never opens AReaL
+	}
+	if deps.Governance == nil {
+		return fmt.Errorf(
+			"training: task %s carries training manifest %s but the governance service is not configured",
+			taskID, exec.ManifestID,
+		)
+	}
+	if err := deps.Governance.AuthorizeTrainingExecutionTask(ctx, taskID, exec.ManifestID); err != nil {
+		return fmt.Errorf("training: execution authorization for task %s (manifest %s): %w",
+			taskID, exec.ManifestID, err)
+	}
+
+	// From here the task IS a training execution: a missing bridge dep is
+	// loud, never a silent un-proxied run.
+	if deps.RL == nil || deps.ProxyURL == "" {
+		return fmt.Errorf(
+			"training: task %s is a training execution for manifest %s but the RL bridge is not configured (proxy_url/client missing)",
+			taskID, exec.ManifestID,
+		)
 	}
 	if hasArealProxyContext(task.Context) {
 		return nil
 	}
 
-	creds, err := deps.RL.StartSession(ctx, taskID, envID)
+	creds, err := deps.RL.StartSession(ctx, exec.ExecutionID, envID)
 	if err != nil {
 		return fmt.Errorf("training: start_session for task %s: %w", taskID, err)
 	}
@@ -262,6 +312,8 @@ func maybeOpenTrainingSession(ctx context.Context, deps *TrainingSessionDeps, ta
 		"task_id", taskID,
 		"agent_id", agentID,
 		"project_id", projectID,
+		"training_manifest_id", exec.ManifestID,
+		"training_execution_id", exec.ExecutionID,
 		"session_id", creds.SessionID,
 	)
 	return nil
@@ -491,25 +543,14 @@ func maybeSweepIdleTrainingSessions(ctx context.Context, deps *TrainingSessionDe
 	if activeCount > 0 {
 		return nil // other agents still working — not idle yet
 	}
-	// All trainable agents are idle.  Close the triggering task's session
-	// (the sweep target) as the final bookend.
+	// All trainable agents are idle. The triggering task's canonical
+	// terminal boundary was already recorded inside its business
+	// transaction; the retained idle-sweep legacy segment close was removed
+	// in Task 22 (AC56: the canonical Universal writer is the only live
+	// segment writer).
 	cfg, ok := extractArealProxyConfig(task.Context)
 	if !ok {
 		return nil
-	}
-	// Close any still-open segment (one that wasn't closed by a delegation
-	// handoff).  Best-effort: errors are logged but don't block session close.
-	if deps.DAG != nil && deps.DAG.Enabled() {
-		runID := util.UUIDToString(task.ID)
-		if existing, segErr := deps.DAG.SegmentIDForAgentRun(ctx, runID); segErr != nil || existing == "" {
-			if _, _, clsErr := deps.DAG.CloseSegmentForEvent(ctx, util.UUIDToString(projectID), cfg.SessionID, cfg.APIKey, "", nil); clsErr != nil {
-				slog.Warn("training: idle-sweep segment close failed",
-					"task_id", runID,
-					"session_id", cfg.SessionID,
-					"error", clsErr,
-				)
-			}
-		}
 	}
 	// agent_inbox_event has no "completed" status — the enum is
 	// pending/draining/acked/failed/suppressed and success lives in
@@ -596,6 +637,13 @@ func (s *TaskService) RouteTerminalTrainingTask(ctx context.Context, task db.Age
 	// (no-op) for non-critic tasks, so trained-terminal routing proceeds.
 	if maybeCloseTrainingSessionFromCritic(ctx, s.Training, task) {
 		return // closed via critic; skip trained-terminal routing
+	}
+	// Task 18 (spec 14.1): the trained-terminal route — critic spawn, idle
+	// sweep, checkpoint — applies only to the distinct replay/training
+	// execution tasks. Ordinary source tasks never carried a session, so
+	// there is nothing to route.
+	if !hasTrainingExecutionContext(task.Context) {
+		return
 	}
 	// Env-dispatch rollout tasks carry their project through chat_session, not
 	// issue_id; resolving only the issue shape here left every rollout task

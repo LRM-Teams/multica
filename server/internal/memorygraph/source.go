@@ -872,6 +872,23 @@ func (c *Consolidator) sourceLayerReject(g *Graph, op ConsolidateOp) string {
 		} else if src != nil {
 			return "cannot mutate source-layer node"
 		}
+	case OpMergeNode:
+		// A merge mutates every input and materializes the result node,
+		// so both sides must stay clear of the immutable source layer.
+		ids := append([]string{}, op.InputNodeIDs...)
+		if op.Node != nil {
+			ids = append(ids, op.Node.NodeID)
+		}
+		for _, id := range ids {
+			if IsSourceLayerNode(g.Node(id)) {
+				return "cannot merge source-layer node"
+			}
+			if src, err := c.store.lookupSourceNode(id); err != nil {
+				return err.Error()
+			} else if src != nil {
+				return "cannot merge source-layer node"
+			}
+		}
 	case OpDeleteEdge, OpPruneEdge, OpUpdateEdge:
 		id := op.EdgeID
 		if id == "" && op.Edge != nil {

@@ -7,8 +7,11 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -124,38 +127,38 @@ func TestGraphMemoryAgentRunStoreFencingIdempotencyQuotaAndCitation(t *testing.T
 	}
 	defer execution.Shutdown(context.Background())
 
-	if err := store.ValidateToolOperationQuota(ctx, claim.RunID, claim.FencingToken, "explore", "too-many", json.RawMessage(`{"node_ids":["1","2","3","4","5"]}`)); !errors.Is(err, service.ErrGraphMemoryAgentQuotaExceeded) {
+	if err := store.ValidateToolOperationQuota(ctx, claim.RunID, claim.FencingToken, "explore", "too-many", "", json.RawMessage(`{"node_ids":["1","2","3","4","5"]}`)); !errors.Is(err, service.ErrGraphMemoryAgentQuotaExceeded) {
 		t.Fatalf("nodes-per-call quota err=%v", err)
 	}
 	quotaRequest := json.RawMessage(`{"node_ids":["1","2","3","4"]}`)
-	quotaReservation, err := store.ReserveToolOperation(ctx, claim.RunID, claim.FencingToken, "quota-1", "explore", quotaRequest)
+	quotaReservation, err := store.ReserveToolOperation(ctx, claim.RunID, claim.FencingToken, "quota-1", "", "explore", quotaRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := store.CompleteToolOperation(ctx, claim.RunID, claim.FencingToken, quotaReservation.OperationID, json.RawMessage(`{"nodes":[]}`), ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.ValidateToolOperationQuota(ctx, claim.RunID, claim.FencingToken, "explore", "quota-2", json.RawMessage(`{"node_ids":["5","6"]}`)); !errors.Is(err, service.ErrGraphMemoryAgentQuotaExceeded) {
+	if err := store.ValidateToolOperationQuota(ctx, claim.RunID, claim.FencingToken, "explore", "quota-2", "", json.RawMessage(`{"node_ids":["5","6"]}`)); !errors.Is(err, service.ErrGraphMemoryAgentQuotaExceeded) {
 		t.Fatalf("nodes-per-minute quota err=%v", err)
 	}
 
 	request := json.RawMessage(`{"query":"dispatch","limit":4}`)
-	reservation, err := store.ReserveToolOperation(ctx, claim.RunID, claim.FencingToken, "start-1", "start", request)
+	reservation, err := store.ReserveToolOperation(ctx, claim.RunID, claim.FencingToken, "start-1", "", "start", request)
 	if err != nil || reservation.OperationID == "" || reservation.Pending || reservation.Replay {
 		t.Fatalf("reservation = %+v err=%v", reservation, err)
 	}
-	pending, err := store.ReserveToolOperation(ctx, claim.RunID, claim.FencingToken, "start-1", "start", json.RawMessage(`{"limit":4,"query":"dispatch"}`))
+	pending, err := store.ReserveToolOperation(ctx, claim.RunID, claim.FencingToken, "start-1", "", "start", json.RawMessage(`{"limit":4,"query":"dispatch"}`))
 	if err != nil || !pending.Pending || pending.OperationID != reservation.OperationID {
 		t.Fatalf("pending replay = %+v err=%v", pending, err)
 	}
-	if _, err := store.ReserveToolOperation(ctx, claim.RunID, claim.FencingToken, "start-1", "redirect", request); !errors.Is(err, service.ErrGraphMemoryToolReplayConflict) {
+	if _, err := store.ReserveToolOperation(ctx, claim.RunID, claim.FencingToken, "start-1", "", "redirect", request); !errors.Is(err, service.ErrGraphMemoryToolReplayConflict) {
 		t.Fatalf("conflicting replay err=%v", err)
 	}
 	response := json.RawMessage(`{"trajectory_id":"` + claim.TrajectoryID + `","nodes":["n1"]}`)
 	if err := store.CompleteToolOperation(ctx, claim.RunID, claim.FencingToken, reservation.OperationID, response, ""); err != nil {
 		t.Fatal(err)
 	}
-	replay, err := store.ReserveToolOperation(ctx, claim.RunID, claim.FencingToken, "start-1", "start", request)
+	replay, err := store.ReserveToolOperation(ctx, claim.RunID, claim.FencingToken, "start-1", "", "start", request)
 	if err != nil || !replay.Replay || replay.Pending || string(replay.Response) == "" {
 		t.Fatalf("terminal replay = %+v err=%v", replay, err)
 	}
@@ -192,7 +195,9 @@ func TestGraphMemoryAgentRunStoreFencingIdempotencyQuotaAndCitation(t *testing.T
 	if steeringCount != 1 || steeringOrdinal != 1 {
 		t.Fatalf("steering events count=%d ordinal=%d", steeringCount, steeringOrdinal)
 	}
-	if err := store.RecordViewedNodes(ctx, claim.RunID, claim.FencingToken, []string{"n1", "n1"}); err != nil {
+	// Viewed provenance is graph-qualified ("<graph>|<node>"); this direct
+	// store test uses the empty (legacy) graph identity.
+	if err := store.RecordViewedNodes(ctx, claim.RunID, claim.FencingToken, []string{"|n1", "|n1"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.AddUsage(ctx, claim.RunID, claim.FencingToken, 400, 500); err != nil {
@@ -364,7 +369,7 @@ func TestGraphMemoryAgentGatewayBindsManagedPrincipalAndSurvivesStatelessRequest
 		t.Fatal("managed Agent delivery did not receive Graph tool capability")
 	}
 
-	testHandler.GraphMemoryAgentGateway = service.NewGraphMemoryAgentGateway(testPool)
+	testHandler.GraphMemoryAgentGateway = service.NewGraphMemoryAgentGateway(testPool, graphMemoryTestProviderResolver("test-provider", "test-model"))
 	callAs := func(principalAgentID, operation, body string) *httptest.ResponseRecorder {
 		t.Helper()
 		req := httptest.NewRequest(http.MethodPost, "/api/agent/channels/"+channelID.String()+"/graph-memory/"+operation, bytes.NewBufferString(body))
@@ -467,5 +472,98 @@ func TestGraphMemoryAgentGatewayBindsManagedPrincipalAndSurvivesStatelessRequest
 	checkpoint := call("checkpoint", `{"trajectory_id":"`+startPayload.TrajectoryID+`","state":{"objective":"retry limits","open_questions":["cap"]},"idempotency_key":"checkpoint-message-2"}`)
 	if checkpoint.Code != http.StatusOK {
 		t.Fatalf("checkpoint status=%d body=%s", checkpoint.Code, checkpoint.Body.String())
+	}
+}
+
+// setMemoryExplorePhaseGate flips the workspace's Task 8A phase gate. The
+// transition CHECK requires retraction_canary_ok whenever any route is on.
+func setMemoryExplorePhaseGate(t *testing.T, workspaceID string, exploreEnabled bool) {
+	t.Helper()
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO memory_read_phase_gate(workspace_id,retraction_canary_ok,explore_enabled)
+		VALUES($1::uuid,true,$2) ON CONFLICT (workspace_id) DO UPDATE
+		SET explore_enabled=EXCLUDED.explore_enabled, retraction_canary_ok=true`,
+		workspaceID, exploreEnabled); err != nil {
+		t.Fatalf("set memory explore phase gate: %v", err)
+	}
+}
+
+// Bidirectional capability negotiation (plan Task 12): the daemon advertises
+// memory_explore_v2 at registration; the server echoes it in
+// server_capabilities — and pins the negotiated generation on the computer's
+// runtime row — only while that workspace's explore gate is green. A
+// capability alone never authorizes a disabled server path, and an old daemon
+// (no capability) registers unchanged.
+func TestDaemonRegister_NegotiatesMemoryExploreV2(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	daemonID := "test-daemon-explore-v2-" + uuid.NewString()
+	runtimeName := "test-runtime-explore-v2-" + uuid.NewString()
+
+	register := func(capabilities []string) (map[string]any, []string) {
+		t.Helper()
+		w := httptest.NewRecorder()
+		req := newDaemonTokenRequest("POST", "/api/daemon/register", map[string]any{
+			"workspace_id": testWorkspaceID,
+			"daemon_id":    daemonID,
+			"device_name":  "explore-v2-device",
+			"cli_version":  "v0.3.0",
+			"capabilities": capabilities,
+			"runtimes": []map[string]any{
+				{"name": runtimeName, "type": "claude", "version": "1.0.0", "status": "online"},
+			},
+		}, testWorkspaceID, daemonID)
+		testHandler.DaemonRegister(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("DaemonRegister: status=%d body=%s", w.Code, w.Body.String())
+		}
+		var resp struct {
+			Runtimes           []map[string]any `json:"runtimes"`
+			ServerCapabilities []string         `json:"server_capabilities"`
+		}
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatal(err)
+		}
+		if len(resp.Runtimes) != 1 {
+			t.Fatalf("runtimes = %#v", resp.Runtimes)
+		}
+		return resp.Runtimes[0], resp.ServerCapabilities
+	}
+
+	setMemoryExplorePhaseGate(t, testWorkspaceID, true)
+	t.Cleanup(func() { setMemoryExplorePhaseGate(t, testWorkspaceID, false) })
+
+	// Old daemon: no capability — registration and v1 life continue.
+	legacyRuntime, legacyServer := register([]string{protocol.DaemonCapabilityAgentCLITransport})
+	if slices.Contains(legacyServer, protocol.DaemonCapabilityMemoryExploreV2) {
+		t.Fatalf("server echoed %q without the daemon advertising it: %#v", protocol.DaemonCapabilityMemoryExploreV2, legacyServer)
+	}
+	if gen := legacyRuntime["memoryExploreGeneration"]; gen != float64(1) {
+		t.Fatalf("legacy runtime generation = %#v, want 1", gen)
+	}
+
+	// Capable daemon + green gate: bidirectional handshake at generation 2.
+	capableRuntime, capableServer := register([]string{protocol.DaemonCapabilityMemoryExploreV2})
+	runtimeID := capableRuntime["id"].(string)
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
+	})
+	if !slices.Contains(capableServer, protocol.DaemonCapabilityMemoryExploreV2) {
+		t.Fatalf("server_capabilities missing negotiated %q: %#v", protocol.DaemonCapabilityMemoryExploreV2, capableServer)
+	}
+	if gen := capableRuntime["memoryExploreGeneration"]; gen != float64(2) {
+		t.Fatalf("capable runtime generation = %#v, want 2", gen)
+	}
+
+	// Gate flips red: the very same daemon re-registers at generation 1 and
+	// the echo disappears — v2 is unavailable, not silently exposed.
+	setMemoryExplorePhaseGate(t, testWorkspaceID, false)
+	disabledRuntime, disabledServer := register([]string{protocol.DaemonCapabilityMemoryExploreV2})
+	if slices.Contains(disabledServer, protocol.DaemonCapabilityMemoryExploreV2) {
+		t.Fatalf("server echoed %q while the explore gate is red: %#v", protocol.DaemonCapabilityMemoryExploreV2, disabledServer)
+	}
+	if gen := disabledRuntime["memoryExploreGeneration"]; gen != float64(1) {
+		t.Fatalf("disabled runtime generation = %#v, want 1", gen)
 	}
 }

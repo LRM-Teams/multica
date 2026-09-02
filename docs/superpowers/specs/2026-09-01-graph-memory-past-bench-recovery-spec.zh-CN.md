@@ -149,6 +149,8 @@ kind: preference | rule | fact | procedure
 
 ### D1. 两段式复测
 
+> **前置风险（2026-09-01 部署引入的 #2295 回归）**：canonical delivery 频道回合不再铸任务 → `graph_memory_agent_run` 停铸 → 两条 ingest 路径（Path A 任务段 + Path B run 段）同时断源，channel 图摄取归零、版本冻结（WikiSkill Phase 1c 实测 GATE 拦截，详见 SKILL.md「#2295 环境坑」）。复测前必须确认目标部署的频道回合→摄取链路存活；驱动侧已内置 bounce_daemon 缓解（批量建频道 → 重启本机 daemon → reconcile 拉起 → 补投滞留消息）。若服务器侧修复（canonical 回合重建铸任务）先于本 spec 落地，A2 driver 的 harness gate 会直接暴露链路存活与否。
+
 1. **冒烟门（worktree 部署后）**：4 个最差族（PG02/PG03/SM03/PC01）——transport gate 3/3 → 3 条 learn → 断言 atoms published + search 可见（A2-1 post-merge 形态）→ 1 条 recall 验证 start seeds 命中（A2-2）。**不过冒烟不跑全量**。
 2. **全量 26 族**（B 节 amendment 合并部署后）：基线 = official2-run2 regraded（26 族终版数字，待 regrade 完成后固化）；driver 记录 capability 并按需分列。
 

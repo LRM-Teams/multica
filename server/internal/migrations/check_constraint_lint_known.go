@@ -62,6 +62,9 @@ var knownPreExistingUnsafeNarrowings = map[knownUnsafeNarrowingKey]bool{
 	{"223_agent_wake_clean_cutover", "agent_session_scope_check"}:                                 true,
 	{"247_channel_manager_role_wake", "agent_inbox_event_reason_check"}:                           true,
 	{"255_research_product_rounds", "research_graph_node_node_type_check"}:                        true,
+	// 492 predates this linter; its down path intentionally fails closed for
+	// new-kind atoms (ADR 0021 D8), rather than silently remapping audit data.
+	{"492_graph_memory_atom_kind_vocabulary", "graph_memory_atom_kind_check"}: true,
 }
 
 // filterKnownUnsafeNarrowings splits found narrowings into new (must block

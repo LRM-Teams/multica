@@ -1,0 +1,2 @@
+DROP INDEX IF EXISTS idx_graph_memory_evaluation_episode_channel_id;
+DROP INDEX IF EXISTS idx_graph_memory_evaluation_episode_primary_agent_id;

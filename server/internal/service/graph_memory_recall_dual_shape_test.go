@@ -254,3 +254,46 @@ func TestGraphMemoryRecallLedgerRejectsForeignShape(t *testing.T) {
 	require.Error(t, err, "trigger must reject a task id that is no channel_message")
 	assert.False(t, errors.Is(err, ErrGraphMemoryRecallIdentity)) // storage denial, not the service sentinel
 }
+
+// The P0 exception is deliberately narrower than agent mode: only the daemon
+// turn's active managed channel agent, reporting runtime, and task channel can
+// obtain deterministic injection. Any ordinary or mismatched identity remains
+// disabled.
+func TestGraphMemoryRecallAgentModeAllowsOnlyManagedGraphToolsBinding(t *testing.T) {
+	pool := dualShapeTestPool(t)
+	f := newDualShapeFixture(t, pool)
+	ctx := context.Background()
+	_, err := pool.Exec(ctx, `
+		INSERT INTO graph_memory_profile (workspace_id, memory_type, graph_memory_mode)
+		VALUES ($1::uuid, 'graph', 'agent')
+		ON CONFLICT (workspace_id) DO UPDATE SET memory_type='graph', graph_memory_mode='agent'`, f.wsID)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `UPDATE agent SET managed_role='graph_memory_channel' WHERE id=$1::uuid`, f.inboxAgent)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `
+		INSERT INTO graph_memory_channel_agent (workspace_id, channel_id, agent_id, runtime_id, handle, display_name, status)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'memory-dual-shape', 'Memory dual shape', 'active')`,
+		f.wsID, f.channelID, f.inboxAgent, f.runtimeID)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `
+		INSERT INTO channel_member (workspace_id, channel_id, member_type, member_id, role)
+		VALUES ($1::uuid, $2::uuid, 'agent', $3::uuid, 'member')
+		ON CONFLICT DO NOTHING`, f.wsID, f.channelID, f.inboxAgent)
+	require.NoError(t, err)
+
+	request := f.request(f.userMsgID)
+	request.ManagedGraphMemoryAgentID = f.inboxAgent
+	plan, err := f.service().Begin(ctx, request)
+	require.NoError(t, err)
+	assert.Equal(t, graphMemoryTaskShapeChannelMessage, plan.TaskShape)
+
+	denied := f.request(f.userMsgID)
+	_, err = f.service().Begin(ctx, denied)
+	assert.ErrorIs(t, err, ErrGraphMemoryRecallDisabled)
+
+	wrongRuntime := f.request(f.userMsgID)
+	wrongRuntime.ManagedGraphMemoryAgentID = f.inboxAgent
+	wrongRuntime.RuntimeID = uuid.NewString()
+	_, err = f.service().Begin(ctx, wrongRuntime)
+	assert.ErrorIs(t, err, ErrGraphMemoryRecallIdentity)
+}

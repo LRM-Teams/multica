@@ -57,11 +57,12 @@ func (h *Handler) RequestGraphMemoryRecall(w http.ResponseWriter, r *http.Reques
 		Query:       req.Query,
 		TraceID:     req.TraceID,
 		// Caller hints are diagnostics only (A14).
-		CallerGraphKind:    req.GraphKind,
-		CallerGraphOwnerID: req.GraphOwnerID,
-		CallerGraphVersion: req.GraphVersion,
-		CallerTrainingMode: req.TrainingMode,
-		CallerK:            req.K,
+		CallerGraphKind:           req.GraphKind,
+		CallerGraphOwnerID:        req.GraphOwnerID,
+		CallerGraphVersion:        req.GraphVersion,
+		CallerTrainingMode:        req.TrainingMode,
+		CallerK:                   req.K,
+		ManagedGraphMemoryAgentID: req.ManagedGraphMemoryAgentID,
 	})
 	switch outcome.Reason {
 	case "":

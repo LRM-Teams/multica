@@ -84,6 +84,10 @@ type GraphMemoryRecallRequest struct {
 	CallerGraphVersion int
 	CallerTrainingMode string
 	CallerK            int
+	// ManagedGraphMemoryAgentID is present only for a daemon-local
+	// GraphMemoryTools resident turn. It is an authorization subject, never a
+	// graph selector: Begin verifies its active channel/runtime membership.
+	ManagedGraphMemoryAgentID string
 }
 
 // GraphMemoryRecallPlan is the server's authoritative, durably persisted
@@ -232,7 +236,9 @@ func (s *GraphMemoryRecallService) Begin(ctx context.Context, req GraphMemoryRec
 		return nil, fmt.Errorf("%w: memory_type is %s", ErrGraphMemoryRecallDisabled, memoryType)
 	}
 	if graphMemoryMode != "inject" {
-		return nil, fmt.Errorf("%w: graph_memory_mode is %s", ErrGraphMemoryRecallDisabled, graphMemoryMode)
+		if graphMemoryMode != "agent" || !s.managedAgentModeRecallAllowed(ctx, wsUUID, rtUUID, channelID, req.ManagedGraphMemoryAgentID) {
+			return nil, fmt.Errorf("%w: graph_memory_mode is %s", ErrGraphMemoryRecallDisabled, graphMemoryMode)
+		}
 	}
 
 	// Memory-agent training behavior (spec §5): the invoking agent's active
@@ -733,4 +739,33 @@ func graphMemoryTunablesFromProfile(profile db.GraphMemoryProfile) GraphMemoryTu
 		SourceMaxAVSeconds:       int(profile.SourceMaxAvSeconds),
 		SourceMaxImageMegapixels: int(profile.SourceMaxImageMegapixels),
 	}
+}
+
+// managedAgentModeRecallAllowed is the narrow agent-mode exception for a
+// server-projected GraphMemoryTools resident turn. A daemon cannot widen it by
+// naming an arbitrary agent: the active managed-channel mapping, managed role,
+// workspace, task channel, and reporting runtime must all agree.
+func (s *GraphMemoryRecallService) managedAgentModeRecallAllowed(ctx context.Context, workspaceID, runtimeID, channelID pgtype.UUID, agentID string) bool {
+	if s == nil || s.pool == nil || !channelID.Valid {
+		return false
+	}
+	managedAgentID, err := util.ParseUUID(strings.TrimSpace(agentID))
+	if err != nil {
+		return false
+	}
+	var allowed bool
+	err = s.pool.QueryRow(ctx, `
+		SELECT EXISTS(
+		  SELECT 1
+		  FROM graph_memory_channel_agent managed
+		  JOIN agent a ON a.id=managed.agent_id
+		  JOIN channel_member member ON member.workspace_id=managed.workspace_id
+		    AND member.channel_id=managed.channel_id AND member.member_type='agent'
+		    AND member.member_id=managed.agent_id
+		  WHERE managed.workspace_id=$1 AND managed.channel_id=$2
+		    AND managed.agent_id=$3 AND managed.runtime_id=$4
+		    AND managed.status='active' AND a.managed_role='graph_memory_channel'
+		    AND a.archived_at IS NULL
+		)`, workspaceID, channelID, managedAgentID, runtimeID).Scan(&allowed)
+	return err == nil && allowed
 }

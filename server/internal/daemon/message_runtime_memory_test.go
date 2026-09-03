@@ -302,18 +302,18 @@ func TestGraphMemoryAgentToolContextProjectsOnlyFiveScopedOperations(t *testing.
 	context := graphMemoryAgentToolContext(protocol.AgentMessageProjection{
 		ID: "message-1", ChannelID: "channel-1", GraphMemoryTools: true,
 	})
-	for _, operation := range []string{"start", "explore", "redirect", "submit", "checkpoint"} {
+	for _, operation := range []string{"graph_memory_start", "graph_memory_explore", "graph_memory_redirect", "graph_memory_submit"} {
 		if !strings.Contains(context, operation) {
 			t.Fatalf("tool context missing %q: %s", operation, context)
 		}
 	}
-	for _, forbidden := range []string{"graph owner in a tool body", "Authorization: Bearer"} {
+	for _, forbidden := range []string{"graph_memory_checkpoint", "curl", "Authorization: Bearer", "/api/agent/channels/"} {
 		if strings.Contains(context, forbidden) {
-			t.Fatalf("tool context leaks forbidden authority %q: %s", forbidden, context)
+			t.Fatalf("tool context leaks retired model transport %q: %s", forbidden, context)
 		}
 	}
-	if !strings.Contains(context, "/api/agent/channels/channel-1/graph-memory/") || !strings.Contains(context, "message-1") {
-		t.Fatalf("tool context is not bound to channel/message: %s", context)
+	if !strings.Contains(context, "automatically checkpoints") || !strings.Contains(context, "channel-1") || !strings.Contains(context, "message-1") {
+		t.Fatalf("tool context lacks daemon cleanup/current turn contract: %s", context)
 	}
 }
 
@@ -331,5 +331,43 @@ func TestGraphMemoryUsageDeltaUsesResidentTurnDelta(t *testing.T) {
 	)
 	if input != 0 || output != 0 {
 		t.Fatalf("reset stats must clamp to zero: input=%d output=%d", input, output)
+	}
+}
+
+func TestGraphExecutionMemoriesScopesAgentModeRecallToGraphMemoryToolsTurn(t *testing.T) {
+	var received protocol.GraphMemoryRecallRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request protocol.GraphMemoryRecallRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		received = request
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"found":true,"injection":"recalled","status":"ok"}`))
+	}))
+	defer server.Close()
+	d := New(Config{MemoryType: MemoryTypeGraph}, nil)
+	d.client = NewClient(server.URL)
+	current, _ := d.graphExecutionMemories(context.Background(), Task{
+		ID: "message-1", WorkspaceID: "workspace-1", AgentID: "managed-agent", RuntimeID: "runtime-1",
+		ChatMessage: "find the prior decision", GraphMemoryTools: true,
+	}, nil)
+	if len(current) != 1 || received.ManagedGraphMemoryAgentID != "managed-agent" {
+		t.Fatalf("current=%+v request=%+v", current, received)
+	}
+	_, _ = d.graphExecutionMemories(context.Background(), Task{
+		ID: "message-2", WorkspaceID: "workspace-1", AgentID: "ordinary-agent", RuntimeID: "runtime-1",
+		ChatMessage: "find the prior decision",
+	}, nil)
+	if received.ManagedGraphMemoryAgentID != "" {
+		t.Fatalf("ordinary graph recall unexpectedly carried managed identity: %+v", received)
+	}
+}
+
+func TestGraphMemoryAutoCheckpointKeyIsStableAcrossBatchOrdering(t *testing.T) {
+	first := []protocol.AgentMessageProjection{{ID: "message-b"}, {ID: "message-a"}}
+	second := []protocol.AgentMessageProjection{{ID: "message-a"}, {ID: "message-b"}}
+	if graphMemoryAutoCheckpointKey(first) != graphMemoryAutoCheckpointKey(second) {
+		t.Fatal("auto-checkpoint key must be stable across equivalent batch ordering")
 	}
 }

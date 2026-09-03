@@ -81,6 +81,10 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 	if !isCanonicalResidentProvider(runtime.Provider) {
 		return fmt.Errorf("provider %q has no resident Message runtime", runtime.Provider)
 	}
+	mcpConfig, err := managedGraphMemoryMCPConfig(config.Agent.McpConfig, config.Agent.ManagedRole)
+	if err != nil {
+		return err
+	}
 
 	workspace, err := execenv.ProvisionAgentWorkspace(d.cfg.WorkspacesRoot, config.WorkspaceID, config.Agent.ID, d.logger)
 	if err != nil {
@@ -188,7 +192,7 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 		Thinking:            thinking,
 		WorkDir:             env.AgentRoot,
 		SystemPrompt:        systemPrompt,
-		MCP:                 string(config.Agent.McpConfig),
+		MCP:                 string(mcpConfig),
 		CustomArgs:          append([]string(nil), config.Agent.CustomArgs...),
 		Environment:         agentEnv,
 		WorkspaceID:         config.WorkspaceID,
@@ -212,7 +216,7 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 				Model:           model,
 				SystemPrompt:    systemPrompt,
 				CustomArgs:      append([]string(nil), config.Agent.CustomArgs...),
-				McpConfig:       append([]byte(nil), config.Agent.McpConfig...),
+				McpConfig:       append([]byte(nil), mcpConfig...),
 				ThinkingLevel:   thinking,
 				ResumeSessionID: resumeSessionID,
 			},

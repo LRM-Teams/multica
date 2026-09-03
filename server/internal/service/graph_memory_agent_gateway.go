@@ -204,6 +204,13 @@ func (g *GraphMemoryAgentGateway) ServeHTTP(w http.ResponseWriter, r *http.Reque
 		if err != nil {
 			return err
 		}
+		if operation == "checkpoint" {
+			body, err = normalizeGraphMemoryAutoCheckpointBody(body, runContext.Claim.TrajectoryID)
+			if err != nil {
+				return err
+			}
+			r.Body = io.NopCloser(bytes.NewReader(body))
+		}
 		if g.protocolForRun(r.Context(), workspaceUUID, runContext.Claim.TrajectoryID) == 2 {
 			return g.serveExploreV2Operation(w, r, body, workspaceUUID, channelID, runContext, operation)
 		}
@@ -533,4 +540,30 @@ func writeGraphMemoryAgentJSON(w http.ResponseWriter, raw []byte) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(raw)
+}
+
+// normalizeGraphMemoryAutoCheckpointBody binds a cleanup checkpoint to the
+// already-authorized active claim. It is intentionally used only after
+// ActiveClaim succeeds, so a daemon can never close a trajectory it does not
+// currently own through the normal agent gateway authorization path.
+func normalizeGraphMemoryAutoCheckpointBody(body []byte, trajectoryID string) ([]byte, error) {
+	var request struct {
+		TrajectoryID   string          `json:"trajectory_id"`
+		State          json.RawMessage `json:"state"`
+		IdempotencyKey string          `json:"idempotency_key"`
+	}
+	if err := json.Unmarshal(body, &request); err != nil {
+		return nil, fmt.Errorf("decode graph memory checkpoint: %w", err)
+	}
+	if strings.TrimSpace(request.IdempotencyKey) == "" {
+		return nil, errors.New("graph memory checkpoint idempotency_key is required")
+	}
+	if provided := strings.TrimSpace(request.TrajectoryID); provided != "" && provided != trajectoryID {
+		return nil, ErrGraphMemoryAgentGatewayForbidden
+	}
+	request.TrajectoryID = trajectoryID
+	if len(bytes.TrimSpace(request.State)) == 0 {
+		request.State = json.RawMessage(`{}`)
+	}
+	return json.Marshal(request)
 }

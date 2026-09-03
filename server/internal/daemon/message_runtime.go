@@ -230,6 +230,11 @@ func (d *Daemon) deliverIdleMessageBatchWithCoordinator(ctx context.Context, age
 			}
 		}
 		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, preparedMessages, "provider_finished", outcome, reasonCode)
+		if graphMemoryChannelID != "" {
+			checkpointCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			d.autoCheckpointGraphMemoryRun(checkpointCtx, workspaceID, agentID, graphMemoryChannelID, preparedMessages)
+			cancel()
+		}
 		if turnErr != nil && isRetryableResidentProviderFailure(turnErr) && coordinatorOK {
 			// The provider can die after native acceptance (notably while writing
 			// turn/start to a stale stdin). The coordinator has already advanced
@@ -569,14 +574,8 @@ func graphMemoryAgentToolContext(message protocol.AgentMessageProjection) string
 	return fmt.Sprintf(`
 
 ## Managed Graph Memory tools
-You are the managed Memory Agent for this Channel. Graph scope, version, run, and trajectory are server-owned; never invent or override them.
-Use only these five Graph operations through the daemon credential proxy:
-  POST http://127.0.0.1:$MULTICA_DAEMON_PORT/api/agent/channels/%s/graph-memory/{start|explore|redirect|submit|checkpoint}
-Required headers:
-  X-Agent-ID: $MULTICA_AGENT_ID
-  X-Workspace-ID: $MULTICA_WORKSPACE_ID
-  Content-Type: application/json
-Use curl with JSON bodies. Every operation requires a stable idempotency_key; derive it from message %s and the operation. Call start with {query,idempotency_key}; use the returned trajectory_id for all later calls. Explore accepts at most the configured server limit and only explicit node_ids. For an in-place directed correction call redirect with trajectory_id, query, steering_message_id, and idempotency_key. End the run exactly once with submit (cited visible memory) or checkpoint (durable private state). Never send workspace, Channel scope, graph owner, or graph version in a tool body. A rejected/fenced/quota response is terminal for this turn; checkpoint if still available and do not bypass the gateway.
+Native Graph Memory tools are available for this managed channel: graph_memory_start, graph_memory_explore, graph_memory_redirect, and graph_memory_submit. Invoke them as native tools. Graph scope, version, run fencing, and trajectory authorization remain server-owned. The daemon automatically checkpoints an active run when this turn ends without a successful submit.
+For every invocation pass the current channel id %q and a stable idempotency_key derived from message %q plus the operation. Start with the user request as query; use only the returned trajectory and nodes/refs in later calls. Explore remains your decision: do not call it unless the bounded recalled material needs inspection. Submit or checkpoint at most once; a rejected, fenced, quota, or disabled response is terminal for this turn.
 `, channelID, messageID)
 }
 
@@ -594,19 +593,8 @@ func graphMemoryAgentToolContextV2(message protocol.AgentMessageProjection) stri
 	return fmt.Sprintf(`
 
 ## Managed Graph Memory tools (protocol generation 2)
-You are the managed Memory Agent for this Channel. Memory scope, plan, run, and trajectory are server-owned; never invent or override them.
-Use only these five Graph operations through the daemon credential proxy:
-  POST http://127.0.0.1:$MULTICA_DAEMON_PORT/api/agent/channels/%s/graph-memory/{start|explore|redirect|submit|checkpoint}
-Required headers:
-  X-Agent-ID: $MULTICA_AGENT_ID
-  X-Workspace-ID: $MULTICA_WORKSPACE_ID
-  Content-Type: application/json
-Use curl with JSON bodies. Every operation requires a stable idempotency_key; derive it from message %s and the operation, and every body after start carries the trajectory_id returned by start.
-start: {"query":"...","idempotency_key":"..."} returns {"protocol_generation":2,"trajectory_id":"...","plan":{"segment_publish_seq_max":...,"interaction_edge_seq_max":...,"budgets":{...}},"seeds":[{"ref":{"kind":"staging_atom","atom_id":"...","segment_id":"..."},"segment_id":"...","publish_seq":...}]}.
-explore: {"trajectory_id":"...","ref":{"kind":"staging_atom","atom_id":"...","segment_id":"...","channel_id":"..."},"idempotency_key":"..."} — use only refs the server handed you (seeds, earlier explore results); an invented or retracted ref is refused. It returns authorized neighbor "refs", "sibling_atoms" and bidirectional DAG "edges" under the plan's frozen watermarks.
-redirect: {"trajectory_id":"...","focus":"new direction","idempotency_key":"..."}.
-End the run exactly once: submit {"trajectory_id":"...","idempotency_key":"..."} or checkpoint {"trajectory_id":"...","idempotency_key":"..."} (returns the bounded checkpoint with prior refs, rounds and segments used).
-Budgets (rounds, neighbors, distinct segments, atoms per response, tool calls) are hard: exhausting one is a refused operation, not a retryable error. Never send workspace, Channel scope, graph owner, or watermark values in a tool body. A rejected/fenced/quota/disabled response is terminal for this turn; checkpoint if still available and do not bypass the gateway.
+Native Graph Memory tools are available for this managed channel: graph_memory_start, graph_memory_explore, graph_memory_redirect, and graph_memory_submit. Invoke them as native tools. The server owns the graph scope, plan, watermarks, run fencing, and trajectory authorization; the daemon automatically checkpoints an active run when this turn ends without a successful submit.
+For every invocation pass the current channel id %q and a stable idempotency_key derived from message %q plus the operation. Start returns a plan and authorized seeds; explore only refs received from those seeds or earlier exploration. Explore remains your decision, not a mandatory step. Submit or checkpoint at most once; a rejected, fenced, quota, or disabled response is terminal for this turn.
 `, channelID, messageID)
 }
 
@@ -634,6 +622,9 @@ func (d *Daemon) memoryExploreV2Negotiated(workspaceID string) bool {
 
 func residentMessageMemoryTask(workspaceID, agentID, runtimeID string, messages []protocol.AgentMessageProjection) Task {
 	task := Task{WorkspaceID: workspaceID, AgentID: agentID, RuntimeID: runtimeID}
+	if len(messages) == 1 {
+		task.GraphMemoryTools = messages[0].GraphMemoryTools
+	}
 	var trigger strings.Builder
 	var initiatorType, initiatorID, initiatorName string
 	for i, message := range messages {
@@ -953,4 +944,51 @@ func (p *CredentialProxy) PreflightMessageSend(agentID, target string) (MessageS
 		return MessageSendFreshness{}, errors.New("Message coordinator is unavailable")
 	}
 	return runner.preflightMessageSend(agentID, target)
+}
+
+// autoCheckpointGraphMemoryRun closes an unfinished managed-memory trajectory
+// after a resident turn. Checkpoint is lifecycle cleanup, not a model choice:
+// the model may submit a final result, while any remaining active run is
+// checkpointed through the same agent-authorized gateway route.
+func (d *Daemon) autoCheckpointGraphMemoryRun(ctx context.Context, workspaceID, agentID, channelID string, messages []protocol.AgentMessageProjection) {
+	if d == nil || strings.TrimSpace(channelID) == "" || d.client == nil || strings.TrimSpace(d.client.baseURL) == "" {
+		return
+	}
+	credential, err := d.messageAgentCredential(ctx, workspaceID, agentID)
+	if err != nil {
+		if d.logger != nil {
+			d.logger.Warn("graph memory auto-checkpoint credential unavailable", "agent_id", agentID, "channel_id", channelID, "error", err)
+		}
+		return
+	}
+	client := cli.NewAPIClient(d.cfg.ServerBaseURL, workspaceID, credential.Token)
+	client.AgentID = agentID
+	var response map[string]any
+	err = client.PostJSON(ctx, "/api/agent/channels/"+channelID+"/graph-memory/checkpoint", map[string]string{
+		"idempotency_key": graphMemoryAutoCheckpointKey(messages),
+	}, &response)
+	if err != nil {
+		// A successful submit clears the active claim before this cleanup runs;
+		// the resulting conflict is an expected no-op. Keep it diagnostic rather
+		// than turning an already-completed agent reply into a turn failure.
+		if d.logger != nil {
+			d.logger.Debug("graph memory auto-checkpoint skipped", "agent_id", agentID, "channel_id", channelID, "error", err)
+		}
+		return
+	}
+	if d.logger != nil {
+		d.logger.Info("graph memory auto-checkpoint completed", "agent_id", agentID, "channel_id", channelID)
+	}
+}
+
+func graphMemoryAutoCheckpointKey(messages []protocol.AgentMessageProjection) string {
+	ids := make([]string, 0, len(messages))
+	for _, message := range messages {
+		if id := strings.TrimSpace(message.ID); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	sum := sha256.Sum256([]byte(strings.Join(ids, "\x00")))
+	return "auto-checkpoint:" + hex.EncodeToString(sum[:])
 }

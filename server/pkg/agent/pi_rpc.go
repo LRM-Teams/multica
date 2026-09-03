@@ -736,8 +736,14 @@ func formatResidentMessageBatch(messages []ResidentMessage) (string, error) {
 	standaloneCount := 0
 	for _, message := range messages {
 		replyTarget := residentMessageReplyTarget(message)
-		if strings.TrimSpace(message.ID) == "" || replyTarget == "" || message.Seq <= 0 {
-			return "", errors.New("resident Message id, target, and positive seq are required")
+		if strings.TrimSpace(message.ID) == "" || replyTarget == "" {
+			return "", errors.New("resident Message id and target are required")
+		}
+		// Seq 0 is the visibility projection's hidden sequence for a first-time
+		// delivery (message_coordinator projectVisibleMessages); only a
+		// negative value is a malformed projection.
+		if message.Seq < 0 {
+			return "", errors.New("resident Message sequence must not be negative")
 		}
 		if len(message.PartsJSON) > 0 && !json.Valid(message.PartsJSON) {
 			return "", errors.New("resident Message parts are invalid JSON")
@@ -790,7 +796,7 @@ func formatChannelResidentMessageBatch(messages []ResidentMessage) (string, erro
 	type residentMessageInput struct {
 		ID             string          `json:"id"`
 		Target         string          `json:"target"`
-		Seq            int64           `json:"seq"`
+		Seq            int64           `json:"seq,omitempty"`
 		Content        string          `json:"content"`
 		Parts          json.RawMessage `json:"parts,omitempty"`
 		RuntimeContext string          `json:"runtime_context,omitempty"`

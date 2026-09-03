@@ -229,7 +229,7 @@ type AgentMessageProjection struct {
 	ChannelID     string                         `json:"channel_id,omitempty"`
 	Target        string                         `json:"target"`
 	ReplyTarget   string                         `json:"reply_target,omitempty"`
-	Seq           int64                          `json:"seq"`
+	Seq           int64                          `json:"seq,omitempty"`
 	Content       string                         `json:"content"`
 	Parts         []MessagePart                  `json:"parts,omitempty"`
 	ChannelKind   string                         `json:"channel_kind,omitempty"`

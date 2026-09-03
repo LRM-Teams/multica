@@ -16,6 +16,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/daemon"
 	"github.com/multica-ai/multica/server/internal/turntransport"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 	"github.com/spf13/pflag"
 )
 
@@ -308,6 +309,28 @@ func TestRunAgentMessageCheckUsesMachineLocalCredentialProxy(t *testing.T) {
 	}
 	if _, ok := body["limit"]; ok {
 		t.Fatalf("Agent-controlled limit leaked into request: %+v", body)
+	}
+}
+
+func TestPrintMessageCheckResultOmitsUnseenSequence(t *testing.T) {
+	var output bytes.Buffer
+	result := messageCheckCLIResponse{
+		Messages: []protocol.AgentMessageProjection{{ID: "message-1", Target: "channel:one", Content: "hello"}},
+	}
+	if err := printMessageCheckResult(&output, result, true); err != nil {
+		t.Fatalf("print message check result: %v", err)
+	}
+	if strings.Contains(output.String(), "seq") {
+		t.Fatalf("unseen message output exposed internal sequence: %q", output.String())
+	}
+
+	output.Reset()
+	result.Messages[0].Seq = 7
+	if err := printMessageCheckResult(&output, result, true); err != nil {
+		t.Fatalf("print seen message check result: %v", err)
+	}
+	if !strings.Contains(output.String(), "seq 7") {
+		t.Fatalf("seen message output omitted sequence: %q", output.String())
 	}
 }
 

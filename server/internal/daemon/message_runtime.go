@@ -843,7 +843,7 @@ func (p *CredentialProxy) PrepareMessageRead(
 	if p == nil || p.daemon == nil {
 		return nil, errors.New("Credential Proxy is unavailable")
 	}
-	_, err := p.daemon.resolveWorkspaceDaemonByAgent(agentID)
+	runner, err := p.daemon.resolveWorkspaceDaemonByAgent(agentID)
 	if err != nil {
 		return nil, errors.New("Message coordinator is unavailable")
 	}
@@ -855,7 +855,7 @@ func (p *CredentialProxy) PrepareMessageRead(
 			return nil, errors.New("read message does not match inbox target and sequence")
 		}
 	}
-	return messages, nil
+	return runner.projectAgentVisibleMessages(agentID, messages, true, false)
 }
 
 func (p *CredentialProxy) messageDraftStore() (*MessageDraftStore, error) {

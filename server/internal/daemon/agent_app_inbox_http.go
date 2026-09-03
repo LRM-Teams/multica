@@ -56,7 +56,7 @@ func (d *Daemon) agentAppInboxHandler() http.HandlerFunc {
 			writeAgentInboxError(w, http.StatusMethodNotAllowed, "method not allowed", "method_not_allowed")
 			return
 		}
-		agentID, workspaceID, _, ok := d.localAgentInboxIdentity(w, r)
+		agentID, workspaceID, runner, ok := d.localAgentInboxIdentity(w, r)
 		if !ok {
 			return
 		}
@@ -69,6 +69,15 @@ func (d *Daemon) agentAppInboxHandler() http.HandlerFunc {
 		items := make([]agentInboxTypedItem, 0, len(appItems))
 		for i := range appItems {
 			item := appItems[i]
+			if item.Message != nil {
+				messages, err := runner.projectAgentVisibleMessages(agentID, []protocol.AgentMessageProjection{*item.Message}, true, false)
+				if err != nil {
+					writeAgentInboxError(w, http.StatusConflict, "project app inbox message: "+err.Error(), "app_inbox_unavailable")
+					return
+				}
+				message := messages[0]
+				item.Message = &message
+			}
 			items = append(items, agentInboxTypedItem{Source: "app", AgentAppInboxItem: &item})
 		}
 		_ = workspaceID

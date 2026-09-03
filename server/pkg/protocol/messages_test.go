@@ -47,6 +47,24 @@ func TestAgentMessageWireFieldsFollowTheirBoundaryContracts(t *testing.T) {
 
 }
 
+func TestAgentMessageProjectionOmitsUnseenSequence(t *testing.T) {
+	data, err := json.Marshal(AgentMessageProjection{ID: "message-1", Target: "channel:1", Content: "hello"})
+	if err != nil {
+		t.Fatalf("marshal projection: %v", err)
+	}
+	if strings.Contains(string(data), `"seq"`) {
+		t.Fatalf("unseen projection exposed internal sequence: %s", data)
+	}
+
+	data, err = json.Marshal(AgentMessageProjection{ID: "message-1", Target: "channel:1", Seq: 7, Content: "hello"})
+	if err != nil {
+		t.Fatalf("marshal seen projection: %v", err)
+	}
+	if !strings.Contains(string(data), `"seq":7`) {
+		t.Fatalf("seen projection omitted sequence: %s", data)
+	}
+}
+
 func TestNormalizeChatOutputActionRequiresMessageSend(t *testing.T) {
 	action, err := NormalizeChatOutputAction("message_send")
 	if err != nil {

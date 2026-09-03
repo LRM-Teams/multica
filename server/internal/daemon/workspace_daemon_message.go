@@ -36,7 +36,15 @@ func (runner *WorkspaceDaemon) agentInboxPendingSnapshot(agentID string) []proto
 			messages = append(messages, *item.Message)
 		}
 	}
-	return messages
+	return coordinator.projectVisibleMessages(messages, true, false)
+}
+
+func (runner *WorkspaceDaemon) projectAgentVisibleMessages(agentID string, messages []protocol.AgentMessageProjection, consume, advanceBoundary bool) ([]protocol.AgentMessageProjection, error) {
+	coordinator, _, ok := runner.messageCoordinator(agentID)
+	if !ok {
+		return nil, errors.New("Message coordinator is unavailable")
+	}
+	return coordinator.projectVisibleMessages(messages, consume, advanceBoundary), nil
 }
 
 func (runner *WorkspaceDaemon) ensureMessageInbox(agentID, expectedRuntimeID string) (bool, error) {

@@ -776,6 +776,22 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Put("/", h.UpdateWorkspace)
 					r.Patch("/", h.UpdateWorkspace)
 					r.Post("/memory-curation/runs", h.StartMemoryCurationRun)
+					// Graph Memory evaluation protocol (test-only, Handoff 7):
+					// owner/admin routes that additionally fail closed behind
+					// MULTICA_GRAPH_MEMORY_EVALUATION_ENABLED plus the explicit
+					// workspace allowlist — disabled planes answer 503.
+					r.Route("/graph-memory-evaluation", func(r chi.Router) {
+						r.Post("/runs", h.CreateGraphMemoryEvaluationRun)
+						r.Get("/runs", h.ListGraphMemoryEvaluationRuns)
+						r.Get("/runs/{runId}", h.GetGraphMemoryEvaluationRun)
+						r.Post("/runs/{runId}/complete", h.CompleteGraphMemoryEvaluationRun)
+						r.Post("/runs/{runId}/episodes", h.CreateGraphMemoryEvaluationEpisode)
+						r.Post("/runs/{runId}/episodes/{episodeId}/start", h.StartGraphMemoryEvaluationEpisode)
+						r.Post("/runs/{runId}/episodes/{episodeId}/settle", h.SettleGraphMemoryEvaluationEpisode)
+						r.Post("/runs/{runId}/episodes/{episodeId}/fail", h.FailGraphMemoryEvaluationEpisode)
+						r.Post("/runs/{runId}/episodes/{episodeId}/usage", h.RecordGraphMemoryEvaluationUsage)
+						r.Post("/runs/{runId}/episodes/{episodeId}/official-score", h.MarkGraphMemoryEvaluationOfficialScore)
+					})
 					r.Get("/memory-curation/backfill-preview", h.PreviewMemoryCurationBackfill)
 					r.Post("/memory-curation/backfill", h.StartMemoryCurationBackfill)
 					r.Get("/memory-curation/runs/{runId}", h.GetMemoryCurationRun)

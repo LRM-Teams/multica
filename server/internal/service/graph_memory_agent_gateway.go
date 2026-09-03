@@ -48,6 +48,22 @@ type GraphMemoryAgentGateway struct {
 	runs   *GraphMemoryAgentRunStore
 	policy *MemoryProviderPolicyResolver
 	v2     *MemoryExploreV2Service
+	// evaluation is the test-only evaluation protocol plane, wired only
+	// when the plane's process gate is enabled. Nil leaves the gateway
+	// entirely unchanged; enforcement only refuses while a live
+	// persistence_off episode exists on the channel, which requires the
+	// plane. This is the server-side "no Graph MCP" guarantee: every
+	// managed tool operation (start/explore/redirect/submit/checkpoint)
+	// fails closed at the data-plane entry point.
+	evaluation *GraphMemoryEvaluationService
+}
+
+// WireGraphMemoryEvaluation attaches the evaluation protocol plane for arm
+// enforcement (test-only). Main wires it only when the plane is enabled.
+func (g *GraphMemoryAgentGateway) WireGraphMemoryEvaluation(evaluation *GraphMemoryEvaluationService) {
+	if g != nil {
+		g.evaluation = evaluation
+	}
 }
 
 func NewGraphMemoryAgentGateway(pool *pgxpool.Pool, policy *MemoryProviderPolicyResolver) *GraphMemoryAgentGateway {
@@ -168,6 +184,18 @@ func (g *GraphMemoryAgentGateway) ServeHTTP(w http.ResponseWriter, r *http.Reque
 	}
 	if !authorized {
 		return ErrGraphMemoryAgentGatewayForbidden
+	}
+	// Evaluation arm enforcement (test-only plane): a live persistence_off
+	// episode refuses every gateway operation for this channel — start,
+	// explore, redirect, submit, and the daemon's auto-checkpoint alike —
+	// so no durable graph write or private-state update can occur. This is
+	// the server-side "no Graph MCP" guarantee: every managed tool call
+	// fails closed at the data-plane entry point.
+	if g.evaluation != nil {
+		if g.evaluation.EvaluationPersistenceOff(r.Context(), workspaceID, channelID) {
+			g.evaluation.RecordPolicyDenial(r.Context(), workspaceID, channelID, "agent_gateway")
+			return ErrGraphMemoryAgentGatewayForbidden
+		}
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 64*1024+1))
 	if err != nil {

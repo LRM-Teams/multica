@@ -446,6 +446,16 @@ func main() {
 		pool, service.LoadGraphMemoryLimits(os.Getenv), "", "", service.GraphMemoryHybridSeeder{})
 	h.GraphMemoryAgentControl = service.NewPostgresGraphMemoryAgentControlPlane(pool)
 	h.GraphMemoryAgentGateway = service.NewGraphMemoryAgentGateway(pool, memoryProviderPolicy)
+	// Test-only PAST-style evaluation protocol plane (Handoff 7 §6): the
+	// API handler is always wired (nil-pool deployments still answer 503),
+	// while arm enforcement in recall/gateway is wired ONLY when the plane's
+	// process gate is on, so production-shaped processes carry zero extra
+	// lookups on those hot paths.
+	h.GraphMemoryEvaluation = service.NewGraphMemoryEvaluationService(pool)
+	if service.GraphMemoryEvaluationPlaneEnabled() {
+		h.GraphMemoryRecall.WireGraphMemoryEvaluation(h.GraphMemoryEvaluation)
+		h.GraphMemoryAgentGateway.WireGraphMemoryEvaluation(h.GraphMemoryEvaluation)
+	}
 	// Submitted memory-agent runs are the conversational turns of agent-mode
 	// channels; record each as a channel-scoped interaction_dag segment so
 	// graph-memory staging receives them (the task-close seams never see

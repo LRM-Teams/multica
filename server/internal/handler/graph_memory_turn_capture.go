@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/service"
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -127,6 +128,15 @@ func (h *Handler) mintGraphCaptureAnchorTx(ctx context.Context, tx pgx.Tx, works
 	// Pool-side profile read (never the open transaction's connection): the
 	// capture only exists for workspaces whose memory pipeline is graph.
 	if h.graphMemoryProfileForWorkspace(ctx, workspaceID).memoryType != "graph" {
+		return nil
+	}
+	// Evaluation arm enforcement (test-only plane): a live persistence_off
+	// episode suppresses capture anchors — no segment, no atomizer input,
+	// so neither graph nor legacy durable writes originate from this turn.
+	if graphMemoryEvaluationPersistenceOff(ctx, tx, workspaceID, channelID) {
+		if h.GraphMemoryEvaluation != nil {
+			h.GraphMemoryEvaluation.RecordPolicyDenial(ctx, util.UUIDToString(workspaceID), util.UUIDToString(channelID), "graph_capture")
+		}
 		return nil
 	}
 	var anchorID, anchorWorkspaceID, anchorChannelID pgtype.UUID

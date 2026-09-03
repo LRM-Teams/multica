@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/service"
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -359,6 +360,19 @@ func persistCanonicalMessageDelivery(ctx context.Context, exec dbExecutor, ch Ch
 func (h *Handler) attachCanonicalMessageMemories(ctx context.Context, workspaceID string, agentID pgtype.UUID, message *protocol.AgentMessageProjection) {
 	if h == nil || h.TaskService == nil || message == nil {
 		return
+	}
+	// Evaluation arm enforcement (test-only plane): a live persistence_off
+	// episode suppresses legacy execution-memory injection for the channel.
+	if h.DB != nil {
+		if ws, werr := util.ParseUUID(workspaceID); werr == nil {
+			if ch, cerr := util.ParseUUID(message.ChannelID); cerr == nil && graphMemoryEvaluationPersistenceOff(ctx, h.DB, ws, ch) {
+				if h.GraphMemoryEvaluation != nil {
+					h.GraphMemoryEvaluation.RecordPolicyDenial(ctx, workspaceID, message.ChannelID, "legacy_injection")
+				}
+				message.Memories = []protocol.AgentMessageMemoryProjection{}
+				return
+			}
+		}
 	}
 	chatSessionID := ""
 	if strings.EqualFold(message.ChannelKind, "group") {

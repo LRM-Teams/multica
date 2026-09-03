@@ -151,6 +151,12 @@ type Handler struct {
 	// GraphMemoryAgentGateway exposes only the five Channel-scoped Graph
 	// operations to the managed Agent data plane.
 	GraphMemoryAgentGateway *service.GraphMemoryAgentGateway
+	// GraphMemoryEvaluation backs the test-only PAST-style evaluation
+	// protocol API (run/episode lifecycle, usage ledger, official-score
+	// state). Nil-safe: endpoints answer 503 when unwired, and every
+	// request additionally passes the plane's config gate plus workspace
+	// allowlist before touching durable state.
+	GraphMemoryEvaluation *service.GraphMemoryEvaluationService
 	// GraphMemoryRecallExecutor synchronously runs accepted recalls and returns
 	// only their bounded injection. Nil preserves the pre-execution response.
 	GraphMemoryRecallExecutor *service.GraphMemoryRecallExecutor

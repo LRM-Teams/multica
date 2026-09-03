@@ -155,6 +155,19 @@ type GraphMemoryRecallService struct {
 	root    string // workspaces root; empty resolves MULTICA_WORKSPACES_ROOT
 	envType string // process-level memory_type default
 	seeder  GraphMemorySeedRetriever
+	// evaluation is the test-only evaluation protocol plane, wired only
+	// when the plane's process gate is enabled. Nil leaves recall entirely
+	// unchanged: arm enforcement only alters behavior while a live
+	// persistence_off episode exists, which requires the plane.
+	evaluation *GraphMemoryEvaluationService
+}
+
+// WireGraphMemoryEvaluation attaches the evaluation protocol plane for arm
+// enforcement (test-only). Main wires it only when the plane is enabled.
+func (s *GraphMemoryRecallService) WireGraphMemoryEvaluation(evaluation *GraphMemoryEvaluationService) {
+	if s != nil {
+		s.evaluation = evaluation
+	}
 }
 
 func NewGraphMemoryRecallService(pool *pgxpool.Pool, limits GraphMemoryLimits, root, envMemoryType string, seeder GraphMemorySeedRetriever) *GraphMemoryRecallService {
@@ -238,6 +251,16 @@ func (s *GraphMemoryRecallService) Begin(ctx context.Context, req GraphMemoryRec
 	if graphMemoryMode != "inject" {
 		if graphMemoryMode != "agent" || !s.managedAgentModeRecallAllowed(ctx, wsUUID, rtUUID, channelID, req.ManagedGraphMemoryAgentID) {
 			return nil, fmt.Errorf("%w: graph_memory_mode is %s", ErrGraphMemoryRecallDisabled, graphMemoryMode)
+		}
+	}
+	// Evaluation arm enforcement (test-only plane): a live persistence_off
+	// episode on this channel disables recall entirely — decided by durable
+	// server state at the entry point, never by prompt wording.
+	if s.evaluation != nil {
+		ws, ch := util.UUIDToString(wsUUID), util.UUIDToString(channelID)
+		if s.evaluation.EvaluationPersistenceOff(ctx, ws, ch) {
+			s.evaluation.RecordPolicyDenial(ctx, ws, ch, "recall_begin")
+			return nil, fmt.Errorf("%w: evaluation arm persistence_off", ErrGraphMemoryRecallDisabled)
 		}
 	}
 

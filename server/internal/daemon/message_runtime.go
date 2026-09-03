@@ -574,13 +574,18 @@ func graphMemoryAgentToolContext(message protocol.AgentMessageProjection) string
 	return fmt.Sprintf(`
 
 ## Managed Graph Memory tools
-Native Graph Memory tools are available for this managed channel: graph_memory_start, graph_memory_explore, graph_memory_redirect, and graph_memory_submit. Invoke them as native tools. Graph scope, version, run fencing, and trajectory authorization remain server-owned. The daemon automatically checkpoints an active run when this turn ends without a successful submit.
-For every invocation pass the current channel id %q and a stable idempotency_key derived from message %q plus the operation. Start with the user request as query; use only the returned trajectory and nodes/refs in later calls. Explore remains your decision: do not call it unless the bounded recalled material needs inspection. Submit or checkpoint at most once; a rejected, fenced, quota, or disabled response is terminal for this turn.
-`, channelID, messageID)
+You are the managed Memory Agent for this channel. Run every Graph Memory operation with the multica graph-memory CLI from bash; it authenticates through the daemon credential proxy. Operations: multica graph-memory start, explore, redirect, submit, checkpoint.
+  multica graph-memory start --channel %q --query "<the user request>" --idempotency-key "%s-start"
+  multica graph-memory explore --channel %q --trajectory <trajectory_id> --node-ids <id1,id2> --idempotency-key "%s-explore"
+  multica graph-memory redirect --channel %q --trajectory <trajectory_id> --query "<revised query>" --steering-message <message-id> --idempotency-key "%s-redirect"
+  multica graph-memory submit --channel %q --trajectory <trajectory_id> --summary "<cited summary>" --node-ids <cited ids> --idempotency-key "%s-submit"
+  multica graph-memory checkpoint --channel %q --trajectory <trajectory_id> --idempotency-key "%s-checkpoint"
+The gateway prints its JSON response on stdout. Graph scope, version, run fencing, and trajectory authorization remain server-owned; never invent or override them. Start with the user request as query; use only the returned trajectory and nodes/refs in later calls. Explore remains your decision: do not call it unless the bounded recalled material needs inspection. Submit or checkpoint at most once; a rejected, fenced, quota, or disabled response is terminal for this turn — checkpoint if still available and do not bypass the gateway. The daemon automatically checkpoints an active run when this turn ends without a successful submit.
+`, channelID, messageID, channelID, messageID, channelID, messageID, channelID, messageID, channelID, messageID)
 }
 
-// graphMemoryAgentToolContextV2 teaches the same five operation names under
-// the negotiated generation-2 payload contract (plan Task 12 Step 3): the
+// graphMemoryAgentToolContextV2 teaches the same five operations under the
+// negotiated generation-2 payload contract (plan Task 12 Step 3): the
 // canonical Interaction DAG surface with structured MemoryRef objects, plans
 // and seeds. It is rendered only when the server echoed the
 // memory_explore_v2 capability for this workspace at registration.
@@ -593,9 +598,14 @@ func graphMemoryAgentToolContextV2(message protocol.AgentMessageProjection) stri
 	return fmt.Sprintf(`
 
 ## Managed Graph Memory tools (protocol generation 2)
-Native Graph Memory tools are available for this managed channel: graph_memory_start, graph_memory_explore, graph_memory_redirect, and graph_memory_submit. Invoke them as native tools. The server owns the graph scope, plan, watermarks, run fencing, and trajectory authorization; the daemon automatically checkpoints an active run when this turn ends without a successful submit.
-For every invocation pass the current channel id %q and a stable idempotency_key derived from message %q plus the operation. Start returns a plan and authorized seeds; explore only refs received from those seeds or earlier exploration. Explore remains your decision, not a mandatory step. Submit or checkpoint at most once; a rejected, fenced, quota, or disabled response is terminal for this turn.
-`, channelID, messageID)
+You are the managed Memory Agent for this channel. Run every Graph Memory operation with the multica graph-memory CLI from bash; it authenticates through the daemon credential proxy. Operations: multica graph-memory start, explore, redirect, submit, checkpoint.
+  multica graph-memory start --channel %q --query "<the user request>" --idempotency-key "%s-start"
+  multica graph-memory explore --channel %q --trajectory <trajectory_id> --node-ids <id1,id2> --idempotency-key "%s-explore"
+  multica graph-memory redirect --channel %q --trajectory <trajectory_id> --query "<revised query>" --steering-message <message-id> --idempotency-key "%s-redirect"
+  multica graph-memory submit --channel %q --trajectory <trajectory_id> --summary "<cited summary>" --node-ids <cited ids> --idempotency-key "%s-submit"
+  multica graph-memory checkpoint --channel %q --trajectory <trajectory_id> --idempotency-key "%s-checkpoint"
+The gateway prints its JSON response on stdout. The server owns the graph scope, plan, watermarks, run fencing, and trajectory authorization; never invent or override them. Start returns a plan and authorized seeds; explore only refs received from those seeds or earlier exploration. Explore remains your decision, not a mandatory step. Submit or checkpoint at most once; a rejected, fenced, quota, or disabled response is terminal for this turn — checkpoint if still available and do not bypass the gateway. The daemon automatically checkpoints an active run when this turn ends without a successful submit.
+`, channelID, messageID, channelID, messageID, channelID, messageID, channelID, messageID, channelID, messageID)
 }
 
 // memoryExploreV2Negotiated reports whether the server echoed the

@@ -104,6 +104,7 @@ func init() {
 	rootCmd.AddCommand(sandboxdCmd)
 	rootCmd.AddCommand(installerActivateCmd)
 	rootCmd.AddCommand(graphMemoryMCPCmd)
+	rootCmd.AddCommand(graphMemoryCmd)
 
 	initHelp(rootCmd)
 }

@@ -302,12 +302,16 @@ func TestGraphMemoryAgentToolContextProjectsOnlyFiveScopedOperations(t *testing.
 	context := graphMemoryAgentToolContext(protocol.AgentMessageProjection{
 		ID: "message-1", ChannelID: "channel-1", GraphMemoryTools: true,
 	})
-	for _, operation := range []string{"graph_memory_start", "graph_memory_explore", "graph_memory_redirect", "graph_memory_submit"} {
+	for _, operation := range []string{
+		"multica graph-memory start", "multica graph-memory explore",
+		"multica graph-memory redirect", "multica graph-memory submit",
+		"multica graph-memory checkpoint",
+	} {
 		if !strings.Contains(context, operation) {
 			t.Fatalf("tool context missing %q: %s", operation, context)
 		}
 	}
-	for _, forbidden := range []string{"graph_memory_checkpoint", "curl", "Authorization: Bearer", "/api/agent/channels/"} {
+	for _, forbidden := range []string{"graph_memory_start", "curl", "Authorization: Bearer", "/api/agent/channels/"} {
 		if strings.Contains(context, forbidden) {
 			t.Fatalf("tool context leaks retired model transport %q: %s", forbidden, context)
 		}

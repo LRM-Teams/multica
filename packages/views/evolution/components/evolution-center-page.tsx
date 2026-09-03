@@ -422,6 +422,11 @@ const COPY = {
   evidenceNoWrites: "No writes yet",
   evidenceJustNow: "just now",
   evidenceFilterEmpty: "No chains match this filter.",
+  modelEvaluationRuns: "Model evaluation runs",
+  modelEvaluationRunsHint: "Recent offline, shadow, or canary model evaluations. This is not Graph Memory or PAST-Bench usage.",
+  modelEvaluationRunsEmpty: "No model evaluation runs recorded.",
+  modelEvaluationExamples: "{count} examples",
+  modelEvaluationMetricsUnavailable: "Metrics unavailable",
 };
 
 type EvolutionCopy = (key: keyof typeof COPY) => string;
@@ -995,14 +1000,14 @@ export function ModelEvaluationRunsCard({
   return (
     <Card className="bg-background/85 backdrop-blur md:col-span-2">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2"><Activity className="h-4 w-4 text-brand" />Model evaluation runs</CardTitle>
-        <p className="text-sm text-muted-foreground">Recent offline, shadow, or canary model evaluations. This is not Graph Memory or PAST-Bench usage.</p>
+        <CardTitle className="flex items-center gap-2"><Activity className="h-4 w-4 text-brand" />{copy("modelEvaluationRuns")}</CardTitle>
+        <p className="text-sm text-muted-foreground">{copy("modelEvaluationRunsHint")}</p>
       </CardHeader>
       <CardContent className="space-y-3">
         {loading ? (
           <Skeleton className="h-20 w-full" />
         ) : runs.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No model evaluation runs recorded.</p>
+          <p className="text-sm text-muted-foreground">{copy("modelEvaluationRunsEmpty")}</p>
         ) : (
           runs.map((run) => {
             const metrics = Object.entries(run.metrics)
@@ -1018,10 +1023,10 @@ export function ModelEvaluationRunsCard({
                   </div>
                 </div>
                 <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                  <span>{run.example_count} examples</span>
+                  <span>{copy("modelEvaluationExamples").replace("{count}", String(run.example_count))}</span>
                   <span>{formatRunTime(run.created_at, copy)}</span>
                   {metrics.length > 0 && metrics.map(([key, value]) => <span key={key}>{key}: {String(value)}</span>)}
-                  {metrics.length === 0 && <span>Metrics unavailable</span>}
+                  {metrics.length === 0 && <span>{copy("modelEvaluationMetricsUnavailable")}</span>}
                 </div>
               </div>
             );

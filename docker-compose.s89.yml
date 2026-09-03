@@ -23,6 +23,12 @@ services:
       GOOGLE_REDIRECT_URI: ""
       MULTICA_DEV_VERIFICATION_CODE: ${MULTICA_DEV_VERIFICATION_CODE:-}
       MULTICA_DEV_AGENT_PROFILE_ACCESS: "true"
+      # Test-only PAST-style evaluation protocol plane (Handoff 7): the
+      # process gate plus an explicit allowlist pinning the bench workspace.
+      # Other workspaces stay fully unaffected; the API answers 503 for them
+      # and arm enforcement never engages without a live episode row.
+      MULTICA_GRAPH_MEMORY_EVALUATION_ENABLED: "true"
+      MULTICA_GRAPH_MEMORY_EVALUATION_WORKSPACES: "93b4059d-4480-4f0b-87d3-ca659a6e6619"
 
   frontend:
     ports: !reset []

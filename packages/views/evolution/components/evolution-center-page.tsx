@@ -36,6 +36,7 @@ import {
 } from "@multica/core/dashboard";
 import {
   evolutionKeys,
+  evolutionModelEvalRunsOptions,
   evolutionMetricsOptions,
   evolutionReviewSubmissionListOptions,
   graphMemoryProfileOptions,
@@ -51,6 +52,7 @@ import type {
   EvolutionReviewSubmission,
   EvolutionReviewSubmissionStatus,
   EvolutionDailyMetric,
+  EvolutionModelEvalRun,
   EvolutionTaskEfficiency,
   EvolutionUnitMetric,
   GraphMemoryType,
@@ -652,6 +654,11 @@ export function EvolutionCenterPage() {
   const { data: promotedData } = useQuery(evolutionReviewSubmissionListOptions(wsId, "promoted"));
   const { data: rejectedData } = useQuery(evolutionReviewSubmissionListOptions(wsId, "rejected"));
   const { data: metricsData } = useQuery(evolutionMetricsOptions(wsId, metricDays));
+  const { data: modelEvalRunsData, isLoading: modelEvalRunsLoading } = useQuery({
+    ...evolutionModelEvalRunsOptions(wsId, { limit: 10 }),
+    // This existing endpoint is owner/admin-only. Disable it entirely for other members.
+    enabled: isWorkspaceAdmin && !!wsId,
+  });
   const {
     data: curationStatus,
     isLoading: curationStatusLoading,
@@ -671,6 +678,7 @@ export function EvolutionCenterPage() {
   const dailyMetrics = metricsData?.daily_metrics ?? [];
   const taskEfficiency = metricsData?.task_efficiency;
   const collaborationMetrics = metricsData?.collaboration_evolution;
+  const modelEvalRuns = modelEvalRunsData?.eval_runs ?? [];
   const submissionsByStatus = useMemo(
     () => ({
       needs_review: needsReviewSubmissions,
@@ -823,6 +831,9 @@ export function EvolutionCenterPage() {
             <TabsContent value="overview" className="grid gap-4 md:grid-cols-2">
               <LearningPulseCard submissions={submissions} />
               <CoachingCard rows={coachingRows} />
+              {isWorkspaceAdmin && (
+                <ModelEvaluationRunsCard runs={modelEvalRuns} loading={modelEvalRunsLoading} />
+              )}
             </TabsContent>
 
             <TabsContent value="agents" className="grid gap-4">
@@ -968,6 +979,54 @@ function MetricCard({ icon: Icon, label, value, detail, tone }: { icon: typeof B
           <div className="mt-1 text-2xl font-semibold tabular-nums">{value}</div>
           <div className="mt-1 truncate text-xs text-muted-foreground">{detail}</div>
         </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+export function ModelEvaluationRunsCard({
+  runs,
+  loading,
+}: {
+  runs: EvolutionModelEvalRun[];
+  loading: boolean;
+}) {
+  const copy = useEvolutionCopy();
+  return (
+    <Card className="bg-background/85 backdrop-blur md:col-span-2">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2"><Activity className="h-4 w-4 text-brand" />Model evaluation runs</CardTitle>
+        <p className="text-sm text-muted-foreground">Recent offline, shadow, or canary model evaluations. This is not Graph Memory or PAST-Bench usage.</p>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {loading ? (
+          <Skeleton className="h-20 w-full" />
+        ) : runs.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No model evaluation runs recorded.</p>
+        ) : (
+          runs.map((run) => {
+            const metrics = Object.entries(run.metrics)
+              .filter(([, value]) => typeof value === "string" || typeof value === "number" || typeof value === "boolean")
+              .slice(0, 3);
+            return (
+              <div key={run.id} className="rounded-xl border border-border/70 bg-muted/20 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="font-medium">{run.model_kind} <span className="font-normal text-muted-foreground">{run.model_version}</span></div>
+                  <div className="flex items-center gap-2">
+                    <Badge variant="secondary">{run.mode}</Badge>
+                    <Badge variant={run.status === "failed" ? "destructive" : "outline"}>{run.status}</Badge>
+                  </div>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                  <span>{run.example_count} examples</span>
+                  <span>{formatRunTime(run.created_at, copy)}</span>
+                  {metrics.length > 0 && metrics.map(([key, value]) => <span key={key}>{key}: {String(value)}</span>)}
+                  {metrics.length === 0 && <span>Metrics unavailable</span>}
+                </div>
+              </div>
+            );
+          })
+        )}
       </CardContent>
     </Card>
   );

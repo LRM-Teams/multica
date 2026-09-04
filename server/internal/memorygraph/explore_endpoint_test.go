@@ -413,6 +413,7 @@ type fakeAgentToolLedgerOperation struct {
 	operation string
 	request   json.RawMessage
 	response  json.RawMessage
+	errText   string
 	pending   bool
 }
 
@@ -433,6 +434,16 @@ func (l *fakeAgentToolLedger) TrajectoryID() string { return l.trajectoryID }
 
 func (l *fakeAgentToolLedger) Reserve(_ context.Context, key, operation string, request json.RawMessage) (AgentToolOperationReservation, error) {
 	if existing := l.operations[key]; existing != nil {
+		if !existing.pending && existing.errText != "" && existing.operation == operation {
+			// Mirrors the durable contract: a terminally failed operation
+			// releases its idempotency key, and the retry that fixes the
+			// refusal may carry a different request.
+			existing.pending = true
+			existing.response = nil
+			existing.errText = ""
+			existing.request = append(json.RawMessage(nil), request...)
+			return AgentToolOperationReservation{OperationID: key}, nil
+		}
 		if existing.operation != operation || string(existing.request) != string(request) {
 			return AgentToolOperationReservation{}, errors.New("idempotency conflict")
 		}
@@ -442,13 +453,14 @@ func (l *fakeAgentToolLedger) Reserve(_ context.Context, key, operation string, 
 	return AgentToolOperationReservation{OperationID: key}, nil
 }
 
-func (l *fakeAgentToolLedger) Complete(_ context.Context, operationID string, response json.RawMessage, _ string) error {
+func (l *fakeAgentToolLedger) Complete(_ context.Context, operationID string, response json.RawMessage, errText string) error {
 	op := l.operations[operationID]
 	if op == nil || !op.pending {
 		return errors.New("operation is not pending")
 	}
 	op.pending = false
 	op.response = append(json.RawMessage(nil), response...)
+	op.errText = errText
 	return nil
 }
 
@@ -534,5 +546,61 @@ func TestExploreToolServerDurableCheckpointTerminalizesLedger(t *testing.T) {
 	})
 	if status != http.StatusOK || ledger.finished != "checkpointed" || !strings.Contains(string(ledger.state), "resume later") {
 		t.Fatalf("checkpoint status=%d body=%s finished=%s state=%s", status, body, ledger.finished, ledger.state)
+	}
+}
+
+// TestExploreToolServerRefusedOperationReleasesIdempotencyKey pins the
+// 2026-09-04 run7 fix: a refused request must terminalize its reservation
+// (an unterminated one keeps the key pending forever, so the runtime
+// context's fixed key template can only ever see OPERATION_PENDING), and a
+// terminally failed operation must release the key so the retry that fixes
+// the refusal succeeds with the same key.
+func TestExploreToolServerRefusedOperationReleasesIdempotencyKey(t *testing.T) {
+	store := newExploreGraphStore(t)
+	ledger := newFakeAgentToolLedger("33333333-3333-3333-3333-333333333333")
+	srv, err := NewExploreToolServerWithAgentLedger(store, newExploreRetriever(t, store), testExploreConfig(), storeCurrentVersion(t, store), nil, ledger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseURL, token, err := srv.Start(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+
+	status, body := explorePost(baseURL, token, "/start", map[string]any{"query": "dispatch", "idempotency_key": "start-1"})
+	if status != http.StatusOK {
+		t.Fatalf("start status=%d body=%s", status, body)
+	}
+	var started memoryGraphStartResponse
+	if err := json.Unmarshal(body, &started); err != nil || len(started.Nodes) == 0 {
+		t.Fatalf("start response=%s", body)
+	}
+	nodeID := started.Nodes[0].NodeID
+
+	// First submit is refused after the reservation: an empty node id.
+	status, body = explorePost(baseURL, token, "/submit", map[string]any{
+		"trajectory_id": ledger.trajectoryID, "found": true, "summary": "cited",
+		"node_ids": []string{nodeID, ""}, "idempotency_key": "submit-1",
+	})
+	if status != http.StatusBadRequest {
+		t.Fatalf("refused submit status=%d body=%s", status, body)
+	}
+	op := ledger.operations["submit-1"]
+	if op == nil || op.pending || op.errText == "" {
+		t.Fatalf("refused submit must terminalize its reservation: %+v", op)
+	}
+
+	// The same-key retry fixes the request and must be admitted fresh.
+	status, body = explorePost(baseURL, token, "/submit", map[string]any{
+		"trajectory_id": ledger.trajectoryID, "found": true, "summary": "cited",
+		"node_ids": []string{nodeID}, "idempotency_key": "submit-1",
+	})
+	if status != http.StatusOK {
+		t.Fatalf("released retry status=%d body=%s", status, body)
+	}
+	op = ledger.operations["submit-1"]
+	if op == nil || op.pending || op.errText != "" || ledger.finished != "submitted" {
+		t.Fatalf("retry must complete cleanly: op=%+v finished=%s", op, ledger.finished)
 	}
 }

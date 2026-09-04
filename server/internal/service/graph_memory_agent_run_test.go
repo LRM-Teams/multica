@@ -49,7 +49,7 @@ func TestGraphMemoryToolOperationFailedReservationReleasesKey(t *testing.T) {
 	res3, err := store.ReserveToolOperation(ctx, runID, 1, key, graphID, "submit", []byte(`{"n":2}`))
 	require.NoError(t, err)
 	require.True(t, res3.Replay, "a successful completion still replays")
-	assert.Equal(t, `{"ok":true}`, string(res3.Response))
+	assert.JSONEq(t, `{"ok":true}`, string(res3.Response))
 
 	const otherKey = "release-other"
 	res4, err := store.ReserveToolOperation(ctx, runID, 1, otherKey, graphID, "explore", []byte(`{}`))

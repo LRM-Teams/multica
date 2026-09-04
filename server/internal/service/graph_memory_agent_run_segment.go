@@ -132,10 +132,15 @@ func (r *GraphMemoryRunSegmentRecorder) RecordSubmittedRun(ctx context.Context, 
 		return
 	}
 
+	// ClosingEvent becomes the open daily node's body line (spec §6), and
+	// that body is the only BM25-retrievable text for this run until
+	// consolidation folds the staging segment into statement nodes: an empty
+	// close line leaves the learned fact unrecallable.
 	seg := memorygraph.SegmentExport{
-		SegmentID:  segmentID,
-		AgentRunID: runID,
-		Trajectory: trajectory,
+		SegmentID:    segmentID,
+		AgentRunID:   runID,
+		Trajectory:   trajectory,
+		ClosingEvent: truncateForSummary(content, triggerSummaryMaxLen),
 	}
 	if err := r.ingestChannelRun(ctx, workspaceID, channelID, runID, seg); err != nil {
 		slog.Warn("graph memory run segment: ingest failed", "segment_id", seg.SegmentID, "err", err)

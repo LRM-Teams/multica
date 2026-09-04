@@ -21,7 +21,8 @@ func TestGraphMemoryToolOperationFailedReservationReleasesKey(t *testing.T) {
 	pool := graphMemoryRunSegmentTestPool(t)
 	f := graphMemoryRunFixtures(t, pool)
 	ctx := t.Context()
-	runID := f.newRunningRun(t, "release")
+	// One active run per channel: reuse the fixture's running run.
+	runID := f.runID
 	t.Cleanup(func() {
 		_, _ = pool.Exec(ctx, `DELETE FROM graph_memory_agent_tool_operation
 			WHERE trajectory_id IN (SELECT id FROM graph_memory_agent_trajectory WHERE run_id=$1::uuid)`, runID)

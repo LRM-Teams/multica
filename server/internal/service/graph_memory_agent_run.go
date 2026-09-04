@@ -275,7 +275,7 @@ func (s *GraphMemoryAgentRunStore) ReserveToolOperation(ctx context.Context, run
 			// runtime context teaches to an eternal OPERATION_PENDING replay.
 			if _, err := tx.Exec(ctx, `
 				UPDATE graph_memory_agent_tool_operation
-				SET status='pending', response=NULL, error=NULL, completed_at=NULL
+				SET status='pending', response='{}'::jsonb, error='', completed_at=NULL
 				WHERE id=$1::uuid`, existing.OperationID); err != nil {
 				return GraphMemoryAgentToolReservation{}, err
 			}

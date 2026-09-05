@@ -698,6 +698,13 @@ func (c *Consolidator) runAgent(ctx context.Context, prompt string) (*consolidat
 		ThreadName:       "memorygraph-consolidate",
 		Timeout:          c.cfg.Timeout,
 		EphemeralSession: true,
+		// One deterministic headless call: prompt in, operations JSON out.
+		// With the full tool registry the backend agent detours into its
+		// own persistent memory first (observed: memory_read turn, stale
+		// notes from earlier consolidation sessions, then a fenced JSON
+		// buried in prose) and the strict-JSON parse fails — atom→node
+		// folding degrades to a permanent error loop.
+		DisableTools: true,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("consolidate: execute: %w", err)
@@ -1498,7 +1505,17 @@ func candidateAuditDetails(cands []CandidateStats) []map[string]any {
 // extractJSONObject parses a strict-JSON final response, tolerating
 // surrounding prose by slicing from the first "{" to the last "}" (same
 // approach as extractExploreOutput and memorycuration's team_output.go).
+// A markdown-fenced block is preferred when present: flash models obey the
+// "no fences" contract unreliably, and prose between two JSON objects makes
+// the first-to-last-brace span unparseable.
 func extractJSONObject(output string, dst any) bool {
+	if fenceStart := strings.LastIndex(output, "```json"); fenceStart >= 0 {
+		body := output[fenceStart+len("```json"):]
+		if fenceEnd := strings.Index(body, "```"); fenceEnd >= 0 &&
+			json.Unmarshal([]byte(strings.TrimSpace(body[:fenceEnd])), dst) == nil {
+			return true
+		}
+	}
 	start := strings.Index(output, "{")
 	end := strings.LastIndex(output, "}")
 	if start < 0 || end < start {

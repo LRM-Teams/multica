@@ -29,6 +29,14 @@ services:
       # and arm enforcement never engages without a live episode row.
       MULTICA_GRAPH_MEMORY_EVALUATION_ENABLED: "true"
       MULTICA_GRAPH_MEMORY_EVALUATION_WORKSPACES: "93b4059d-4480-4f0b-87d3-ca659a6e6619"
+      # Memory provider policy allowlists: atom→node consolidation makes one
+      # model call through the local pi agent backend. Without this entry the
+      # allowlist is empty (deny-all) and every consolidation fails with
+      # purpose "consolidate" missing, so published atoms never fold into
+      # searchable graph nodes. Per-workspace activation still requires the
+      # workspace memory_provider_policy + memory_read_phase_gate rows.
+      MULTICA_MEMORY_CONSOLIDATE_PROVIDERS: "pi"
+      MULTICA_MEMORY_CONSOLIDATE_REGIONS: "local"
 
   frontend:
     ports: !reset []

@@ -31,6 +31,7 @@ import type channels from "../locales/en/channels.json";
 import type evolution from "../locales/en/evolution.json";
 import type knowledge from "../locales/en/knowledge.json";
 import type research from "../locales/en/research.json";
+import type problemEvolution from "../locales/en/problem-evolution.json";
 import type planBilling from "../locales/en/plan-billing.json";
 
 // Module augmentation enables i18next v26 selector API across the monorepo:
@@ -77,6 +78,7 @@ declare global {
     evolution: typeof evolution;
     knowledge: typeof knowledge;
     research: typeof research;
+    "problem-evolution": typeof problemEvolution;
     "plan-billing": typeof planBilling;
   }
 }

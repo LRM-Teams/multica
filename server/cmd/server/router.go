@@ -584,6 +584,18 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/runtimes/{runtimeId}/shared-skills/sync", h.SyncRuntimeSharedSkills)
 		r.Post("/runtimes/{runtimeId}/evolution/submissions", h.SyncEvolutionSubmissions)
 		r.Post("/runtimes/{runtimeId}/memory-curation/{runId}/result", h.ReportMemoryCurationRunResult)
+		// Problem-evolution runs are claimed by runtime, then addressed by run
+		// id; the claim token in each body is what authorises the writes.
+		r.Post("/problem-evolution/claim", h.ClaimProblemEvolutionRun)
+		r.Post("/problem-evolution/runs/{runId}/events", h.ReportProblemEvolutionEvents)
+		r.Post("/problem-evolution/runs/{runId}/heartbeat", h.HeartbeatProblemEvolutionRun)
+		r.Post("/problem-evolution/runs/{runId}/complete", h.CompleteProblemEvolutionRun)
+		r.Post("/problem-evolution/runs/{runId}/fail", h.FailProblemEvolutionRun)
+		r.Post("/problem-evolution/runs/{runId}/release", h.ReleaseProblemEvolutionRun)
+		r.Post("/problem-evolution/runs/{runId}/blind-validation", h.ReportProblemEvolutionBlindValidation)
+		// Capability redemption is daemon-facing and is the only route in the
+		// system that returns hidden answer material.
+		r.Post("/problem-evolution/capabilities/redeem", h.RedeemProblemEvolutionCapability)
 		r.Post("/agent-memory-writes", h.ReportAgentMemoryWrites)
 		r.Post("/agent-memory-center/sync", h.SyncAgentMemoryCenter)
 		r.Post("/agent-memory-center/hydrate", h.HydrateAgentMemoryCenter)
@@ -1031,6 +1043,39 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/completion-reports", h.ListIssueCompletionReports)
 					r.Post("/completion-reviews", h.ReviewIssueCompletion)
 				})
+			})
+
+			// Problem-evolution runs (workspace-facing control plane).
+			r.Get("/api/problem-evolution/runs", h.ListProblemEvolutionRuns)
+			r.Post("/api/problem-evolution/runs", h.CreateProblemEvolutionRun)
+			r.Get("/api/problem-evolution/task-sets", h.ListProblemEvolutionTaskSets)
+			r.Post("/api/problem-evolution/task-sets", h.CreateProblemEvolutionTaskSet)
+			r.Get("/api/problem-evolution/workspace-harness", h.GetProblemEvolutionWorkspaceHarness)
+			r.Route("/api/problem-evolution/runs/{runId}", func(r chi.Router) {
+				r.Get("/", h.GetProblemEvolutionRun)
+				r.Patch("/", h.UpdateProblemEvolutionRun)
+				r.Post("/evaluator", h.CreateProblemEvolutionEvaluator)
+				r.Post("/evaluator/propose", h.ProposeProblemEvolutionEvaluator)
+				r.Post("/evaluator/freeze", h.FreezeProblemEvolutionEvaluator)
+				r.Post("/start", h.StartProblemEvolutionRun)
+				r.Post("/stop", h.StopProblemEvolutionRun)
+				r.Get("/snapshot", h.GetProblemEvolutionSnapshot)
+				r.Get("/events", h.ListProblemEvolutionEvents)
+				r.Get("/candidates/{candidateId}", h.GetProblemEvolutionCandidate)
+				r.Get("/secrets", h.ListProblemEvolutionSecrets)
+				r.Post("/secrets", h.CreateProblemEvolutionSecret)
+				r.Post("/secrets/{secretId}/revoke", h.RevokeProblemEvolutionSecret)
+				r.Post("/capabilities", h.IssueProblemEvolutionCapability)
+				r.Get("/secret-audit", h.ListProblemEvolutionSecretAudit)
+				r.Get("/harnesses", h.ListProblemEvolutionHarnesses)
+				r.Get("/harness-versions", h.ListProblemEvolutionHarnessVersions)
+				r.Post("/harness-versions/{versionId}/promote", h.PromoteProblemEvolutionHarnessVersion)
+				r.Get("/iterations", h.ListProblemEvolutionIterations)
+				r.Get("/task-results", h.ListProblemEvolutionTaskResults)
+				r.Get("/changes", h.ListProblemEvolutionChangeRecords)
+				r.Patch("/harness-budget", h.UpdateProblemEvolutionHarnessBudget)
+				r.Get("/export", h.ExportProblemEvolutionRun)
+				r.Get("/compare/{otherRunId}", h.CompareProblemEvolutionRuns)
 			})
 
 			// Sandbox instances (workspace-facing control plane).

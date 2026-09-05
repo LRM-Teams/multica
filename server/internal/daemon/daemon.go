@@ -200,6 +200,11 @@ type Daemon struct {
 	memoryCurationRuns   map[string]string // workspace\x00stage -> Beijing plan date
 	activeCurationRuns   map[string]string // runtime id -> claimed run id
 
+	// problemEvolution tracks the single in-flight external evolver batch per
+	// runtime: one runtime never drives two batches at once.
+	problemEvolutionMu         sync.Mutex
+	activeProblemEvolutionRuns map[string]struct{} // runtime id
+
 	// graphProfiles caches the server-delivered effective graph memory
 	// profile per workspace (spec §10): deliveries on the resident/channel
 	// path carry it, and the resident-message memory prep applies it.
@@ -239,24 +244,25 @@ func newDaemonForRole(cfg Config, logger *slog.Logger, role daemonProcessRole) *
 	// server can split logs/metrics by client version (parallel to the CLI).
 	client.SetVersion(cfg.CLIVersion)
 	d := &Daemon{
-		cfg:                       cfg,
-		client:                    client,
-		logger:                    logger,
-		role:                      role,
-		workspaces:                make(map[string]*workspaceState),
-		runtimeIndex:              make(map[string]Runtime),
-		runtimeSet:                newRuntimeSetWatcher(),
-		agentVersions:             make(map[string]string),
-		agentWakeSlots:            make(map[string]chan struct{}),
-		runtimeGoneInflight:       make(map[string]struct{}),
-		reregisterNextAttempt:     make(map[string]time.Time),
-		reregisterLastCompletedAt: make(map[string]time.Time),
-		cancelPollInterval:        5 * time.Second,
-		sharedSkillScanCache:      make(map[string]string),
-		memoryCurationRuns:        make(map[string]string),
-		activeCurationRuns:        make(map[string]string),
-		turnScopeMemory:           newTurnScopeMemoryTracker(),
-		instanceID:                uuid.NewString(),
+		cfg:                        cfg,
+		client:                     client,
+		logger:                     logger,
+		role:                       role,
+		workspaces:                 make(map[string]*workspaceState),
+		runtimeIndex:               make(map[string]Runtime),
+		runtimeSet:                 newRuntimeSetWatcher(),
+		agentVersions:              make(map[string]string),
+		agentWakeSlots:             make(map[string]chan struct{}),
+		runtimeGoneInflight:        make(map[string]struct{}),
+		reregisterNextAttempt:      make(map[string]time.Time),
+		reregisterLastCompletedAt:  make(map[string]time.Time),
+		cancelPollInterval:         5 * time.Second,
+		sharedSkillScanCache:       make(map[string]string),
+		memoryCurationRuns:         make(map[string]string),
+		activeCurationRuns:         make(map[string]string),
+		activeProblemEvolutionRuns: make(map[string]struct{}),
+		turnScopeMemory:            newTurnScopeMemoryTracker(),
+		instanceID:                 uuid.NewString(),
 	}
 	d.initializeBindingExecution(bindingStateRoot)
 	configureMemoryFlushHookOnce.Do(func() {
@@ -679,6 +685,18 @@ func daemonRegistrationCapabilities(includeCredentialTransport bool) []string {
 	return capabilities
 }
 
+// registrationCapabilities adds the capabilities that depend on this daemon's
+// configuration. Problem evolution is only advertised when an external evolver
+// program is configured, so the server never queues a run to a machine that
+// cannot execute it.
+func (d *Daemon) registrationCapabilities(includeCredentialTransport bool) []string {
+	capabilities := daemonRegistrationCapabilities(includeCredentialTransport)
+	if d.problemEvolutionEnabled() {
+		capabilities = append(capabilities, protocol.DaemonCapabilityProblemEvolution)
+	}
+	return capabilities
+}
+
 func (d *Daemon) applyRegisterDaemonToken(workspaceID string, resp *RegisterResponse) (bool, error) {
 	if resp == nil || resp.DaemonToken == "" || resp.DaemonTokenExpiresAt == "" {
 		return false, nil
@@ -784,7 +802,7 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 		"os":                runtime.GOOS,
 		"cli_version":       d.cfg.CLIVersion,
 		"launched_by":       d.cfg.LaunchedBy,
-		"capabilities":      daemonRegistrationCapabilities(includeCredentialTransport),
+		"capabilities":      d.registrationCapabilities(includeCredentialTransport),
 		"runtimes":          runtimes,
 	}
 	// MULTICA_SANDBOX_INSTANCE_ID is set by mintSandboxRuntimeEnv for daemon-
@@ -814,7 +832,7 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 	}
 	if tokenApplied && !includeCredentialTransport {
 		legacyResp := resp
-		req["capabilities"] = daemonRegistrationCapabilities(true)
+		req["capabilities"] = d.registrationCapabilities(true)
 		resp, err = d.client.RegisterForWorkspace(ctx, workspaceID, req)
 		if err != nil {
 			d.client.ClearWorkspaceDaemonToken(workspaceID)
@@ -928,6 +946,11 @@ func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, r
 		} else {
 			go d.handleMemoryCuration(ctx, *rt, *resp.PendingMemoryCuration)
 		}
+	}
+	// Problem-evolution runs are pulled rather than pushed: the server keeps
+	// the queue, and each heartbeat is the daemon's cue to try one claim.
+	if rt := d.findRuntime(runtimeID); rt != nil {
+		d.pollProblemEvolution(ctx, *rt)
 	}
 }
 

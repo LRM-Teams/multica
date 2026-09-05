@@ -112,6 +112,9 @@ export type WSEventType =
   | "research_session:status_changed"
   | "research_session:product_round"
   | "research_projection_v6:delta"
+  | "problem_evolution_run:changed"
+  | "problem_evolution_run:graph_updated"
+  | "problem_evolution_run:completed"
   | "notes:share_unread";
 
 export interface WSMessage<T = unknown> {
@@ -658,6 +661,22 @@ export interface WSEventPayloadMap {
     run_id: string;
     through_sequence?: number;
     delta?: unknown;
+  };
+  "problem_evolution_run:changed": {
+    workspace_id?: string;
+    run_id?: string;
+    graph_version?: number;
+    status?: string;
+  };
+  "problem_evolution_run:graph_updated": {
+    workspace_id?: string;
+    run_id?: string;
+    graph_version?: number;
+  };
+  "problem_evolution_run:completed": {
+    workspace_id?: string;
+    run_id?: string;
+    graph_version?: number;
   };
   "notes:share_unread": { page_id?: string };
 }

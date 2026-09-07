@@ -235,8 +235,9 @@ func TestAgentTemplatesIncludeNotesAssistant(t *testing.T) {
 		"notes get",
 		"final assistant output",
 		"Never run `multica message send`",
-		"session harvests",
-		"chat_session_id",
+		"plan card",
+		"do not call start",
+		"period_brief_residue",
 	} {
 		if !strings.Contains(tmpl.Instructions, want) {
 			t.Fatalf("notes-assistant instructions missing %q", want)

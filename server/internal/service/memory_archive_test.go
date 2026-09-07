@@ -158,7 +158,8 @@ func TestMemoryArchive_EraseDueHonorsLeases(t *testing.T) {
 	svc := h.archiveService()
 	// Bind a 30-day archive window so the manifest is immediately due.
 	_, err := h.retentionService().UpdatePolicy(h.ctx, h.workspace, MemoryRetentionUpdate{
-		TrajectoryHotDays: 90, ArchiveDays: 30, TraceHotDays: 30, ExpectedVersion: 1,
+		TrajectoryHotDays: 90, ArchiveDays: 30, TraceHotDays: 30, DiagnosticThinkingDays: 30,
+		ExpectedVersion: 1,
 	}, "user:1")
 	require.NoError(t, err)
 	_, err = svc.ArchiveDue(h.ctx, 16)
@@ -220,7 +221,8 @@ func TestMemoryRetention_ShorteningTightensExistingManifests(t *testing.T) {
 	// manifest; then shortening tightens it to now-30d.
 	svc := h.retentionService()
 	_, err = svc.UpdatePolicy(h.ctx, h.workspace, MemoryRetentionUpdate{
-		TrajectoryHotDays: 90, ArchiveDays: 365, TraceHotDays: 30, ExpectedVersion: 1,
+		TrajectoryHotDays: 90, ArchiveDays: 365, TraceHotDays: 30, DiagnosticThinkingDays: 30,
+		ExpectedVersion: 1,
 	}, "user:1")
 	require.NoError(t, err)
 	var afterRollback time.Time
@@ -229,7 +231,8 @@ func TestMemoryRetention_ShorteningTightensExistingManifests(t *testing.T) {
 	assert.WithinDuration(t, originalDue, afterRollback, time.Second)
 
 	_, err = svc.UpdatePolicy(h.ctx, h.workspace, MemoryRetentionUpdate{
-		TrajectoryHotDays: 90, ArchiveDays: 30, TraceHotDays: 30, ExpectedVersion: 2,
+		TrajectoryHotDays: 90, ArchiveDays: 30, TraceHotDays: 30, DiagnosticThinkingDays: 30,
+		ExpectedVersion: 2,
 	}, "user:1")
 	require.NoError(t, err)
 	var tightened time.Time

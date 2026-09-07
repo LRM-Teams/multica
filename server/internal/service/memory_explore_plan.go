@@ -176,23 +176,57 @@ func (s *MemoryExplorePlanService) ResolveRef(
 	case memorygraph.MemoryRefStagingAtom:
 		return s.resolveStagingAtom(ctx, workspaceID, plan, ref)
 	case memorygraph.MemoryRefGraphNode:
-		// Graph nodes are authorized by scope: a channel node needs its
-		// channel graph pinned; a project node needs a project graph
-		// pinned. The node body itself is read through the store, never
-		// through this ledger.
-		if ref.ChannelID != "" {
-			if !planPins(plan, "channel", ref.ChannelID) {
-				return ResolvedMemoryRef{}, fmt.Errorf("%w: channel graph not pinned", ErrMemoryRefUnauthorized)
-			}
-			return ResolvedMemoryRef{Ref: ref}, nil
-		}
-		if !planPinsAny(plan, "project") {
-			return ResolvedMemoryRef{}, fmt.Errorf("%w: no project graph pinned", ErrMemoryRefUnauthorized)
-		}
-		return ResolvedMemoryRef{Ref: ref}, nil
+		return s.resolveGraphNode(workspaceID, plan, ref)
 	default:
 		return ResolvedMemoryRef{}, fmt.Errorf("memory ref: unknown kind %q", ref.Kind)
 	}
+}
+
+// resolveGraphNode re-derives authorization from server-side state (spec §6
+// rule 3): the ref's caller-provided channel/scope fields are diagnostic
+// only. The node must exist in one of the plan's pinned graphs — a pinned
+// graph without an initialized store authorizes nothing — and its role must
+// be readable from the task-recall plane: pattern projections fail closed
+// here and resolve only through the evolution-plane capability path
+// (spec §12.3).
+func (s *MemoryExplorePlanService) resolveGraphNode(
+	workspaceID pgtype.UUID, plan MemoryExplorePlan, ref memorygraph.MemoryRef,
+) (ResolvedMemoryRef, error) {
+	root, err := graphMemoryWorkspacesRoot()
+	if err != nil {
+		return ResolvedMemoryRef{}, err
+	}
+	ws := workspaceID.String()
+	for _, pinned := range plan.Graphs {
+		// A malformed pin, a missing store or an unreadable graph cannot
+		// authorize anything: fail closed on the next pinned graph.
+		dir, dirErr := memorygraph.DirForScope(root, ws, memorygraph.GraphDirKind(pinned.Kind), pinned.OwnerID)
+		if dirErr != nil {
+			continue
+		}
+		store := memorygraph.NewStore(dir)
+		version, verErr := store.CurrentVersion()
+		if verErr != nil {
+			continue
+		}
+		g, graphErr := memorygraph.LoadGraph(store, version)
+		if graphErr != nil {
+			continue
+		}
+		node := g.Node(ref.NodeID)
+		if node == nil {
+			continue
+		}
+		if memorygraph.EffectiveNodeRole(node.Role) == memorygraph.NodeRolePattern {
+			return ResolvedMemoryRef{}, fmt.Errorf(
+				"%w: node %s is a pattern projection and requires an evolution-plane capability",
+				ErrMemoryRefUnauthorized, ref.NodeID)
+		}
+		resolved := ref
+		resolved.ChannelID = node.ChannelID
+		return ResolvedMemoryRef{Ref: resolved}, nil
+	}
+	return ResolvedMemoryRef{}, fmt.Errorf("%w: node %s exists in no pinned graph", ErrMemoryRefUnauthorized, ref.NodeID)
 }
 
 // resolveStagingAtom loads the atom's owning segment, checks the plan's

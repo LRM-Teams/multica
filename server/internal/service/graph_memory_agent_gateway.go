@@ -48,6 +48,22 @@ type GraphMemoryAgentGateway struct {
 	runs   *GraphMemoryAgentRunStore
 	policy *MemoryProviderPolicyResolver
 	v2     *MemoryExploreV2Service
+	// evaluation is the test-only evaluation protocol plane, wired only
+	// when the plane's process gate is enabled. Nil leaves the gateway
+	// entirely unchanged; enforcement only refuses while a live
+	// persistence_off episode exists on the channel, which requires the
+	// plane. This is the server-side "no Graph MCP" guarantee: every
+	// managed tool operation (start/explore/redirect/submit/checkpoint)
+	// fails closed at the data-plane entry point.
+	evaluation *GraphMemoryEvaluationService
+}
+
+// WireGraphMemoryEvaluation attaches the evaluation protocol plane for arm
+// enforcement (test-only). Main wires it only when the plane is enabled.
+func (g *GraphMemoryAgentGateway) WireGraphMemoryEvaluation(evaluation *GraphMemoryEvaluationService) {
+	if g != nil {
+		g.evaluation = evaluation
+	}
 }
 
 func NewGraphMemoryAgentGateway(pool *pgxpool.Pool, policy *MemoryProviderPolicyResolver) *GraphMemoryAgentGateway {
@@ -169,6 +185,18 @@ func (g *GraphMemoryAgentGateway) ServeHTTP(w http.ResponseWriter, r *http.Reque
 	if !authorized {
 		return ErrGraphMemoryAgentGatewayForbidden
 	}
+	// Evaluation arm enforcement (test-only plane): a live persistence_off
+	// episode refuses every gateway operation for this channel — start,
+	// explore, redirect, submit, and the daemon's auto-checkpoint alike —
+	// so no durable graph write or private-state update can occur. This is
+	// the server-side "no Graph MCP" guarantee: every managed tool call
+	// fails closed at the data-plane entry point.
+	if g.evaluation != nil {
+		if g.evaluation.EvaluationPersistenceOff(r.Context(), workspaceID, channelID) {
+			g.evaluation.RecordPolicyDenial(r.Context(), workspaceID, channelID, "agent_gateway")
+			return ErrGraphMemoryAgentGatewayForbidden
+		}
+	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 64*1024+1))
 	if err != nil {
 		return err
@@ -203,6 +231,13 @@ func (g *GraphMemoryAgentGateway) ServeHTTP(w http.ResponseWriter, r *http.Reque
 		runContext, err = g.runs.ActiveClaim(r.Context(), workspaceID, channelID)
 		if err != nil {
 			return err
+		}
+		if operation == "checkpoint" {
+			body, err = normalizeGraphMemoryAutoCheckpointBody(body, runContext.Claim.TrajectoryID)
+			if err != nil {
+				return err
+			}
+			r.Body = io.NopCloser(bytes.NewReader(body))
 		}
 		if g.protocolForRun(r.Context(), workspaceUUID, runContext.Claim.TrajectoryID) == 2 {
 			return g.serveExploreV2Operation(w, r, body, workspaceUUID, channelID, runContext, operation)
@@ -533,4 +568,30 @@ func writeGraphMemoryAgentJSON(w http.ResponseWriter, raw []byte) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(raw)
+}
+
+// normalizeGraphMemoryAutoCheckpointBody binds a cleanup checkpoint to the
+// already-authorized active claim. It is intentionally used only after
+// ActiveClaim succeeds, so a daemon can never close a trajectory it does not
+// currently own through the normal agent gateway authorization path.
+func normalizeGraphMemoryAutoCheckpointBody(body []byte, trajectoryID string) ([]byte, error) {
+	var request struct {
+		TrajectoryID   string          `json:"trajectory_id"`
+		State          json.RawMessage `json:"state"`
+		IdempotencyKey string          `json:"idempotency_key"`
+	}
+	if err := json.Unmarshal(body, &request); err != nil {
+		return nil, fmt.Errorf("decode graph memory checkpoint: %w", err)
+	}
+	if strings.TrimSpace(request.IdempotencyKey) == "" {
+		return nil, errors.New("graph memory checkpoint idempotency_key is required")
+	}
+	if provided := strings.TrimSpace(request.TrajectoryID); provided != "" && provided != trajectoryID {
+		return nil, ErrGraphMemoryAgentGatewayForbidden
+	}
+	request.TrajectoryID = trajectoryID
+	if len(bytes.TrimSpace(request.State)) == 0 {
+		request.State = json.RawMessage(`{}`)
+	}
+	return json.Marshal(request)
 }

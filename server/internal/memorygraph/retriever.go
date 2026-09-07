@@ -193,24 +193,33 @@ func (r *HybridRetriever) Search(ctx context.Context, query string) ([]ScoredDoc
 	index := r.bm25
 	vecs := r.vecs
 	r.mu.RUnlock()
-	docs, err := hybridSearch(ctx, index, vecs, r.emb, r.cfg, query)
+	// Eligible corpus before rank (Slice 1.2): the view's role and scope
+	// gates run inside both retrieval channels, so invisible high scorers
+	// cannot displace visible docs from the TopK. The rank-output recheck
+	// below stays as defense in depth.
+	eligible := func(id string) bool {
+		n := r.nodeForDoc(id)
+		return n == nil || r.cfg.View.visibleForRetrieval(n)
+	}
+	docs, err := hybridSearch(ctx, index, vecs, r.emb, r.cfg, query, eligible)
 	if err != nil && r.emb != nil {
 		// Query-time embedding outage follows the same deterministic BM25
 		// degradation as rebuild; never retry through another provider.
-		docs, err = hybridSearch(ctx, index, nil, nil, r.cfg, query)
+		docs, err = hybridSearch(ctx, index, nil, nil, r.cfg, query, eligible)
 	}
 	if err != nil {
 		return nil, err
 	}
-	if r.viewActive() {
-		out := docs[:0]
-		for _, d := range docs {
-			if n := r.nodeForDoc(d.ID); n == nil || r.cfg.View.Allows(n) {
-				out = append(out, d)
-			}
+	// Defense-in-depth recheck: re-assert the view on the rank output so a
+	// predicate/index bug cannot surface an invisible doc.
+	out := docs[:0]
+	for _, d := range docs {
+		if n := r.nodeForDoc(d.ID); n != nil && !r.cfg.View.visibleForRetrieval(n) {
+			continue
 		}
-		docs = out
+		out = append(out, d)
 	}
+	docs = out
 	return docs, nil
 }
 
@@ -230,11 +239,12 @@ func (r *HybridRetriever) nodeForDoc(id string) *Node {
 
 // AllowsNodeID reports whether id may be surfaced to this retriever's
 // caller: staging docs and unknown ids pass (same rule as Search), graph
-// nodes must satisfy the active view. The continuation seed merge uses this
-// so prior node ids can never bypass channel visibility.
+// nodes must clear the pattern-role gate and, when the view is active, the
+// scoped view. The continuation seed merge uses this so prior node ids can
+// never bypass channel visibility or the evolution-plane boundary.
 func (r *HybridRetriever) AllowsNodeID(id string) bool {
 	n := r.nodeForDoc(id)
-	return n == nil || !r.viewActive() || r.cfg.View.Allows(n)
+	return n == nil || r.cfg.View.visibleForRetrieval(n)
 }
 
 // hybridSearch is the shared two-channel scoring used by production Search
@@ -246,13 +256,15 @@ func (r *HybridRetriever) AllowsNodeID(id string) bool {
 //
 // per doc id; docs present in only one channel keep their single-channel
 // weighted score. Without an embedder, final = bm25norm. At most cfg.TopK
-// results are returned, sorted by descending final score.
-func hybridSearch(ctx context.Context, index *BM25Index, vecs map[string][]float32, emb *CachedEmbedder, cfg RetrievalConfig, query string) ([]ScoredDoc, error) {
+// results are returned, sorted by descending final score. eligible (nil =
+// admit all) is applied inside both channels before the TopK cut, so the
+// ranked corpus is the eligible corpus (Slice 1.2).
+func hybridSearch(ctx context.Context, index *BM25Index, vecs map[string][]float32, emb *CachedEmbedder, cfg RetrievalConfig, query string, eligible func(id string) bool) ([]ScoredDoc, error) {
 	if cfg.TopK <= 0 {
 		cfg.TopK = DefaultRetrievalConfig().TopK
 	}
 	// Over-fetch from the lexical channel so vector-only docs can merge in.
-	bm25Hits := index.Search(query, max(cfg.TopK*4, cfg.TopK))
+	bm25Hits := index.SearchFiltered(query, max(cfg.TopK*4, cfg.TopK), eligible)
 	bm25Norm := make(map[string]float64, len(bm25Hits))
 	maxScore := 0.0
 	for _, h := range bm25Hits {
@@ -273,6 +285,9 @@ func hybridSearch(ctx context.Context, index *BM25Index, vecs map[string][]float
 			return nil, fmt.Errorf("retriever search: embed query: %w", err)
 		}
 		for id, dvec := range vecs {
+			if eligible != nil && !eligible(id) {
+				continue
+			}
 			sim := (cosineSimilarity(qvec, dvec) + 1) / 2
 			if sim > 0 {
 				vecSim[id] = sim
@@ -348,24 +363,42 @@ func (r *HybridRetriever) SearchAt(ctx context.Context, query string, view Graph
 	emb := r.emb
 	r.mu.RUnlock()
 
-	docs, err := hybridSearch(ctx, index, vecs, emb, r.cfg, query)
+	// Graph channel eligible corpus before rank (Slice 1.2): the view's
+	// pattern-role gate and scoped visibility run inside hybridSearch, so
+	// invisible high scorers cannot displace eligible nodes from the TopK.
+	// The per-hit recheck below stays as defense in depth.
+	viewOn := view.AllowProject || view.ChannelID != ""
+	graphEligible := func(id string) bool {
+		n := r.nodeForDoc(id)
+		if n == nil {
+			// Staging segment docs never surface as graph hits.
+			return false
+		}
+		if !view.patternEligible(n) {
+			return false
+		}
+		return !viewOn || view.Allows(n)
+	}
+	docs, err := hybridSearch(ctx, index, vecs, emb, r.cfg, query, graphEligible)
 	if err != nil && emb != nil {
 		// Query-time embedding outage follows the same deterministic BM25
-		// degradation as Search.
-		docs, err = hybridSearch(ctx, index, nil, nil, r.cfg, query)
+		// degradation as Search, on the same eligible corpus.
+		docs, err = hybridSearch(ctx, index, nil, nil, r.cfg, query, graphEligible)
 	}
 	if err != nil {
 		return nil, err
 	}
 
 	hits := make([]SearchHit, 0, len(docs))
-	viewOn := view.AllowProject || view.ChannelID != ""
 	for _, d := range docs {
 		n := r.nodeForDoc(d.ID)
 		if n == nil {
 			// Staging segment docs never surface as graph hits: staging
 			// memory is reachable only through the atom ledger channel,
 			// never by treating a missing graph node as visible.
+			continue
+		}
+		if !view.patternEligible(n) {
 			continue
 		}
 		if viewOn && !view.Allows(n) {
@@ -382,9 +415,12 @@ func (r *HybridRetriever) SearchAt(ctx context.Context, query string, view Graph
 		})
 	}
 
-	// Staging-atom channel: BM25 over the installed snapshot, visibility
+	// Staging-atom channel: BM25 over the installed snapshot with the
+	// visibility partition applied inside the lexical selection, visibility
 	// re-asserted per atom, half-limited freshness folded in.
-	norm, order := r.atomScores(query)
+	norm, order := r.atomScores(query, func(a AtomDoc) bool {
+		return r.atoms.visible(a, view, publishSeqMax)
+	})
 	now := time.Now()
 	for _, id := range order {
 		a := r.atomDoc(id)
@@ -420,13 +456,14 @@ func (r *HybridRetriever) SearchAt(ctx context.Context, query string, view Graph
 	return hits, nil
 }
 
-// atomScores runs the lexical channel over the installed atom snapshot and
-// returns the normalized scores plus the index's deterministic hit order.
-func (r *HybridRetriever) atomScores(query string) (map[string]float64, []string) {
+// atomScores runs the lexical channel over the installed atom snapshot,
+// gated by visible inside the selection, and returns the normalized scores
+// plus the index's deterministic hit order.
+func (r *HybridRetriever) atomScores(query string, visible func(AtomDoc) bool) (map[string]float64, []string) {
 	if r.atoms == nil {
 		return map[string]float64{}, nil
 	}
-	return r.atoms.search(query, 0)
+	return r.atoms.search(query, 0, visible)
 }
 
 // atomDoc returns the installed atom by id (zero AtomDoc when absent).

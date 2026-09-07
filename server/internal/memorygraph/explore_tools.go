@@ -327,6 +327,20 @@ func (s *ExploreToolServer) completeAgentOperation(ctx context.Context, reservat
 	return s.ledger.Complete(ctx, reservation.OperationID, raw, operationErr)
 }
 
+// refuseAgentOperation terminalizes a reserved operation whose request was
+// refused before a result existed. An unterminated reservation keeps its
+// idempotency key pending forever, so a compliant same-key retry can only
+// ever see OPERATION_PENDING (2026-09-04 run7 smoke: a citation-fenced
+// submit burned its key and the taught fact never persisted). The durable
+// store pairs this with failure-side key release: a failed terminal
+// operation may be re-reserved by the retry that fixes the refusal.
+func (s *ExploreToolServer) refuseAgentOperation(reservation AgentToolOperationReservation, errText string) {
+	if s.ledger == nil || reservation.OperationID == "" {
+		return
+	}
+	_ = s.ledger.Complete(context.Background(), reservation.OperationID, json.RawMessage(`{}`), errText)
+}
+
 // (zero for unknown trajectories).
 func (s *ExploreToolServer) trajectoryRounds(trajectoryID string) int {
 	n, err := s.state.Rounds(context.Background(), trajectoryID)
@@ -435,10 +449,18 @@ func writeTraversalError(w http.ResponseWriter, err error) {
 
 // viewAllows reports whether the graph view attached to the retriever (if
 // any) permits access to n (spec §5: the view is reapplied at every
-// traversal step so edges can never bypass scope). Without a retriever or
-// with an inactive (zero) view, all nodes are allowed — legacy behavior.
+// traversal step so edges can never bypass scope). Without a retriever all
+// nodes are allowed — legacy behavior. The pattern-role gate applies even
+// for inactive views: traversal must not leak the evolution plane into
+// task-recall exploration (spec §12.3).
 func (s *ExploreToolServer) viewAllows(n *Node) bool {
-	if s.retr == nil || !s.retr.viewActive() {
+	if s.retr == nil {
+		return true
+	}
+	if !s.retr.cfg.View.patternEligible(n) {
+		return false
+	}
+	if !s.retr.viewActive() {
 		return true
 	}
 	return s.retr.cfg.View.Allows(n)
@@ -554,10 +576,13 @@ type expandRequest struct {
 // how the candidate was reached: "parent", "child", "entity", a relation
 // edge type, or "embedding".
 type expandCandidate struct {
-	NodeID  string `json:"node_id"`
-	Via     string `json:"via"`
-	Level   int    `json:"level"` // -1 for staging segments
-	Snippet string `json:"snippet"`
+	NodeID string `json:"node_id"`
+	Via    string `json:"via"`
+	Level  int    `json:"level"` // -1 for staging segments
+	// NodeRole is v2 layered-navigation metadata (spec §7.3), served only
+	// when cfg.LayeredNavigation is on.
+	NodeRole string `json:"node_role,omitempty"`
+	Snippet  string `json:"snippet"`
 }
 
 // memoryGraphStartRequest begins one server-pinned trajectory. Scope, graph
@@ -633,18 +658,21 @@ func (s *ExploreToolServer) handleStart(w http.ResponseWriter, r *http.Request) 
 	if s.ledger != nil {
 		trajectoryID = strings.TrimSpace(s.ledger.TrajectoryID())
 		if trajectoryID == "" {
+			s.refuseAgentOperation(reservation, "durable trajectory is unavailable")
 			exploreWriteError(w, http.StatusInternalServerError, "TRAJECTORY_ERROR", "durable trajectory is unavailable")
 			return
 		}
 	} else {
 		idBytes := make([]byte, 16)
 		if _, err := rand.Read(idBytes); err != nil {
+			s.refuseAgentOperation(reservation, "cannot allocate trajectory")
 			exploreWriteError(w, http.StatusInternalServerError, "TRAJECTORY_ERROR", "cannot allocate trajectory")
 			return
 		}
 		trajectoryID = hex.EncodeToString(idBytes)
 	}
 	if _, err := s.state.RegisterTrajectory(r.Context(), trajectoryID, ids, s.cfg.ViewsPerExpansion); err != nil {
+		s.refuseAgentOperation(reservation, err.Error())
 		writeTraversalError(w, err)
 		return
 	}
@@ -717,16 +745,19 @@ func (s *ExploreToolServer) handleRedirect(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if checkpointed || s.trajectorySubmission(req.TrajectoryID) != nil {
+		s.refuseAgentOperation(reservation, "trajectory is already terminal")
 		exploreWriteError(w, http.StatusConflict, "TRAJECTORY_TERMINAL", "trajectory is already terminal")
 		return
 	}
 	hits, err := s.retr.Search(r.Context(), strings.TrimSpace(req.Query))
 	if err != nil {
+		s.refuseAgentOperation(reservation, "retrieval failed: "+err.Error())
 		exploreWriteError(w, http.StatusInternalServerError, "RETRIEVAL_ERROR", err.Error())
 		return
 	}
 	g, err := s.loadGraph()
 	if err != nil {
+		s.refuseAgentOperation(reservation, "graph load failed: "+err.Error())
 		exploreWriteError(w, http.StatusInternalServerError, "GRAPH_ERROR", err.Error())
 		return
 	}
@@ -778,6 +809,7 @@ func (s *ExploreToolServer) handleCheckpoint(w http.ResponseWriter, r *http.Requ
 	if s.ledger != nil {
 		raw, _ := json.Marshal(response)
 		if err := s.ledger.Finish(r.Context(), reservation.OperationID, "checkpointed", req.State, nil, raw); err != nil {
+			s.refuseAgentOperation(reservation, "checkpoint rejected: "+err.Error())
 			exploreWriteError(w, http.StatusConflict, "CHECKPOINT_FAILED", err.Error())
 			return
 		}
@@ -820,14 +852,18 @@ type exploreRequest struct {
 }
 
 type exploredNode struct {
-	NodeID          string            `json:"node_id"`
-	Level           int               `json:"level"`
-	EpistemicStatus string            `json:"epistemic_status,omitempty"`
-	Tags            []string          `json:"tags,omitempty"`
-	Body            string            `json:"body"`
-	Truncated       bool              `json:"truncated"`
-	Staging         bool              `json:"staging,omitempty"`
-	Neighbors       []expandCandidate `json:"neighbors,omitempty"`
+	NodeID          string `json:"node_id"`
+	Level           int    `json:"level"`
+	EpistemicStatus string `json:"epistemic_status,omitempty"`
+	// NodeRole and DerivedAtomKinds are v2 layered-navigation metadata
+	// (spec §7.3), served only when cfg.LayeredNavigation is on.
+	NodeRole         string            `json:"node_role,omitempty"`
+	DerivedAtomKinds []AtomKind        `json:"derived_atom_kinds,omitempty"`
+	Tags             []string          `json:"tags,omitempty"`
+	Body             string            `json:"body"`
+	Truncated        bool              `json:"truncated"`
+	Staging          bool              `json:"staging,omitempty"`
+	Neighbors        []expandCandidate `json:"neighbors,omitempty"`
 }
 
 type exploreResponse struct {
@@ -861,12 +897,14 @@ func (s *ExploreToolServer) handleExplore(w http.ResponseWriter, r *http.Request
 	}
 	g, err := s.loadGraph()
 	if err != nil {
+		s.refuseAgentOperation(reservation, "graph load failed: "+err.Error())
 		exploreWriteError(w, http.StatusInternalServerError, "GRAPH_ERROR", err.Error())
 		return
 	}
 	for _, id := range req.NodeIDs {
 		if IsStagingID(id) {
 			if _, err := s.store.ReadStagingSegment(strings.TrimPrefix(id, stagingDocPrefix)); err != nil {
+				s.refuseAgentOperation(reservation, "node not found: "+id)
 				exploreWriteError(w, http.StatusNotFound, "NODE_NOT_FOUND", "node not found")
 				return
 			}
@@ -874,16 +912,19 @@ func (s *ExploreToolServer) handleExplore(w http.ResponseWriter, r *http.Request
 		}
 		n := g.Node(id)
 		if n == nil || !s.viewAllows(n) {
+			s.refuseAgentOperation(reservation, "node not found: "+id)
 			exploreWriteError(w, http.StatusNotFound, "NODE_NOT_FOUND", "node not found")
 			return
 		}
 	}
 	if _, err := s.state.RegisterTrajectory(r.Context(), req.TrajectoryID, req.NodeIDs, len(req.NodeIDs)); err != nil {
+		s.refuseAgentOperation(reservation, err.Error())
 		writeTraversalError(w, err)
 		return
 	}
 	served, round, exceeded, err := s.state.Serve(r.Context(), req.TrajectoryID, req.NodeIDs, s.cfg.MaxRounds)
 	if err != nil {
+		s.refuseAgentOperation(reservation, err.Error())
 		writeTraversalError(w, err)
 		return
 	}
@@ -895,12 +936,14 @@ func (s *ExploreToolServer) handleExplore(w http.ResponseWriter, r *http.Request
 	if s.ledger != nil {
 		viewed := append([]string(nil), req.NodeIDs[:served]...)
 		if err := s.ledger.RecordViewed(r.Context(), viewed); err != nil {
+			s.refuseAgentOperation(reservation, "view record failed: "+err.Error())
 			exploreWriteError(w, http.StatusConflict, "VIEW_RECORD_FAILED", err.Error())
 			return
 		}
 		if progress, ok := s.ledger.(AgentToolProgress); ok {
 			durableRounds, err := progress.ExplorationRounds(r.Context())
 			if err != nil {
+				s.refuseAgentOperation(reservation, "round record failed: "+err.Error())
 				exploreWriteError(w, http.StatusConflict, "ROUND_RECORD_FAILED", err.Error())
 				return
 			}
@@ -922,7 +965,16 @@ func (s *ExploreToolServer) exploreNode(g *Graph, id string) exploredNode {
 		return truncateExploreBody(&n, s.cfg.MaxNodeChars)
 	}
 	node := g.Node(id)
-	n := exploredNode{NodeID: node.NodeID, Level: node.Level, EpistemicStatus: node.Epistemic, Tags: node.Tags, Body: node.Body, Neighbors: s.expandCandidates(g, node, "")}
+	n := exploredNode{
+		NodeID: node.NodeID, Level: node.Level, EpistemicStatus: node.Epistemic,
+		Tags: node.Tags, Body: node.Body, Neighbors: s.expandCandidates(g, node, ""),
+	}
+	if s.cfg.LayeredNavigation {
+		n.NodeRole = string(EffectiveNodeRole(node.Role))
+		if len(node.DerivedAtomKinds) > 0 {
+			n.DerivedAtomKinds = node.DerivedAtomKinds
+		}
+	}
 	return truncateExploreBody(&n, s.cfg.MaxNodeChars)
 }
 
@@ -1080,6 +1132,9 @@ func (s *ExploreToolServer) expandCandidates(g *Graph, node *Node, relationFilte
 		c := expandCandidate{NodeID: ref.NodeID, Via: ref.Via, Level: -1, Snippet: s.snippet(g, ref.NodeID)}
 		if n := g.Node(ref.NodeID); n != nil {
 			c.Level = n.Level
+			if s.cfg.LayeredNavigation {
+				c.NodeRole = string(EffectiveNodeRole(n.Role))
+			}
 		}
 		out = append(out, c)
 	}
@@ -1148,6 +1203,7 @@ func (s *ExploreToolServer) handleSubmit(w http.ResponseWriter, r *http.Request)
 	_, checkpointed := s.checkpoints[req.TrajectoryID]
 	s.terminalMu.Unlock()
 	if checkpointed {
+		s.refuseAgentOperation(reservation, "trajectory is already checkpointed")
 		exploreWriteError(w, http.StatusConflict, "TRAJECTORY_TERMINAL", "trajectory is already checkpointed")
 		return
 	}
@@ -1157,11 +1213,14 @@ func (s *ExploreToolServer) handleSubmit(w http.ResponseWriter, r *http.Request)
 		for _, nodeID := range req.NodeIDs {
 			nodeID = strings.TrimSpace(nodeID)
 			if nodeID == "" {
+				s.refuseAgentOperation(reservation, "node_ids cannot contain an empty id")
 				exploreWriteError(w, http.StatusBadRequest, "INVALID_NODE_ID", "node_ids cannot contain an empty id")
 				return
 			}
 			if _, duplicate := seen[nodeID]; duplicate {
-				writeTraversalError(w, fmt.Errorf("%w: %q", ErrSubmitDuplicateNodes, nodeID))
+				err := fmt.Errorf("%w: %q", ErrSubmitDuplicateNodes, nodeID)
+				s.refuseAgentOperation(reservation, err.Error())
+				writeTraversalError(w, err)
 				return
 			}
 			seen[nodeID] = struct{}{}
@@ -1188,6 +1247,7 @@ func (s *ExploreToolServer) handleSubmit(w http.ResponseWriter, r *http.Request)
 		})
 		raw, _ := json.Marshal(response)
 		if err := s.ledger.Finish(r.Context(), reservation.OperationID, "submitted", statePatch, citations, raw); err != nil {
+			s.refuseAgentOperation(reservation, "submit rejected: "+err.Error())
 			exploreWriteError(w, http.StatusConflict, "SUBMIT_FAILED", err.Error())
 			return
 		}

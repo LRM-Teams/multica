@@ -111,14 +111,24 @@ func (ix *atomIndex) visible(a AtomDoc, view GraphView, publishSeqMax int64) boo
 }
 
 // search runs the lexical channel over the snapshot, normalized to [0,1].
-func (ix *atomIndex) search(query string, topK int) (map[string]float64, []string) {
+// visible is applied inside the BM25 topK selection (eligible corpus before
+// rank, Slice 1.2) so invisible atoms cannot displace eligible ones from
+// the over-fetch window; the caller re-asserts visibility per hit.
+func (ix *atomIndex) search(query string, topK int, visible func(AtomDoc) bool) (map[string]float64, []string) {
 	ix.mu.RLock()
 	index := ix.bm25
+	atoms := ix.atoms
 	ix.mu.RUnlock()
 	if topK <= 0 {
 		topK = DefaultRetrievalConfig().TopK
 	}
-	hits := index.Search(query, max(topK*4, topK))
+	if visible == nil {
+		visible = func(AtomDoc) bool { return true }
+	}
+	hits := index.SearchFiltered(query, max(topK*4, topK), func(id string) bool {
+		a, ok := atoms[id]
+		return ok && visible(a)
+	})
 	norm := make(map[string]float64, len(hits))
 	order := make([]string, 0, len(hits))
 	maxScore := 0.0

@@ -84,6 +84,10 @@ type GraphMemoryRecallRequest struct {
 	CallerGraphVersion int
 	CallerTrainingMode string
 	CallerK            int
+	// ManagedGraphMemoryAgentID is present only for a daemon-local
+	// GraphMemoryTools resident turn. It is an authorization subject, never a
+	// graph selector: Begin verifies its active channel/runtime membership.
+	ManagedGraphMemoryAgentID string
 }
 
 // GraphMemoryRecallPlan is the server's authoritative, durably persisted
@@ -151,6 +155,19 @@ type GraphMemoryRecallService struct {
 	root    string // workspaces root; empty resolves MULTICA_WORKSPACES_ROOT
 	envType string // process-level memory_type default
 	seeder  GraphMemorySeedRetriever
+	// evaluation is the test-only evaluation protocol plane, wired only
+	// when the plane's process gate is enabled. Nil leaves recall entirely
+	// unchanged: arm enforcement only alters behavior while a live
+	// persistence_off episode exists, which requires the plane.
+	evaluation *GraphMemoryEvaluationService
+}
+
+// WireGraphMemoryEvaluation attaches the evaluation protocol plane for arm
+// enforcement (test-only). Main wires it only when the plane is enabled.
+func (s *GraphMemoryRecallService) WireGraphMemoryEvaluation(evaluation *GraphMemoryEvaluationService) {
+	if s != nil {
+		s.evaluation = evaluation
+	}
 }
 
 func NewGraphMemoryRecallService(pool *pgxpool.Pool, limits GraphMemoryLimits, root, envMemoryType string, seeder GraphMemorySeedRetriever) *GraphMemoryRecallService {
@@ -232,7 +249,19 @@ func (s *GraphMemoryRecallService) Begin(ctx context.Context, req GraphMemoryRec
 		return nil, fmt.Errorf("%w: memory_type is %s", ErrGraphMemoryRecallDisabled, memoryType)
 	}
 	if graphMemoryMode != "inject" {
-		return nil, fmt.Errorf("%w: graph_memory_mode is %s", ErrGraphMemoryRecallDisabled, graphMemoryMode)
+		if graphMemoryMode != "agent" || !s.managedAgentModeRecallAllowed(ctx, wsUUID, rtUUID, channelID, req.ManagedGraphMemoryAgentID) {
+			return nil, fmt.Errorf("%w: graph_memory_mode is %s", ErrGraphMemoryRecallDisabled, graphMemoryMode)
+		}
+	}
+	// Evaluation arm enforcement (test-only plane): a live persistence_off
+	// episode on this channel disables recall entirely — decided by durable
+	// server state at the entry point, never by prompt wording.
+	if s.evaluation != nil {
+		ws, ch := util.UUIDToString(wsUUID), util.UUIDToString(channelID)
+		if s.evaluation.EvaluationPersistenceOff(ctx, ws, ch) {
+			s.evaluation.RecordPolicyDenial(ctx, ws, ch, "recall_begin")
+			return nil, fmt.Errorf("%w: evaluation arm persistence_off", ErrGraphMemoryRecallDisabled)
+		}
 	}
 
 	// Memory-agent training behavior (spec §5): the invoking agent's active
@@ -733,4 +762,33 @@ func graphMemoryTunablesFromProfile(profile db.GraphMemoryProfile) GraphMemoryTu
 		SourceMaxAVSeconds:       int(profile.SourceMaxAvSeconds),
 		SourceMaxImageMegapixels: int(profile.SourceMaxImageMegapixels),
 	}
+}
+
+// managedAgentModeRecallAllowed is the narrow agent-mode exception for a
+// server-projected GraphMemoryTools resident turn. A daemon cannot widen it by
+// naming an arbitrary agent: the active managed-channel mapping, managed role,
+// workspace, task channel, and reporting runtime must all agree.
+func (s *GraphMemoryRecallService) managedAgentModeRecallAllowed(ctx context.Context, workspaceID, runtimeID, channelID pgtype.UUID, agentID string) bool {
+	if s == nil || s.pool == nil || !channelID.Valid {
+		return false
+	}
+	managedAgentID, err := util.ParseUUID(strings.TrimSpace(agentID))
+	if err != nil {
+		return false
+	}
+	var allowed bool
+	err = s.pool.QueryRow(ctx, `
+		SELECT EXISTS(
+		  SELECT 1
+		  FROM graph_memory_channel_agent managed
+		  JOIN agent a ON a.id=managed.agent_id
+		  JOIN channel_member member ON member.workspace_id=managed.workspace_id
+		    AND member.channel_id=managed.channel_id AND member.member_type='agent'
+		    AND member.member_id=managed.agent_id
+		  WHERE managed.workspace_id=$1 AND managed.channel_id=$2
+		    AND managed.agent_id=$3 AND managed.runtime_id=$4
+		    AND managed.status='active' AND a.managed_role='graph_memory_channel'
+		    AND a.archived_at IS NULL
+		)`, workspaceID, channelID, managedAgentID, runtimeID).Scan(&allowed)
+	return err == nil && allowed
 }

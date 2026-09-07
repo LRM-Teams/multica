@@ -266,6 +266,24 @@ func (s *GraphMemoryAgentRunStore) ReserveToolOperation(ctx context.Context, run
 		&existing.OperationID, &existingOperation, &existingRequest, &existing.Response, &existing.Error, &status,
 	)
 	if err == nil {
+		if existingOperation == operation && status == "failed" {
+			// A terminally failed operation releases its idempotency key:
+			// the retry legitimately fixes what the refusal complained about
+			// (e.g. explores the nodes a citation-fenced submit cited), so its
+			// request may differ. Flip the row back to pending and run the
+			// attempt fresh instead of condemning the fixed key template the
+			// runtime context teaches to an eternal OPERATION_PENDING replay.
+			if _, err := tx.Exec(ctx, `
+				UPDATE graph_memory_agent_tool_operation
+				SET status='pending', response='{}'::jsonb, error='', completed_at=NULL, request=$2::jsonb
+				WHERE id=$1::uuid`, existing.OperationID, request); err != nil {
+				return GraphMemoryAgentToolReservation{}, err
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return GraphMemoryAgentToolReservation{}, err
+			}
+			return GraphMemoryAgentToolReservation{OperationID: existing.OperationID}, nil
+		}
 		if existingOperation != operation || !jsonEqual(existingRequest, request) {
 			return GraphMemoryAgentToolReservation{}, ErrGraphMemoryToolReplayConflict
 		}

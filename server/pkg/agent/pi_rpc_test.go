@@ -367,6 +367,29 @@ func TestFormatResidentMessageBatchStandaloneChatUsesAutomaticDelivery(t *testin
 	}
 }
 
+// The MessageCoordinator's visibility projection (#3944) removes the sequence
+// from a first-time delivery so agents cannot infer unseen channel activity.
+// The resident batch contract must accept that projection instead of failing
+// the whole turn (observed 2026-09-03: every new channel Message was rejected
+// with "positive seq are required", then the retry was deduplicated away).
+func TestFormatResidentMessageBatchAcceptsHiddenSequence(t *testing.T) {
+	prompt, err := formatResidentMessageBatch([]ResidentMessage{{
+		ID: "message-1", Target: "channel:one", Seq: 0, Content: "hello",
+	}})
+	if err != nil {
+		t.Fatalf("hidden sequence must format: %v", err)
+	}
+	if !strings.Contains(prompt, `"id":"message-1"`) || strings.Contains(prompt, `"seq"`) {
+		t.Errorf("hidden sequence must omit seq from the rendered batch\n--- prompt ---\n%s", prompt)
+	}
+
+	if _, err := formatResidentMessageBatch([]ResidentMessage{{
+		ID: "message-1", Target: "channel:one", Seq: -1, Content: "hello",
+	}}); err == nil {
+		t.Fatal("expected error for negative sequence")
+	}
+}
+
 func TestFormatResidentMessageBatchRejectsMixedStandaloneAndTransportTargets(t *testing.T) {
 	_, err := formatResidentMessageBatch([]ResidentMessage{
 		{ID: "m1", Target: "chat:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", Seq: 1, Content: "bubble"},

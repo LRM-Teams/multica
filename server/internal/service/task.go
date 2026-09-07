@@ -305,6 +305,10 @@ func (s *TaskService) advanceExistingTaskMessagesTx(
 	task db.AgentInboxEvent,
 	projectID, channelID pgtype.UUID,
 ) error {
+	// Resolved before the first transaction-bound statement for the same
+	// reason as the terminal boundary: a profile-read SQL error on the
+	// transaction's connection would abort the cursor/boundary writes.
+	memoryTypeAtEvent := s.resolveMemoryTypeAtEvent(ctx, task.WorkspaceID)
 	var openEnd pgtype.Int4
 	var lastClosed int32
 	err := tx.QueryRow(ctx, `
@@ -334,7 +338,7 @@ func (s *TaskService) advanceExistingTaskMessagesTx(
 			WorkspaceID: task.WorkspaceID, Task: task,
 			BoundaryKind: DAGBoundaryInbound, EndSeq: existing.Seq,
 			ProjectID: projectID, ChannelID: channelID,
-			MemoryTypeAtEvent: resolveGraphMemoryType(ctx, nil, task.WorkspaceID, graphMemoryEnvMemoryType()),
+			MemoryTypeAtEvent: memoryTypeAtEvent,
 		}); err != nil {
 			return fmt.Errorf("advance existing canonical task message %d: %w", existing.Seq, err)
 		}
@@ -1533,7 +1537,7 @@ func (s *TaskService) CancelTaskWithResult(ctx context.Context, taskID pgtype.UU
 			if projectErr != nil {
 				projectID = pgtype.UUID{}
 			}
-			if err := s.recordUniversalTerminalBoundaryTx(ctx, qtx, tx, task, projectID); err != nil {
+			if err := s.recordUniversalTerminalBoundaryTx(ctx, qtx, tx, task, projectID, s.resolveMemoryTypeAtEvent(ctx, task.WorkspaceID)); err != nil {
 				return fmt.Errorf("record cancellation terminal boundary: %w", err)
 			}
 		}
@@ -1856,7 +1860,7 @@ func (s *TaskService) completeTask(
 			if projectErr != nil {
 				projectID = pgtype.UUID{}
 			}
-			if err := s.recordUniversalTerminalBoundaryTx(ctx, qtx, tx, task, projectID); err != nil {
+			if err := s.recordUniversalTerminalBoundaryTx(ctx, qtx, tx, task, projectID, s.resolveMemoryTypeAtEvent(ctx, task.WorkspaceID)); err != nil {
 				return fmt.Errorf("record completion terminal boundary: %w", err)
 			}
 		}
@@ -2207,7 +2211,7 @@ func (s *TaskService) failTask(
 			if projectErr != nil {
 				projectID = pgtype.UUID{}
 			}
-			if err := s.recordUniversalTerminalBoundaryTx(ctx, qtx, tx, task, projectID); err != nil {
+			if err := s.recordUniversalTerminalBoundaryTx(ctx, qtx, tx, task, projectID, s.resolveMemoryTypeAtEvent(ctx, task.WorkspaceID)); err != nil {
 				return fmt.Errorf("record failure terminal boundary: %w", err)
 			}
 		}
@@ -2763,7 +2767,7 @@ func (s *TaskService) RecordTerminalTaskBoundaryTx(ctx context.Context, q *db.Qu
 	if err != nil {
 		projectID = pgtype.UUID{}
 	}
-	return s.recordUniversalTerminalBoundaryTx(ctx, q, tx, task, projectID)
+	return s.recordUniversalTerminalBoundaryTx(ctx, q, tx, task, projectID, s.resolveMemoryTypeAtEvent(ctx, task.WorkspaceID))
 }
 
 func (s *TaskService) recordUniversalTerminalBoundary(ctx context.Context, task db.AgentInboxEvent, projectID pgtype.UUID) error {
@@ -2773,9 +2777,24 @@ func (s *TaskService) recordUniversalTerminalBoundary(ctx context.Context, task 
 	if s.TxStarter == nil {
 		return errors.New("universal terminal boundary requires a transaction starter")
 	}
+	// Resolved before the boundary transaction opens: the profile read must
+	// never share the transaction-bound connection, where a SQL error would
+	// abort the boundary write itself (SQLSTATE 25P02).
+	memoryType := s.resolveMemoryTypeAtEvent(ctx, task.WorkspaceID)
 	return s.runInTxWithTx(ctx, func(q *db.Queries, tx pgx.Tx) error {
-		return s.recordUniversalTerminalBoundaryTx(ctx, q, tx, task, projectID)
+		return s.recordUniversalTerminalBoundaryTx(ctx, q, tx, task, projectID, memoryType)
 	})
+}
+
+// resolveMemoryTypeAtEvent resolves the workspace's memory type for DAG
+// event-time stamping. It must read through the service's pool-backed
+// Queries, never the transaction-bound queries handed to the boundary
+// writers: a profile-lookup SQL error inside the business transaction would
+// abort it (SQLSTATE 25P02) and take the boundary write down with it.
+// A nil Queries (test constructions) degrades to the env default, matching
+// resolveGraphMemoryType's nil-queries contract.
+func (s *TaskService) resolveMemoryTypeAtEvent(ctx context.Context, workspaceID pgtype.UUID) string {
+	return resolveGraphMemoryType(ctx, s.Queries, workspaceID, graphMemoryEnvMemoryType())
 }
 
 func (s *TaskService) recordUniversalTerminalBoundaryTx(
@@ -2784,11 +2803,11 @@ func (s *TaskService) recordUniversalTerminalBoundaryTx(
 	tx pgx.Tx,
 	task db.AgentInboxEvent,
 	projectID pgtype.UUID,
+	memoryType string,
 ) error {
 	if s.UniversalDAG == nil {
 		return nil
 	}
-	memoryType := resolveGraphMemoryType(ctx, nil, task.WorkspaceID, graphMemoryEnvMemoryType())
 	_, err := s.UniversalDAG.RecordBoundaryTx(ctx, q, tx, DAGBoundaryInput{
 		WorkspaceID:       task.WorkspaceID,
 		Task:              task,

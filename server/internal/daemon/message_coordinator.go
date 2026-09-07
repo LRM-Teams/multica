@@ -95,6 +95,7 @@ type MessageCoordinator struct {
 	key                 InboxKey
 	root                string
 	boundaries          map[string]int64
+	consumedMessageIDs  map[string]map[string]struct{}
 	flushOwner          atomic.Bool
 	deliver             RuntimeMessageDelivery
 	activity            MessageReceivedActivity
@@ -170,7 +171,8 @@ func NewMessageCoordinator(key InboxKey, agentRoot string, deliver RuntimeMessag
 	}
 	coordinator := &MessageCoordinator{
 		key: key, root: agentRoot, boundaries: make(map[string]int64),
-		deliver: deliver, activity: activity,
+		consumedMessageIDs: make(map[string]map[string]struct{}),
+		deliver:            deliver, activity: activity,
 		noticeCoordinatorID: uuid.NewString(),
 		noticeCoalesce:      pendingNoticeCoalesceWindow,
 		noticeRetry:         pendingNoticeRetryDelay,
@@ -181,6 +183,57 @@ func NewMessageCoordinator(key InboxKey, agentRoot string, deliver RuntimeMessag
 		return nil, fmt.Errorf("restore Agent App Inbox: %w", err)
 	}
 	return coordinator, nil
+}
+
+// projectVisibleMessages applies the Agent-facing visibility rule without
+// changing the durable Inbox item. A message already covered by the local
+// boundary or consumed by ID retains its internal sequence; a first-time
+// message is copied with its sequence removed.
+func (c *MessageCoordinator) projectVisibleMessages(messages []protocol.AgentMessageProjection, consume, advanceBoundary bool) []protocol.AgentMessageProjection {
+	if c == nil || len(messages) == 0 {
+		return messages
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	projected := make([]protocol.AgentMessageProjection, 0, len(messages))
+	for _, message := range messages {
+		seen := c.messageVisibleLocked(message)
+		if !seen {
+			message.Seq = 0
+		}
+		projected = append(projected, message)
+	}
+	if consume {
+		c.consumeVisibleMessagesLocked(messages, advanceBoundary)
+	}
+	return projected
+}
+
+func (c *MessageCoordinator) messageVisibleLocked(message protocol.AgentMessageProjection) bool {
+	if boundary := c.boundaries[message.Target]; message.Seq > 0 && boundary >= message.Seq {
+		return true
+	}
+	return c.consumedMessageIDs[message.Target] != nil && func() bool {
+		_, ok := c.consumedMessageIDs[message.Target][message.ID]
+		return ok
+	}()
+}
+
+func (c *MessageCoordinator) consumeVisibleMessagesLocked(messages []protocol.AgentMessageProjection, advanceBoundary bool) {
+	for _, message := range messages {
+		if message.Target == "" || message.ID == "" {
+			continue
+		}
+		ids := c.consumedMessageIDs[message.Target]
+		if ids == nil {
+			ids = make(map[string]struct{})
+			c.consumedMessageIDs[message.Target] = ids
+		}
+		ids[message.ID] = struct{}{}
+		if advanceBoundary && message.Seq > c.boundaries[message.Target] {
+			c.boundaries[message.Target] = message.Seq
+		}
+	}
 }
 
 // ConfigurePendingNotices installs the busy-runtime Notice seam. Durations are
@@ -432,7 +485,8 @@ func (c *MessageCoordinator) flushWithResultBody(ctx context.Context, scheduleBu
 		}
 		c.mu.Unlock()
 
-		if err := c.deliver(ctx, messages); err != nil {
+		projectedMessages := c.projectVisibleMessages(messages, false, false)
+		if err := c.deliver(ctx, projectedMessages); err != nil {
 			c.mu.Lock()
 			if scheduleBusyNotice && errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
 				c.schedulePendingNoticeLocked(c.noticeCoalesce)
@@ -453,8 +507,9 @@ func (c *MessageCoordinator) flushWithResultBody(ctx context.Context, scheduleBu
 				return delivered, errRuntimeMessageDeliveryInvalidated
 			}
 		}
-		c.emitQueueActivityLocked(messages, -1)
 		c.mu.Lock()
+		c.consumeVisibleMessagesLocked(messages, false)
+		c.emitQueueActivityLocked(messages, -1)
 		for _, message := range messages {
 			if message.Seq > c.boundaries[message.Target] {
 				c.boundaries[message.Target] = message.Seq

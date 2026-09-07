@@ -14,6 +14,9 @@ type memoryRetentionCapsResponse struct {
 	TrajectoryHotDays int `json:"trajectory_hot_days"`
 	ArchiveDays       int `json:"archive_days"`
 	TraceHotDays      int `json:"trace_hot_days"`
+	// DiagnosticThinkingDays is a hard platform ceiling (spec §12.2):
+	// diagnostic provider thinking never outlives it.
+	DiagnosticThinkingDays int `json:"diagnostic_thinking_days"`
 }
 
 type memoryRetentionResponse struct {
@@ -22,10 +25,13 @@ type memoryRetentionResponse struct {
 }
 
 type memoryRetentionUpdateRequest struct {
-	TrajectoryHotDays int   `json:"trajectory_hot_days"`
-	ArchiveDays       int   `json:"archive_days"`
-	TraceHotDays      int   `json:"trace_hot_days"`
-	ExpectedVersion   int64 `json:"expected_version"`
+	TrajectoryHotDays int `json:"trajectory_hot_days"`
+	ArchiveDays       int `json:"archive_days"`
+	TraceHotDays      int `json:"trace_hot_days"`
+	// DiagnosticThinkingDays must be sent explicitly (1..30): an update
+	// that omits it is rejected rather than silently binding the ceiling.
+	DiagnosticThinkingDays int   `json:"diagnostic_thinking_days"`
+	ExpectedVersion        int64 `json:"expected_version"`
 }
 
 // GetMemoryRetention serves GET /api/workspaces/{id}/memory/retention
@@ -48,9 +54,10 @@ func (h *Handler) GetMemoryRetention(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, memoryRetentionResponse{
 		Policy: policy,
 		Caps: memoryRetentionCapsResponse{
-			TrajectoryHotDays: service.MemoryRetentionTrajectoryHotCapDays,
-			ArchiveDays:       service.MemoryRetentionArchiveCapDays,
-			TraceHotDays:      service.MemoryRetentionTraceHotCapDays,
+			TrajectoryHotDays:      service.MemoryRetentionTrajectoryHotCapDays,
+			ArchiveDays:            service.MemoryRetentionArchiveCapDays,
+			TraceHotDays:           service.MemoryRetentionTraceHotCapDays,
+			DiagnosticThinkingDays: service.MemoryRetentionThinkingCapDays,
 		},
 	})
 }
@@ -80,10 +87,11 @@ func (h *Handler) UpdateMemoryRetention(w http.ResponseWriter, r *http.Request) 
 	}
 	actor := "user:" + userID
 	policy, err := h.MemoryRetention.UpdatePolicy(r.Context(), workspaceID, service.MemoryRetentionUpdate{
-		TrajectoryHotDays: req.TrajectoryHotDays,
-		ArchiveDays:       req.ArchiveDays,
-		TraceHotDays:      req.TraceHotDays,
-		ExpectedVersion:   req.ExpectedVersion,
+		TrajectoryHotDays:      req.TrajectoryHotDays,
+		ArchiveDays:            req.ArchiveDays,
+		TraceHotDays:           req.TraceHotDays,
+		DiagnosticThinkingDays: req.DiagnosticThinkingDays,
+		ExpectedVersion:        req.ExpectedVersion,
 	}, actor)
 	switch {
 	case err == nil:
@@ -100,9 +108,10 @@ func (h *Handler) UpdateMemoryRetention(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, memoryRetentionResponse{
 		Policy: policy,
 		Caps: memoryRetentionCapsResponse{
-			TrajectoryHotDays: service.MemoryRetentionTrajectoryHotCapDays,
-			ArchiveDays:       service.MemoryRetentionArchiveCapDays,
-			TraceHotDays:      service.MemoryRetentionTraceHotCapDays,
+			TrajectoryHotDays:      service.MemoryRetentionTrajectoryHotCapDays,
+			ArchiveDays:            service.MemoryRetentionArchiveCapDays,
+			TraceHotDays:           service.MemoryRetentionTraceHotCapDays,
+			DiagnosticThinkingDays: service.MemoryRetentionThinkingCapDays,
 		},
 	})
 }

@@ -244,7 +244,12 @@ func fetchMessageCheckBatch(ctx context.Context, client *http.Client, endpoint, 
 
 func printMessageCheckResult(w io.Writer, result messageCheckCLIResponse, terminal bool) error {
 	for _, message := range result.Messages {
-		if _, err := fmt.Fprintf(w, "Message %s (%s seq %d)\n", message.ID, message.Target, message.Seq); err != nil {
+		header := fmt.Sprintf("Message %s (%s", message.ID, message.Target)
+		if message.Seq != 0 {
+			header += fmt.Sprintf(" seq %d", message.Seq)
+		}
+		header += ")\n"
+		if _, err := io.WriteString(w, header); err != nil {
 			return err
 		}
 		if message.Content != "" {

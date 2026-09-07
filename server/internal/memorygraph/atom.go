@@ -149,13 +149,78 @@ func WeakestToolTrust(classes ...AtomTrustClass) AtomTrustClass {
 	return weakest
 }
 
+// AtomKind is the closed semantic vocabulary for independently searchable
+// atoms. NodeRole remains a separate structural classification for graph nodes.
+type AtomKind string
+
+const (
+	AtomFact        AtomKind = "fact"
+	AtomEvent       AtomKind = "event"
+	AtomInstruction AtomKind = "instruction"
+	AtomPreference  AtomKind = "preference"
+	AtomDecision    AtomKind = "decision"
+	AtomConstraint  AtomKind = "constraint"
+	AtomFallback    AtomKind = "fallback"
+)
+
 // ValidAtomKind enumerates the closed kind set a proposer may choose from.
 func ValidAtomKind(kind string) bool {
-	switch kind {
-	case "fact", "preference", "fallback":
+	switch AtomKind(kind) {
+	case AtomFact, AtomEvent, AtomInstruction, AtomPreference, AtomDecision, AtomConstraint, AtomFallback:
 		return true
 	default:
 		return false
+	}
+}
+
+// LegacyAtomKindAction names the one permitted handling for a retired kind
+// label. Silent mapping onto a current kind is forbidden at every boundary.
+type LegacyAtomKindAction string
+
+const (
+	// LegacyAtomKindExplicitChoice requires the owning authority to pick one
+	// of AllowedTargets deliberately; the pick is recorded as a backfill
+	// decision with checkpoint/reason, never inferred.
+	LegacyAtomKindExplicitChoice LegacyAtomKindAction = "explicit_choice"
+	// LegacyAtomKindCandidateReEvaluation requires the multi-step body to be
+	// re-evaluated into one or more current-kind atoms (or fall back). A
+	// Skill candidate may only arise from the independent curation flow,
+	// never from the retired label itself (spec §4).
+	LegacyAtomKindCandidateReEvaluation LegacyAtomKindAction = "candidate_re_evaluation"
+)
+
+// LegacyAtomKindDisposition describes how a retired kind label must be
+// handled when it arrives from a legacy source (import, older extractor
+// output, backfill). Dispositions exist so callers route legacy labels
+// through an explicit decision instead of guessing a mapping.
+type LegacyAtomKindDisposition struct {
+	LegacyKind     string
+	Action         LegacyAtomKindAction
+	AllowedTargets []AtomKind
+}
+
+// LegacyAtomKindDispositionFor returns the disposition for a retired kind
+// label, or false for anything else (current kinds and unknown values have
+// no disposition — unknown values are simply invalid).
+func LegacyAtomKindDispositionFor(kind string) (LegacyAtomKindDisposition, bool) {
+	switch AtomKind(kind) {
+	case "rule":
+		return LegacyAtomKindDisposition{
+			LegacyKind:     "rule",
+			Action:         LegacyAtomKindExplicitChoice,
+			AllowedTargets: []AtomKind{AtomInstruction, AtomConstraint},
+		}, true
+	case "procedure":
+		return LegacyAtomKindDisposition{
+			LegacyKind: "procedure",
+			Action:     LegacyAtomKindCandidateReEvaluation,
+			AllowedTargets: []AtomKind{
+				AtomFact, AtomEvent, AtomInstruction, AtomPreference,
+				AtomDecision, AtomConstraint, AtomFallback,
+			},
+		}, true
+	default:
+		return LegacyAtomKindDisposition{}, false
 	}
 }
 

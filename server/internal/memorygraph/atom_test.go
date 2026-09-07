@@ -68,10 +68,15 @@ func TestAtomTrustRankFailsSafe(t *testing.T) {
 }
 
 func TestAtomKindsAreClosed(t *testing.T) {
-	for _, kind := range []string{"fact", "preference", "fallback"} {
+	for _, kind := range []string{
+		string(AtomFact), string(AtomEvent), string(AtomInstruction), string(AtomPreference),
+		string(AtomDecision), string(AtomConstraint), string(AtomFallback),
+	} {
 		require.True(t, ValidAtomKind(kind), kind)
 	}
 	assert.False(t, ValidAtomKind("FACT"))
+	assert.False(t, ValidAtomKind("rule"), "legacy rule requires explicit migration")
+	assert.False(t, ValidAtomKind("procedure"), "procedure must not silently become a Skill")
 	assert.False(t, ValidAtomKind("summary"))
 	assert.False(t, ValidAtomKind(""))
 	assert.NotNil(t, regexp.MustCompile(`^[a-z_]+$`), "sanity: kinds are snake_case tokens")

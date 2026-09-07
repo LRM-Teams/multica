@@ -322,5 +322,10 @@
   "graphHealthRecallErrors": "recall errors",
   "graphHealthOutboxFailed": "reward delivery failed",
   "graphHealthDiveFailed": "dive jobs failed",
-  "graphHealthClean": "No ledger failures in the last 24 hours"
+  "graphHealthClean": "No ledger failures in the last 24 hours",
+  "modelEvaluationRuns": "Model evaluation runs",
+  "modelEvaluationRunsHint": "Recent offline, shadow, or canary model evaluations. This is not Graph Memory or PAST-Bench usage.",
+  "modelEvaluationRunsEmpty": "No model evaluation runs recorded.",
+  "modelEvaluationExamples": "{count} examples",
+  "modelEvaluationMetricsUnavailable": "Metrics unavailable"
 }

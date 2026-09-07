@@ -231,6 +231,15 @@ func dedupeSortedSeqs(seqs []int32) []int32 {
 	return out
 }
 
+// readableAtomMessageType matches the readable message types of the canonical
+// task_message vocabulary the sanitizer preserves. Channel turns post the
+// universal DAG unification are stamped "text"; "user"/"assistant" cover the
+// chat-role rows. tool_use/tool_result rows stay excluded: their substance
+// enters memory only through a tool-trusted proposer, never this one.
+func readableAtomMessageType(t string) bool {
+	return t == "user" || t == "assistant" || t == "text"
+}
+
 // deterministicAtomProposer is the offline default: extractive statement
 // candidates from the sanitized payload, in message order.
 type deterministicAtomProposer struct{}
@@ -238,7 +247,7 @@ type deterministicAtomProposer struct{}
 func (deterministicAtomProposer) ProposeAtoms(_ context.Context, _ AtomizerSegment, payload SanitizedTrajectory) ([]AtomCandidate, error) {
 	candidates := make([]AtomCandidate, 0, len(payload.Messages))
 	for _, message := range payload.Messages {
-		if message.Type != "user" && message.Type != "assistant" {
+		if !readableAtomMessageType(message.Type) {
 			continue
 		}
 		text := message.Content

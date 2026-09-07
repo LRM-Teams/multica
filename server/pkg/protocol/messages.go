@@ -239,7 +239,7 @@ type AgentMessageProjection struct {
 	ChannelID     string                         `json:"channel_id,omitempty"`
 	Target        string                         `json:"target"`
 	ReplyTarget   string                         `json:"reply_target,omitempty"`
-	Seq           int64                          `json:"seq"`
+	Seq           int64                          `json:"seq,omitempty"`
 	Content       string                         `json:"content"`
 	Parts         []MessagePart                  `json:"parts,omitempty"`
 	ChannelKind   string                         `json:"channel_kind,omitempty"`
@@ -779,6 +779,10 @@ type GraphMemoryRecallRequest struct {
 	GraphVersion int    `json:"graph_version,omitempty"`
 	TrainingMode string `json:"training_mode,omitempty"`
 	K            int    `json:"k,omitempty"`
+	// ManagedGraphMemoryAgentID requests deterministic recall only for an
+	// attested GraphMemoryTools resident turn. The server validates its active
+	// channel/runtime membership; this field never controls graph scope.
+	ManagedGraphMemoryAgentID string `json:"managed_graph_memory_agent_id,omitempty"`
 }
 
 // GraphMemoryRecallCitation identifies one graph node cited by a bounded

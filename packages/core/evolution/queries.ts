@@ -11,7 +11,7 @@ export const evolutionKeys = {
   metrics: (wsId: string, days = 30) => ["evolution", wsId, "metrics", days] as const,
   trainingExamples: (wsId: string, modelKind = "", status = "", split = "") => ["evolution", wsId, "training-examples", modelKind, status, split] as const,
   modelConfigs: (wsId: string) => ["evolution", wsId, "model-configs"] as const,
-  modelEvalRuns: (wsId: string, modelKind = "") => ["evolution", wsId, "model-eval-runs", modelKind] as const,
+  modelEvalRuns: (wsId: string, modelKind = "", limit?: number) => ["evolution", wsId, "model-eval-runs", modelKind, limit ?? null] as const,
   memoryCurationStatus: (wsId: string) => ["evolution", wsId, "memory-curation-status"] as const,
   memoryCurationRun: (wsId: string, runId: string) => ["evolution", wsId, "memory-curation-run", runId] as const,
   memoryCuratorProfile: (wsId: string) => ["evolution", wsId, "memory-curator-profile"] as const,
@@ -205,7 +205,7 @@ export function evolutionModelConfigsOptions(wsId: string) {
 
 export function evolutionModelEvalRunsOptions(wsId: string, params: { model_kind?: string; limit?: number } = {}) {
   return queryOptions({
-    queryKey: evolutionKeys.modelEvalRuns(wsId, params.model_kind ?? ""),
+    queryKey: evolutionKeys.modelEvalRuns(wsId, params.model_kind ?? "", params.limit),
     queryFn: () => api.listEvolutionModelEvalRuns(params),
     enabled: !!wsId,
   });

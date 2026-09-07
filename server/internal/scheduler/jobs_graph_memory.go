@@ -214,10 +214,11 @@ func makeGraphMemoryConsolidationHandler(pool *pgxpool.Pool, bm *obsmetrics.Busi
 				channelMigrations = len(reports)
 			}
 		}
-		// Task 17: retention sweep — trace windows, archive creation and
-		// due crypto-erase. Archive streams stay disabled until the
-		// master key is configured; the policy/trace halves run either
-		// way. A failed sweep logs without blocking consolidation.
+		// Task 17: retention sweep — trace windows, diagnostic thinking
+		// erase, archive creation and due crypto-erase. Archive streams
+		// stay disabled until the master key is configured; the
+		// policy/trace/thinking halves run either way. A failed sweep
+		// logs without blocking consolidation.
 		retentionSwept := 0
 		if pool != nil {
 			archiveCipher, cipherErr := service.ArchiveCipherFromEnv()

@@ -4803,7 +4803,7 @@ func (h *Handler) persistPreparedCanonicalChannelMessage(ctx context.Context, in
 	if err != nil {
 		return zero, err
 	}
-	if err := persistCanonicalMessageDeliveryPlansTx(ctx, tx, input.Channel, result.Message, plans); err != nil {
+	if err := h.persistCanonicalMessageDeliveryPlansTx(ctx, tx, input.Channel, result.Message, plans); err != nil {
 		return zero, err
 	}
 	if err := tx.Commit(ctx); err != nil {

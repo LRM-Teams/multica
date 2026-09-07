@@ -1552,6 +1552,27 @@ func TestMessageCoordinatorBlockedActivityDoesNotBlockNewDelivery(t *testing.T) 
 	}
 }
 
+func TestMessageCoordinatorProjectsUnseenSequenceOnceAndRetainsSeenSequence(t *testing.T) {
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	if err != nil {
+		t.Fatalf("new coordinator: %v", err)
+	}
+	message := protocol.AgentMessageProjection{ID: "message-1", Target: "channel:one", Seq: 7, Content: "hello"}
+
+	first := coordinator.projectVisibleMessages([]protocol.AgentMessageProjection{message}, true, false)
+	if len(first) != 1 || first[0].Seq != 0 {
+		t.Fatalf("first projection = %+v, want sequence removed", first)
+	}
+	second := coordinator.projectVisibleMessages([]protocol.AgentMessageProjection{message}, true, false)
+	if len(second) != 1 || second[0].Seq != 7 {
+		t.Fatalf("second projection = %+v, want retained sequence", second)
+	}
+	newMessage := coordinator.projectVisibleMessages([]protocol.AgentMessageProjection{{ID: "message-2", Target: "channel:one", Seq: 8}}, true, false)
+	if len(newMessage) != 1 || newMessage[0].Seq != 0 {
+		t.Fatalf("new message projection = %+v, want sequence removed", newMessage)
+	}
+}
+
 func TestMessageCoordinatorCloseInvalidatesAcceptedDeliveryBeforeBoundaryCommit(t *testing.T) {
 	activityStarted := make(chan struct{})
 	releaseActivity := make(chan struct{})

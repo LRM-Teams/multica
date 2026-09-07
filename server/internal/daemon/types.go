@@ -54,6 +54,10 @@ type Task struct {
 	// the daemon's MULTICA_MEMORY_TYPE env default for this task only;
 	// empty means the env default applies.
 	MemoryType string `json:"memory_type,omitempty"`
+	// GraphMemoryTools is daemon-local proof that this resident turn was
+	// projected for an active managed Graph Memory channel agent. It is never
+	// accepted from a product task payload and only scopes deterministic recall.
+	GraphMemoryTools bool `json:"-"`
 	// ExploreAgents / ExploreMaxRounds are the task-scoped graph explore
 	// overrides sent with MemoryType; zero means the env default applies.
 	ExploreAgents    int        `json:"explore_agents,omitempty"`

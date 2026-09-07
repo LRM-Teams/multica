@@ -35,9 +35,16 @@ func (d *Daemon) graphExecutionMemories(ctx context.Context, task Task, log *slo
 		return nil, nil
 	}
 
-	response, err := d.client.RequestGraphMemoryRecall(ctx, task.WorkspaceID, protocol.GraphMemoryRecallRequest{
+	request := protocol.GraphMemoryRecallRequest{
 		TraceID: uuid.NewString(), TaskID: task.ID, RuntimeID: task.RuntimeID, Query: query,
-	})
+	}
+	// Agent-mode workspaces retain the same deterministic recall floor only
+	// for server-projected managed Graph Memory turns. The server verifies the
+	// claimed agent/runtime/channel binding before allowing this scoped path.
+	if task.GraphMemoryTools {
+		request.ManagedGraphMemoryAgentID = task.AgentID
+	}
+	response, err := d.client.RequestGraphMemoryRecall(ctx, task.WorkspaceID, request)
 	if err != nil {
 		if log != nil {
 			log.Warn("graph memory recall failed; injecting no graph memory", "task_id", task.ID, "error", err)

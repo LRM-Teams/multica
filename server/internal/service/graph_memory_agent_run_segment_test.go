@@ -283,7 +283,8 @@ func TestGraphMemoryRunSegment_LegacyWorkspaceNoop(t *testing.T) {
 }
 
 // TestGraphMemoryRunSegment_IngestOverrideCapturesExport verifies the ingest
-// contract (segment id, run id, trajectory) without touching the filesystem.
+// contract (segment id, run id, trajectory, closing event) without touching
+// the filesystem.
 func TestGraphMemoryRunSegment_IngestOverrideCapturesExport(t *testing.T) {
 	t.Setenv("MULTICA_MEMORY_TYPE", "graph")
 	pool := graphMemoryRunSegmentTestPool(t)
@@ -310,4 +311,6 @@ func TestGraphMemoryRunSegment_IngestOverrideCapturesExport(t *testing.T) {
 	assert.Equal(t, seg.SegmentID, exports[0].SegmentID, "export carries the canonical segment id")
 	assert.Equal(t, f.runID, exports[0].AgentRunID)
 	assert.Contains(t, string(exports[0].Trajectory), "NIMBUS")
+	assert.Contains(t, exports[0].ClosingEvent, "NIMBUS",
+		"the daily node's only retrievable body line must carry the run's evidence")
 }

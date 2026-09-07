@@ -635,7 +635,7 @@ SELECT result_page_id::text, result_mode FROM note_period_brief_run WHERE id = $
 	}
 }
 
-func TestNoteBubbleChatLeavesIntentTextToAssistant(t *testing.T) {
+func TestNoteBubbleChatOpensPlanCardOnWriteReportAsk(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -659,8 +659,8 @@ UPDATE chat_session SET context_note_page_id = $2 WHERE id = $1`, sessionID, sou
 	}
 
 	ask := sendNoteBubbleChat(t, sessionID, "帮我写汇报")
-	if !ask.Pending {
-		t.Fatal("declined-or-unconfirmed 写汇报 text should wake the notes assistant")
+	if ask.Pending {
+		t.Fatal("写汇报 must open the plan card on the platform path, not wake the notes assistant")
 	}
 	var joined string
 	if err := testPool.QueryRow(context.Background(), `
@@ -671,8 +671,8 @@ FROM chat_message WHERE chat_session_id = $1`, sessionID).Scan(&joined); err != 
 	if !strings.Contains(joined, "帮我写汇报") {
 		t.Fatalf("user text should stay in the transcript:\n%s", joined)
 	}
-	if strings.Contains(joined, "时间") || strings.Contains(joined, "电脑") {
-		t.Fatalf("chat must not start spoken intake:\n%s", joined)
+	if !strings.Contains(joined, "开始采集") {
+		t.Fatalf("platform must ask the human to confirm on the plan card:\n%s", joined)
 	}
 	var runCount int
 	if err := testPool.QueryRow(context.Background(), `
@@ -680,15 +680,16 @@ SELECT count(*) FROM note_period_brief_run WHERE chat_session_id = $1`, sessionI
 		t.Fatalf("count runs: %v", err)
 	}
 	if runCount != 0 {
-		t.Fatalf("intent text must not start a run, runs = %d", runCount)
+		t.Fatalf("写汇报 ask must not start a run, runs = %d", runCount)
 	}
 	var promptCount int
 	if err := testPool.QueryRow(context.Background(), `
-SELECT count(*) FROM note_period_brief_prompt WHERE chat_session_id = $1`, sessionID).Scan(&promptCount); err != nil {
+SELECT count(*) FROM note_period_brief_prompt
+WHERE chat_session_id = $1 AND status = 'clarifying'`, sessionID).Scan(&promptCount); err != nil {
 		t.Fatalf("count prompts: %v", err)
 	}
-	if promptCount != 0 {
-		t.Fatalf("intent text must not open an intake prompt, prompts = %d", promptCount)
+	if promptCount != 1 {
+		t.Fatalf("写汇报 ask must open one clarifying plan, prompts = %d", promptCount)
 	}
 }
 

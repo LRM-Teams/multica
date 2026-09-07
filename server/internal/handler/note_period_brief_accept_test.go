@@ -228,7 +228,7 @@ func TestAcceptDeadLockDoesNotBlockTheNextStart(t *testing.T) {
 }
 
 // TestAcceptAddingAnotherComputerPostsInsertCard: 「把另一台也写进去」
-// collects only the missing computer and still posts the insert card.
+// re-walks every selected computer and still posts the insert card.
 func TestAcceptAddingAnotherComputerPostsInsertCard(t *testing.T) {
 	periodBriefAcceptSetup(t)
 
@@ -256,6 +256,7 @@ func TestAcceptAddingAnotherComputerPostsInsertCard(t *testing.T) {
 		t.Fatalf("decode first: %v", err)
 	}
 
+	injectPeriodBriefCollectorPackMarkdown(t, ubuntu, periodBriefHarvestPack("ubuntu-second"))
 	injectPeriodBriefCollectorPackMarkdown(t, lijian, periodBriefHarvestPack("lijian-cnc"))
 	second := httptest.NewRecorder()
 	testHandler.CreateNotePeriodBrief(second, newRequest(http.MethodPost, "/api/notes/period-briefs", map[string]any{
@@ -275,11 +276,24 @@ func TestAcceptAddingAnotherComputerPostsInsertCard(t *testing.T) {
 	if err := json.NewDecoder(second.Body).Decode(&secondResp); err != nil {
 		t.Fatalf("decode second: %v", err)
 	}
-	if len(secondResp.CollectorJobs) != 1 || secondResp.CollectorJobs[0].AgentID != lijian {
-		t.Fatalf("only the missing computer should be collected, jobs=%#v", secondResp.CollectorJobs)
+	if len(secondResp.CollectorJobs) != 2 {
+		t.Fatalf("start must re-walk both selected computers, jobs=%#v", secondResp.CollectorJobs)
 	}
-	if !strings.Contains(secondResp.Page.Content, "ubuntu-first") || !strings.Contains(secondResp.Page.Content, "lijian-cnc") {
+	gotJobs := map[string]struct{}{}
+	for _, job := range secondResp.CollectorJobs {
+		gotJobs[job.AgentID] = struct{}{}
+	}
+	if _, ok := gotJobs[ubuntu]; !ok {
+		t.Fatalf("missing ubuntu job: %#v", secondResp.CollectorJobs)
+	}
+	if _, ok := gotJobs[lijian]; !ok {
+		t.Fatalf("missing lijian job: %#v", secondResp.CollectorJobs)
+	}
+	if !strings.Contains(secondResp.Page.Content, "ubuntu-second") || !strings.Contains(secondResp.Page.Content, "lijian-cnc") {
 		t.Fatalf("draft missing both harvests: %s", secondResp.Page.Content)
+	}
+	if strings.Contains(secondResp.Page.Content, "ubuntu-first") {
+		t.Fatalf("prior ubuntu pack must not be reused: %s", secondResp.Page.Content)
 	}
 
 	var resultParts []byte
@@ -297,8 +311,8 @@ LIMIT 1`, secondResp.ChatSessionID).Scan(&resultParts); err != nil {
 }
 
 // TestAcceptFailedAddedComputerKeepsPriorBrief: 「再采集 windows 然后整合」
-// must not replace the official brief with remaining Ubuntu harvest when the
-// added computer fails with no pack.
+// must not replace the official brief when a selected computer fails with no
+// pack, even though every selected computer is re-walked.
 func TestAcceptFailedAddedComputerKeepsPriorBrief(t *testing.T) {
 	periodBriefAcceptSetup(t)
 
@@ -326,6 +340,7 @@ func TestAcceptFailedAddedComputerKeepsPriorBrief(t *testing.T) {
 		t.Fatalf("decode first: %v", err)
 	}
 
+	injectPeriodBriefCollectorPackMarkdown(t, ubuntu, periodBriefHarvestPack("ubuntu-second"))
 	failPeriodBriefCollectorWithoutPack(t, lijian, "No API key configured")
 	second := httptest.NewRecorder()
 	testHandler.CreateNotePeriodBrief(second, newRequest(http.MethodPost, "/api/notes/period-briefs", map[string]any{
@@ -345,8 +360,8 @@ func TestAcceptFailedAddedComputerKeepsPriorBrief(t *testing.T) {
 	if err := json.NewDecoder(second.Body).Decode(&secondResp); err != nil {
 		t.Fatalf("decode second: %v", err)
 	}
-	if len(secondResp.CollectorJobs) != 1 || secondResp.CollectorJobs[0].AgentID != lijian {
-		t.Fatalf("only the missing computer should be collected, jobs=%#v", secondResp.CollectorJobs)
+	if len(secondResp.CollectorJobs) != 2 {
+		t.Fatalf("start must re-walk both selected computers, jobs=%#v", secondResp.CollectorJobs)
 	}
 
 	var resultCount int
@@ -372,7 +387,7 @@ SELECT status FROM note_period_brief_run WHERE chat_session_id = $1 ORDER BY cre
 }
 
 // TestAcceptDroppingAComputerPostsInsertCard: 「把 windows 去掉再整理」
-// rewrites from remaining session harvests and still posts the insert card.
+// re-walks only the remaining selected computers and still posts the insert card.
 func TestAcceptDroppingAComputerPostsInsertCard(t *testing.T) {
 	periodBriefAcceptSetup(t)
 
@@ -401,6 +416,7 @@ func TestAcceptDroppingAComputerPostsInsertCard(t *testing.T) {
 		t.Fatalf("decode first: %v", err)
 	}
 
+	injectPeriodBriefCollectorPackMarkdown(t, ubuntu, periodBriefHarvestPack("ubuntu-only"))
 	second := httptest.NewRecorder()
 	testHandler.CreateNotePeriodBrief(second, newRequest(http.MethodPost, "/api/notes/period-briefs", map[string]any{
 		"window":               "day",
@@ -419,11 +435,14 @@ func TestAcceptDroppingAComputerPostsInsertCard(t *testing.T) {
 	if err := json.NewDecoder(second.Body).Decode(&secondResp); err != nil {
 		t.Fatalf("decode second: %v", err)
 	}
-	if len(secondResp.CollectorJobs) != 0 {
-		t.Fatalf("drop rewrite must not re-walk, jobs=%#v", secondResp.CollectorJobs)
+	if len(secondResp.CollectorJobs) != 1 || secondResp.CollectorJobs[0].AgentID != ubuntu {
+		t.Fatalf("drop must re-walk only the remaining computer, jobs=%#v", secondResp.CollectorJobs)
 	}
-	if strings.Contains(secondResp.Page.Content, "lijian-cnc") {
-		t.Fatalf("dropped harvest leaked: %s", secondResp.Page.Content)
+	if !strings.Contains(secondResp.Page.Content, "ubuntu-only") {
+		t.Fatalf("remaining computer must be re-harvested: %s", secondResp.Page.Content)
+	}
+	if strings.Contains(secondResp.Page.Content, "lijian-cnc") || strings.Contains(secondResp.Page.Content, "ubuntu-keep") {
+		t.Fatalf("dropped / prior harvest leaked: %s", secondResp.Page.Content)
 	}
 
 	var resultParts []byte

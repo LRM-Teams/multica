@@ -11,8 +11,9 @@ import (
 )
 
 // notePeriodBriefCollectorRef is durable per-collector state for one Brief run.
-// PackMarkdown is the implicit collector artifact (not a Notes page). Cleared
-// when the run reaches status=done after synthesis wake.
+// PackMarkdown is the implicit collector artifact (not a Notes page). Kept
+// after synthesis so a later collect in the same bubble session can reuse
+// computers that were not re-selected.
 type notePeriodBriefCollectorRef struct {
 	AgentID      string `json:"agent_id"`
 	PackPageID   string `json:"pack_page_id,omitempty"` // legacy; unused for new runs
@@ -306,6 +307,9 @@ func jobsFromCollectorRefs(refs []notePeriodBriefCollectorRef, draftPageID strin
 	out := make([]NoteWorkerJobResponse, 0, len(refs))
 	draftPageID = strings.TrimSpace(draftPageID)
 	for _, ref := range refs {
+		if periodBriefPackIsCarried(ref) {
+			continue
+		}
 		pageID := draftPageID
 		if pageID == "" {
 			pageID = strings.TrimSpace(ref.PackPageID) // legacy runs

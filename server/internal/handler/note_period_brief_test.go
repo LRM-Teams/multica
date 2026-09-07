@@ -54,6 +54,33 @@ WHERE status = 'collecting'
 	}()
 }
 
+func failPeriodBriefCollectorWithoutPack(t *testing.T, collectorAgentID, reason string) {
+	t.Helper()
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		close(stop)
+		<-done
+	})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			_, _ = testPool.Exec(context.Background(), `
+UPDATE agent_inbox_event e
+SET status = 'acked', terminal_outcome = 'failed', failure_reason = $2,
+    error = $2, started_at = COALESCE(started_at, now()), completed_at = now(), acked_at = now()
+FROM note_worker_job j
+WHERE j.task_id = e.id AND j.agent_id = $1::uuid AND e.status <> 'acked'`, collectorAgentID, reason)
+			time.Sleep(40 * time.Millisecond)
+		}
+	}()
+}
+
 func TestCreateNotePeriodBriefRejectsEmptyCollectors(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

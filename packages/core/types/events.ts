@@ -112,7 +112,8 @@ export type WSEventType =
   | "research_session:status_changed"
   | "research_session:product_round"
   | "research_projection_v6:delta"
-  | "notes:share_unread";
+  | "notes:share_unread"
+  | "notes:period_brief_plan";
 
 export interface WSMessage<T = unknown> {
   type: WSEventType;
@@ -660,6 +661,7 @@ export interface WSEventPayloadMap {
     delta?: unknown;
   };
   "notes:share_unread": { page_id?: string };
+  "notes:period_brief_plan": { chat_session_id?: string; plan?: unknown };
 }
 
 /**

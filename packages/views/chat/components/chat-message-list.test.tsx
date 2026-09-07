@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChatMessage } from "@multica/core/types";
+import type { ChatMessage, ChatPendingTask } from "@multica/core/types";
 import { renderWithI18n } from "../../test/i18n";
 import { ChatMessageList } from "./chat-message-list";
 
@@ -45,7 +45,15 @@ function message(partial: Pick<ChatMessage, "id" | "role" | "content" | "created
   };
 }
 
-function renderList(messages: ChatMessage[]) {
+function renderList(
+  messages: ChatMessage[],
+  trailingSlot?: ReactNode,
+  afterMessage?: (message: ChatMessage) => ReactNode,
+  extras?: {
+    pendingTask?: ChatPendingTask | null;
+    workingIndicator?: boolean;
+  },
+) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -55,9 +63,12 @@ function renderList(messages: ChatMessage[]) {
         <ChatMessageList
           sessionId="s1"
           messages={messages}
-          pendingTask={null}
+          pendingTask={extras?.pendingTask ?? null}
           availability={undefined}
           hoverMessageActions
+          trailingSlot={trailingSlot}
+          afterMessage={afterMessage}
+          workingIndicator={extras?.workingIndicator}
         />
       </div>
     </QueryClientProvider>,
@@ -142,5 +153,96 @@ describe("ChatMessageList timestamps", () => {
     expect(dividers).toHaveLength(2);
     expect(dividers[0]).toHaveTextContent("Yesterday");
     expect(dividers[1]).toHaveTextContent("Today");
+  });
+});
+
+describe("ChatMessageList trailing slot", () => {
+  it("embeds a transcript accessory after the last message", () => {
+    renderList(
+      [
+        message({
+          id: "a1",
+          role: "assistant",
+          content: "先选时间和电脑。",
+          created_at: "2026-09-01T11:00:00.000Z",
+        }),
+      ],
+      <div data-testid="period-brief-compose">scope</div>,
+    );
+    expect(screen.getByText("先选时间和电脑。")).toBeTruthy();
+    expect(screen.getByTestId("period-brief-compose")).toHaveTextContent("scope");
+  });
+
+  it("still shows a transcript accessory on an empty thread", () => {
+    renderList([], <div data-testid="period-brief-compose">scope</div>);
+    expect(screen.getByTestId("period-brief-compose")).toHaveTextContent("scope");
+  });
+
+  it("embeds a card under the compose message", () => {
+    renderList(
+      [
+        message({
+          id: "a1",
+          role: "assistant",
+          content: "先选时间和电脑。",
+          created_at: "2026-09-01T11:00:00.000Z",
+        }),
+      ],
+      undefined,
+      (msg) =>
+        msg.id === "a1" ? <div data-testid="period-brief-compose">under-a1</div> : null,
+    );
+    expect(screen.getByTestId("period-brief-compose")).toHaveTextContent("under-a1");
+  });
+});
+
+describe("ChatMessageList working indicator", () => {
+  it("keeps the thinking pill after the assistant already replied", () => {
+    renderList(
+      [
+        message({
+          id: "a1",
+          role: "assistant",
+          content: "已派出采集员。",
+          created_at: "2026-09-01T11:00:00.000Z",
+        }),
+      ],
+      undefined,
+      undefined,
+      { workingIndicator: true },
+    );
+    expect(screen.getByTestId("chat-status-pill")).toHaveTextContent("Thinking");
+  });
+
+  it("hides the thinking pill after the assistant replied with no work in flight", () => {
+    renderList([
+      message({
+        id: "a1",
+        role: "assistant",
+        content: "已派出采集员。",
+        created_at: "2026-09-01T11:00:00.000Z",
+      }),
+    ]);
+    expect(screen.queryByTestId("chat-status-pill")).toBeNull();
+  });
+
+  it("shows one thinking pill when a pending turn overlaps a working lock", () => {
+    renderList(
+      [
+        message({
+          id: "u1",
+          role: "user",
+          content: "开始采集",
+          created_at: "2026-09-01T11:00:00.000Z",
+        }),
+      ],
+      undefined,
+      undefined,
+      {
+        pendingTask: { pending: true, status: "running", created_at: "2026-09-01T11:00:01.000Z" },
+        workingIndicator: true,
+      },
+    );
+    expect(screen.getAllByTestId("chat-status-pill")).toHaveLength(1);
   });
 });

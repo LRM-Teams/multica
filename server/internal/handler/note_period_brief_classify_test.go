@@ -140,8 +140,32 @@ func TestPeriodBriefCollectorNeedsAssistantRetryOnce(t *testing.T) {
 	}
 	if got := periodBriefMaterialsProgressCopy([]notePeriodBriefPackResult{
 		{Status: "failed", Retryable: true, RetryCount: 1},
-	}); !strings.Contains(got, "没有采到可用材料") {
+	}); !strings.Contains(got, "正式稿没有更新") {
 		t.Fatalf("final failure copy = %q", got)
+	}
+	if got := periodBriefMaterialsProgressCopy([]notePeriodBriefPackResult{
+		{Status: "ready"},
+		{Status: "failed", Retryable: false, RetryCount: 1},
+	}); !strings.Contains(got, "正式稿没有更新") {
+		t.Fatalf("partial harvest after a failed computer must not pretend all materials arrived: %q", got)
+	}
+	if strings.Contains(periodBriefMaterialsProgressCopy([]notePeriodBriefPackResult{
+		{Status: "ready"},
+		{Status: "failed", Retryable: false, RetryCount: 1},
+	}), "收到了所有需要的材料") {
+		t.Fatal("must not say all materials arrived when a selected computer failed")
+	}
+	if !periodBriefOfficialBriefBlocked([]notePeriodBriefPackResult{
+		{Status: "ready"},
+		{Status: "failed", Retryable: false, RetryCount: 0},
+	}) {
+		t.Fatal("a failed selected computer must block the official brief")
+	}
+	if periodBriefOfficialBriefBlocked([]notePeriodBriefPackResult{
+		{Status: "ready"},
+		{Status: "empty", Retryable: false, RetryCount: 0},
+	}) {
+		t.Fatal("a clean empty harvest is a received result, not a failed computer")
 	}
 	if got := periodBriefMaterialsProgressCopy(nil); !strings.Contains(got, "没有派出采集员") {
 		t.Fatalf("empty plan copy = %q", got)

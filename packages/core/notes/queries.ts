@@ -13,6 +13,8 @@ export const noteKeys = {
     [...noteKeys.all(wsId), "writebacks", pageId, status ?? "all"] as const,
   periodBriefActive: (wsId: string, pageId: string) =>
     [...noteKeys.all(wsId), "period-brief-active", pageId] as const,
+  periodBriefPlan: (wsId: string, sessionId: string) =>
+    [...noteKeys.all(wsId), "period-brief-plan", sessionId] as const,
 };
 
 export function noteShareUnreadCountOptions(wsId: string) {
@@ -129,6 +131,14 @@ export function notePeriodBriefActiveOptions(wsId: string, pageId: string) {
         ? 4_000
         : false;
     },
+  });
+}
+
+export function notePeriodBriefPlanOptions(wsId: string, sessionId: string) {
+  return queryOptions({
+    queryKey: noteKeys.periodBriefPlan(wsId, sessionId),
+    queryFn: () => api.getNotePeriodBriefPlan(sessionId),
+    enabled: !!wsId && !!sessionId,
   });
 }
 

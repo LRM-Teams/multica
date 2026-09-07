@@ -57,6 +57,67 @@ describe("ApiClient", () => {
     );
   });
 
+  it("reads and writes the bubble session 写汇报 plan", async () => {
+    const plan = {
+      window: "week",
+      date: "2026-09-03",
+      start_date: "",
+      end_date: "",
+      collector_agent_ids: ["collector-1"],
+      focus: "只要 ubuntu",
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ plan: null }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ plan }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.getNotePeriodBriefPlan("sess-1")).resolves.toEqual({ plan: null });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.test/api/notes/period-briefs/plan?chat_session_id=sess-1",
+      expect.anything(),
+    );
+    await expect(
+      client.putNotePeriodBriefPlan({
+        chat_session_id: "sess-1",
+        window: "week",
+        collector_agent_ids: ["collector-1"],
+        focus: "只要 ubuntu",
+      }),
+    ).resolves.toEqual({ plan });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.test/api/notes/period-briefs/plan",
+      expect.objectContaining({ method: "PUT" }),
+    );
+  });
+
+  it("deletes the bubble session 写汇报 plan", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ plan: null }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.deleteNotePeriodBriefPlan("sess-1")).resolves.toEqual({ plan: null });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.test/api/notes/period-briefs/plan?chat_session_id=sess-1",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+  });
+
   it("updates multiple Agent runtime configs with one request", async () => {
     const response = { updated_agent_ids: ["agent-1", "agent-2"] };
     const fetchMock = vi.fn().mockResolvedValue(

@@ -220,6 +220,12 @@ interface ContentEditorRef {
   insertIssueReference: (attrs: { id: string; label: string }) => void;
   insertRunReference: (attrs: { id: string; label: string; agentId?: string | null }) => void;
   /**
+   * Replace the document with markdown from an external write (insert-below,
+   * writeback accept). Bypasses the dirty defaultValue guard so a pending
+   * debounce cannot keep showing the pre-insert body.
+   */
+  setMarkdown: (markdown: string) => void;
+  /**
    * Open the in-note Editor AI prompt (S3-A4). Uses the current empty paragraph
    * when possible; otherwise appends one at the end. Returns false when page AI
    * is not wired.
@@ -230,6 +236,12 @@ interface ContentEditorRef {
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
+
+type MarkdownEmitEditor = {
+  isDestroyed: boolean;
+  view: { composing: boolean };
+  getMarkdown: () => string;
+};
 
 const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
   function ContentEditor(
@@ -293,6 +305,27 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
     );
     const fetchMentionCandidatesRef = useRef(fetchMentionCandidates ?? null);
     const lastEmittedRef = useRef<string | null>(null);
+    const markdownEmitEditorRef = useRef<MarkdownEmitEditor | null>(null);
+    const scheduleMarkdownEmitRef = useRef<(ed: MarkdownEmitEditor) => void>(() => {});
+    scheduleMarkdownEmitRef.current = (ed) => {
+      if (!onUpdateRef.current || ed.isDestroyed) return;
+      const fire = () => {
+        // Pinyin (and other IME buffers) lives in the doc during composition.
+        // Emitting it lets notes autosave echo it into React Query; Space then
+        // commits 汉字 and reconcile concatenates the stale pinyin after it.
+        if (ed.isDestroyed || ed.view.composing) return;
+        const md = stripBlobUrls(ed.getMarkdown()).trimEnd();
+        if (md === lastEmittedRef.current) return;
+        lastEmittedRef.current = md;
+        onUpdateRef.current?.(md);
+      };
+      if (debounceMs <= 0) {
+        fire();
+        return;
+      }
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(fire, debounceMs);
+    };
 
     // In-session record of attachments freshly uploaded through this editor.
     // Surfaces (like the quick-create modal) that don't have a server-supplied
@@ -387,6 +420,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       // Explicit for clarity — the real perf win is useEditorState in BubbleMenu.
       shouldRerenderOnTransaction: false,
       onCreate: ({ editor: ed }) => {
+        markdownEmitEditorRef.current = ed;
         // For large docs we mount empty (below) and parse in chunks here, so the
         // O(n²) marked tokenizer never sees the whole document at once.
         if (mountChunked) {
@@ -437,21 +471,8 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
         enableTextStyles,
       }),
       onUpdate: ({ editor: ed }) => {
-        if (!onUpdateRef.current) return;
-        const emitUpdate = () => {
-          const md = stripBlobUrls(ed.getMarkdown()).trimEnd();
-          if (md === lastEmittedRef.current) return;
-          lastEmittedRef.current = md;
-          onUpdateRef.current?.(md);
-        };
-        if (debounceMs <= 0) {
-          emitUpdate();
-          return;
-        }
-        if (debounceRef.current) clearTimeout(debounceRef.current);
-        debounceRef.current = setTimeout(() => {
-          emitUpdate();
-        }, debounceMs);
+        markdownEmitEditorRef.current = ed;
+        scheduleMarkdownEmitRef.current(ed);
       },
       onBlur: () => {
         onBlurRef.current?.();
@@ -492,6 +513,16 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
           return true;
         },
         handleDOMEvents: {
+          compositionend() {
+            const ed = markdownEmitEditorRef.current;
+            if (!ed) return false;
+            const emit = () => scheduleMarkdownEmitRef.current(ed);
+            // ProseMirror may still have composing=true for this event; flush
+            // after it clears so the committed 汉字 (not pinyin) is emitted.
+            if (ed.view.composing) queueMicrotask(emit);
+            else emit();
+            return false;
+          },
           click(_view, event) {
             const target = event.target as HTMLElement;
             // Skip links inside NodeView wrappers — they handle their own clicks
@@ -567,19 +598,6 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       const isDirty =
         lastEmittedRef.current !== null && current !== lastEmittedRef.current;
 
-      // Guard 1: focused AND dirty — protect bytes the user is actively
-      // typing. Focused-but-clean falls through: applying setContent is safe
-      // (no user input to lose) and necessary, because onBlur has no replay
-      // mechanism and a focused clean editor would otherwise drop this sync
-      // permanently.
-      if (editor.isFocused && isDirty) return;
-
-      // Guard 2: unfocused-but-dirty — blur happened but the debounce window
-      // (debounceMs, 1500ms for description) hasn't flushed yet. The pending
-      // onUpdate will reach the server and the cache will reconcile; skipping
-      // here avoids overwriting unsaved local edits.
-      if (isDirty) return;
-
       const incoming = defaultValue
         ? preprocessMarkdown(defaultValue, { linkify: !plainUrls })
         : "";
@@ -587,6 +605,13 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       // Guard 3: normalized-equal short-circuit. Avoids a no-op transaction
       // when the cache reflects a write this same editor just emitted.
       if (incomingNormalized === current) return;
+
+      const isRemoteAppend =
+        incomingNormalized.startsWith(current) && incomingNormalized !== current;
+      // Guard 1/2: dirty local bytes. A remote *append* (insert-below) is the
+      // exception — the open note must show what the user just confirmed, and
+      // the incoming string already includes the local prefix.
+      if (isDirty && !isRemoteAppend) return;
 
       // Guard 4: `emitUpdate: false`. Tiptap v3's setContent defaults to
       // `emitUpdate: true`; without this we would re-trigger onUpdate →
@@ -712,6 +737,38 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
           return;
         }
         editor.chain().focus().insertContentAt({ from, to }, content).run();
+      },
+      setMarkdown: (markdown: string) => {
+        if (!editor || editor.isDestroyed) return;
+        const incoming = markdown
+          ? preprocessMarkdown(markdown, { linkify: !plainUrls })
+          : "";
+        const incomingNormalized = stripBlobUrls(incoming).trimEnd();
+        const current = stripBlobUrls(editor.getMarkdown()).trimEnd();
+        if (incomingNormalized === current) return;
+        const { from, to } = editor.state.selection;
+        const manager =
+          incoming.length > MARKDOWN_CHUNK_THRESHOLD
+            ? (editor.storage as { markdown?: { manager?: MarkdownManagerLike } })
+                .markdown?.manager
+            : undefined;
+        if (manager) {
+          editor.commands.setContent(parseMarkdownChunked(manager, incoming), {
+            emitUpdate: false,
+          });
+        } else {
+          editor.commands.setContent(incoming, {
+            emitUpdate: false,
+            contentType: "markdown",
+          });
+        }
+        applyTableColwidthsFromMarkdown(editor, incoming);
+        const docSize = editor.state.doc.content.size;
+        editor.commands.setTextSelection({
+          from: Math.min(from, docSize),
+          to: Math.min(to, docSize),
+        });
+        lastEmittedRef.current = stripBlobUrls(editor.getMarkdown()).trimEnd();
       },
       openPageAI: () => {
         if (!editor || !onEditPageWithAIRef.current) return false;

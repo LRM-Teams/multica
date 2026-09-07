@@ -95,6 +95,12 @@ func TestLooksLikePeriodBriefRequest(t *testing.T) {
 	if !looksLikePeriodBriefRequest("帮我写汇报") {
 		t.Fatal("expected 写汇报 intent")
 	}
+	if !looksLikePeriodBriefRequest("帮我写个周报") {
+		t.Fatal("expected spoken weekly-report ask")
+	}
+	if !looksLikePeriodBriefRequest("写汇报") {
+		t.Fatal("expected satellite 写汇报 ask")
+	}
 	if !looksLikePeriodBriefRequest("Write report") {
 		t.Fatal("expected satellite Write report intent")
 	}
@@ -106,21 +112,6 @@ func TestLooksLikePeriodBriefRequest(t *testing.T) {
 	}
 	if looksLikePeriodBriefRequest("I want to report a bug") {
 		t.Fatal("ordinary English report should not start 写汇报")
-	}
-}
-
-func TestParsePeriodBriefIntakeWindowAndCollectors(t *testing.T) {
-	kind, date, _, _, ok := parsePeriodBriefIntakeWindow("先写本周的", "2026-08-21")
-	if !ok || kind != "week" || date != "2026-08-21" {
-		t.Fatalf("window = %s %s ok=%v", kind, date, ok)
-	}
-	owned := []periodBriefOwnedCollector{{ID: "c1", Label: "采集 · Laptop A"}}
-	ids, ok := parsePeriodBriefIntakeCollectors("本周，全部", owned)
-	if !ok || len(ids) != 1 || ids[0] != "c1" {
-		t.Fatalf("collectors = %#v ok=%v", ids, ok)
-	}
-	if got := periodBriefIntakeFocus("本周，全部", owned); got != "" {
-		t.Fatalf("window+computers answer should not be focus, got %q", got)
 	}
 }
 
@@ -360,13 +351,22 @@ WHERE chat_session_id = $1`, resp.ChatSessionID).Scan(&joined); err != nil {
 	}
 	for _, want := range []string{
 		"user:写汇报",
-		"我将让",
-		"先采集信息",
 		"我已经将任务分派给",
 		"汇报稿整理完成了",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("transcript missing %q:\n%s", want, joined)
+		}
+	}
+	for _, banned := range []string{
+		"我将让",
+		"先采集信息",
+		"<period_brief_started",
+		"<period_brief_start",
+		"<period_brief_compose",
+	} {
+		if strings.Contains(joined, banned) {
+			t.Fatalf("transcript still has canned start copy %q:\n%s", banned, joined)
 		}
 	}
 
@@ -494,7 +494,8 @@ RETURNING id`, testWorkspaceID, testUserID, "Source page "+uuid.NewString()[:8],
 	if err := testPool.QueryRow(context.Background(), `
 SELECT parts::text
 FROM chat_message
-WHERE chat_session_id = $1 AND role = 'assistant' AND content LIKE '刚刚收到了%'
+WHERE chat_session_id = $1 AND role = 'assistant' AND parts::text LIKE '%note_brief%'
+  AND parts::text LIKE '%harvested pending proposal%'
 ORDER BY created_at DESC
 LIMIT 1`, created.ChatSessionID).Scan(&packParts); err != nil {
 		t.Fatalf("load pack parts: %v", err)
@@ -557,7 +558,84 @@ SELECT result_page_id::text, result_mode FROM note_period_brief_run WHERE id = $
 	}
 }
 
-func TestNoteBubbleChatLeavesIntentTextToAssistant(t *testing.T) {
+func TestInsertNotePeriodBriefOntoChosenPage(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	sourcePageID := insertPeriodBriefFixtureDraft(t, "Issuing")
+	targetPageID := insertPeriodBriefFixtureDraft(t, "Other note")
+	if _, err := testPool.Exec(context.Background(), `
+UPDATE note_page SET content = 'Keep me' WHERE id = $1`, targetPageID); err != nil {
+		t.Fatalf("seed target: %v", err)
+	}
+	draftID := insertPeriodBriefFixtureDraft(t, "awaiting draft")
+	folderID := insertPeriodBriefFixtureDraft(t, "工作介绍")
+	synthID := createHandlerTestAgent(t, "Insert Target Synth "+uuid.NewString()[:8], nil)
+	runID := insertPeriodBriefFixtureRun(t, sourcePageID, folderID, synthID, draftID, "awaiting_confirm", time.Now())
+
+	req := newRequest(http.MethodPost, "/api/notes/period-briefs/"+runID+"/insert", map[string]any{
+		"mode":           "append",
+		"target_page_id": targetPageID,
+	})
+	req = withURLParam(req, "runId", runID)
+	rec := httptest.NewRecorder()
+	testHandler.InsertNotePeriodBrief(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("insert onto chosen page = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var targetContent string
+	if err := testPool.QueryRow(context.Background(), `
+SELECT content FROM note_page WHERE id = $1`, targetPageID).Scan(&targetContent); err != nil {
+		t.Fatalf("load target: %v", err)
+	}
+	if !strings.Contains(targetContent, "Keep me") || !strings.Contains(targetContent, "## ") {
+		t.Fatalf("chosen page should keep its body and gain a section:\n%s", targetContent)
+	}
+
+	var sourceContent string
+	if err := testPool.QueryRow(context.Background(), `
+SELECT content FROM note_page WHERE id = $1`, sourcePageID).Scan(&sourceContent); err != nil {
+		t.Fatalf("load source: %v", err)
+	}
+	if strings.Contains(sourceContent, "## ") {
+		t.Fatalf("issuing page should stay unchanged:\n%s", sourceContent)
+	}
+
+	var resultPageID, resultMode string
+	if err := testPool.QueryRow(context.Background(), `
+SELECT result_page_id::text, result_mode FROM note_period_brief_run WHERE id = $1`, runID).Scan(&resultPageID, &resultMode); err != nil {
+		t.Fatalf("load insert result: %v", err)
+	}
+	if resultPageID != targetPageID || resultMode != "append" {
+		t.Fatalf("insert result = %s/%s, want append onto %s", resultMode, resultPageID, targetPageID)
+	}
+
+	missing := newRequest(http.MethodPost, "/api/notes/period-briefs/"+runID+"/insert", map[string]any{
+		"mode":           "child",
+		"target_page_id": uuid.NewString(),
+	})
+	missing = withURLParam(missing, "runId", runID)
+	missingRec := httptest.NewRecorder()
+	testHandler.InsertNotePeriodBrief(missingRec, missing)
+	if missingRec.Code != http.StatusNotFound {
+		t.Fatalf("unknown target = %d, want 404: %s", missingRec.Code, missingRec.Body.String())
+	}
+
+	bad := newRequest(http.MethodPost, "/api/notes/period-briefs/"+runID+"/insert", map[string]any{
+		"mode":           "append",
+		"target_page_id": "not-a-uuid",
+	})
+	bad = withURLParam(bad, "runId", runID)
+	badRec := httptest.NewRecorder()
+	testHandler.InsertNotePeriodBrief(badRec, bad)
+	if badRec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid target = %d, want 400: %s", badRec.Code, badRec.Body.String())
+	}
+}
+
+func TestNoteBubbleChatOpensPlanCardOnWriteReportAsk(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -581,8 +659,8 @@ UPDATE chat_session SET context_note_page_id = $2 WHERE id = $1`, sessionID, sou
 	}
 
 	ask := sendNoteBubbleChat(t, sessionID, "帮我写汇报")
-	if !ask.Pending {
-		t.Fatal("declined-or-unconfirmed 写汇报 text should wake the notes assistant")
+	if ask.Pending {
+		t.Fatal("写汇报 must open the plan card on the platform path, not wake the notes assistant")
 	}
 	var joined string
 	if err := testPool.QueryRow(context.Background(), `
@@ -593,8 +671,8 @@ FROM chat_message WHERE chat_session_id = $1`, sessionID).Scan(&joined); err != 
 	if !strings.Contains(joined, "帮我写汇报") {
 		t.Fatalf("user text should stay in the transcript:\n%s", joined)
 	}
-	if strings.Contains(joined, "时间") || strings.Contains(joined, "电脑") {
-		t.Fatalf("chat must not start spoken intake:\n%s", joined)
+	if !strings.Contains(joined, "开始采集") {
+		t.Fatalf("platform must ask the human to confirm on the plan card:\n%s", joined)
 	}
 	var runCount int
 	if err := testPool.QueryRow(context.Background(), `
@@ -602,15 +680,16 @@ SELECT count(*) FROM note_period_brief_run WHERE chat_session_id = $1`, sessionI
 		t.Fatalf("count runs: %v", err)
 	}
 	if runCount != 0 {
-		t.Fatalf("intent text must not start a run, runs = %d", runCount)
+		t.Fatalf("写汇报 ask must not start a run, runs = %d", runCount)
 	}
 	var promptCount int
 	if err := testPool.QueryRow(context.Background(), `
-SELECT count(*) FROM note_period_brief_prompt WHERE chat_session_id = $1`, sessionID).Scan(&promptCount); err != nil {
+SELECT count(*) FROM note_period_brief_prompt
+WHERE chat_session_id = $1 AND status = 'clarifying'`, sessionID).Scan(&promptCount); err != nil {
 		t.Fatalf("count prompts: %v", err)
 	}
-	if promptCount != 0 {
-		t.Fatalf("intent text must not open an intake prompt, prompts = %d", promptCount)
+	if promptCount != 1 {
+		t.Fatalf("写汇报 ask must open one clarifying plan, prompts = %d", promptCount)
 	}
 }
 
@@ -659,11 +738,20 @@ RETURNING id`, testWorkspaceID, testUserID, "Retry page "+uuid.NewString()[:8]).
 	}
 
 	joined := loadPeriodBriefBubbleTranscript(t, created.ChatSessionID)
-	if !strings.Contains(joined, "再发起一次采集") {
-		t.Fatalf("first stall must wait for the Notes Assistant retry:\n%s", joined)
+	if strings.Contains(joined, "再发起一次采集") || strings.Contains(joined, "收到了所有需要的材料") {
+		t.Fatalf("platform must not post canned progress; wake the assistant instead:\n%s", joined)
 	}
 	if strings.Contains(joined, "汇报稿整理完成了") {
 		t.Fatalf("must not finish the Brief before the assistant retry:\n%s", joined)
+	}
+	var bubbleWakes int
+	if err := testPool.QueryRow(context.Background(), `
+SELECT count(*) FROM agent_inbox_event
+WHERE chat_session_id = $1 AND force_fresh_session = false`, created.ChatSessionID).Scan(&bubbleWakes); err != nil {
+		t.Fatalf("count progress wakes: %v", err)
+	}
+	if bubbleWakes < 1 {
+		t.Fatal("first stall must wake the Notes Assistant on the bubble session")
 	}
 
 	retryReq := withURLParam(withAgentCredentialPrincipal(
@@ -685,12 +773,20 @@ RETURNING id`, testWorkspaceID, testUserID, "Retry page "+uuid.NewString()[:8]).
 
 	deadline := time.Now().Add(5 * time.Second)
 	for {
+		var status string
+		if err := testPool.QueryRow(context.Background(), `
+SELECT status FROM note_period_brief_run WHERE draft_page_id = $1`, created.Page.ID).Scan(&status); err != nil {
+			t.Fatalf("load run status: %v", err)
+		}
 		joined = loadPeriodBriefBubbleTranscript(t, created.ChatSessionID)
 		if strings.Contains(joined, "汇报稿整理完成了") {
+			t.Fatalf("a failed collect must not post an official brief:\n%s", joined)
+		}
+		if status == "cancelled" {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("after one assistant retry the collector result is final:\n%s", joined)
+			t.Fatalf("after one assistant retry with no pack, want cancelled, got %s:\n%s", status, joined)
 		}
 		time.Sleep(40 * time.Millisecond)
 	}

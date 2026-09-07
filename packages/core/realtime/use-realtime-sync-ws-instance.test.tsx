@@ -660,6 +660,92 @@ describe("useRealtimeSync — ws instance change", () => {
     unmount();
     expect(productRoundUnsubscribe).toHaveBeenCalledTimes(1);
   });
+
+  it("refetches the 写汇报 plan when the assistant turn finishes", () => {
+    const ws = createMockWs();
+    renderHook(() => useRealtimeSync(ws, stores), {
+      wrapper: createWrapper(qc),
+    });
+    const chatDoneHandler = (ws.on as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([eventName]) => eventName === "chat:done",
+    )?.[1] as ((payload: unknown) => void) | undefined;
+    expect(chatDoneHandler).toBeDefined();
+
+    invalidateSpy.mockClear();
+    chatDoneHandler?.({
+      chat_session_id: "sess-1",
+      task_id: "task-1",
+      message_id: "msg-1",
+      content: "我已经创建了这次周报的采集计划卡",
+      elapsed_ms: 10,
+      created_at: "2026-09-04T00:00:00Z",
+    });
+
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: noteKeys.periodBriefPlan("ws-1", "sess-1"),
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: [...noteKeys.all("ws-1"), "period-brief-active"],
+    });
+  });
+
+  it("applies a notes:period_brief_plan payload onto the session plan cache", () => {
+    const ws = createMockWs();
+    renderHook(() => useRealtimeSync(ws, stores), {
+      wrapper: createWrapper(qc),
+    });
+    const planHandler = (ws.on as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([eventName]) => eventName === "notes:period_brief_plan",
+    )?.[1] as ((payload: unknown) => void) | undefined;
+    expect(planHandler).toBeDefined();
+
+    qc.setQueryData(noteKeys.periodBriefPlan("ws-1", "sess-1"), { plan: null });
+    planHandler?.({
+      chat_session_id: "sess-1",
+      plan: {
+        window: "week",
+        date: "2026-09-04",
+        start_date: "",
+        end_date: "",
+        collector_agent_ids: [],
+        focus: "",
+      },
+    });
+
+    expect(qc.getQueryData(noteKeys.periodBriefPlan("ws-1", "sess-1"))).toEqual({
+      plan: {
+        window: "week",
+        date: "2026-09-04",
+        start_date: "",
+        end_date: "",
+        collector_agent_ids: [],
+        focus: "",
+      },
+    });
+  });
+
+  it("refetches the page lock when start consumes the 写汇报 plan card", () => {
+    const ws = createMockWs();
+    renderHook(() => useRealtimeSync(ws, stores), {
+      wrapper: createWrapper(qc),
+    });
+    const planHandler = (ws.on as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([eventName]) => eventName === "notes:period_brief_plan",
+    )?.[1] as ((payload: unknown) => void) | undefined;
+    expect(planHandler).toBeDefined();
+
+    qc.setQueryData(noteKeys.periodBriefPlan("ws-1", "sess-1"), {
+      plan: { window: "week", collector_agent_ids: ["c1"] },
+    });
+    qc.setQueryData(noteKeys.periodBriefActive("ws-1", "page-1"), { run: null });
+    invalidateSpy.mockClear();
+    planHandler?.({ chat_session_id: "sess-1", plan: null });
+
+    expect(qc.getQueryData(noteKeys.periodBriefPlan("ws-1", "sess-1"))).toEqual({ plan: null });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: [...noteKeys.all("ws-1"), "period-brief-active"],
+    });
+  });
 });
 
 function channelMessage(

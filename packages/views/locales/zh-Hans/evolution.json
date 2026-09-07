@@ -322,5 +322,10 @@
   "graphHealthRecallErrors": "召回错误",
   "graphHealthOutboxFailed": "奖励投递失败",
   "graphHealthDiveFailed": "Dive 任务失败",
-  "graphHealthClean": "过去 24 小时账本无失败"
+  "graphHealthClean": "过去 24 小时账本无失败",
+  "modelEvaluationRuns": "模型评测运行",
+  "modelEvaluationRunsHint": "最近的离线、影子或 canary 模型评测。这不是 Graph Memory 或 PAST-Bench 用量。",
+  "modelEvaluationRunsEmpty": "暂无模型评测记录。",
+  "modelEvaluationExamples": "{count} 个样例",
+  "modelEvaluationMetricsUnavailable": "指标不可用"
 }

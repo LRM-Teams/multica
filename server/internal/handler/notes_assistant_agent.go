@@ -19,8 +19,8 @@ const (
 	notesAssistantAgentName        = "notes-assistant"
 	notesAssistantAgentDisplayName = "笔记助手"
 	notesAssistantAgentTemplate    = "notes-assistant"
-	// Detects personas that predate selective-read wake contract.
-	notesAssistantInstructionsCapabilityMarker = "Period Brief collect-plan wake"
+	// Detects personas that still teach chat XML as 写汇报 dispatch.
+	notesAssistantInstructionsCapabilityMarker = "Period Brief card owns collect scope"
 )
 
 // EnsureNotesAssistantAgentResponse is returned by POST /api/agents/notes-assistant.

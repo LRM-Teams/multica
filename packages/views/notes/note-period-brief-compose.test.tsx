@@ -224,22 +224,31 @@ describe("NotePeriodBriefCompose", () => {
     });
   });
 
-  it("lets typed text override conflicting chip selections", async () => {
-    const { onResolvedChange } = renderCompose({ text: "只采集 Cloud Box 的本月" });
+  it("reads window, computers, and focus from the session plan, not typed overlay", async () => {
+    const { onResolvedChange } = renderCompose({
+      text: "只采集 Cloud Box 的本月",
+      plan: {
+        window: "week",
+        date: "2026-09-03",
+        collector_agent_ids: ["collector-a"],
+        focus: "只要 ubuntu",
+      },
+    });
     await waitFor(() => {
-      expect(screen.getByTestId("period-brief-collector-collector-b")).toBeTruthy();
+      expect(screen.getByTestId("period-brief-collector-collector-a")).toBeTruthy();
     });
     await waitFor(() => {
       expect(onResolvedChange).toHaveBeenCalledWith(
         expect.objectContaining({
           request: expect.objectContaining({
-            window: "month",
-            collector_ids: ["collector-b"],
-            focus: "只采集 Cloud Box 的本月",
+            window: "week",
+            collector_ids: ["collector-a"],
+            focus: "只要 ubuntu",
           }),
         }),
       );
     });
+    expect(screen.getByTestId("period-brief-window-week").getAttribute("class")).toContain("bg-primary");
   });
 
   it("reminds about a computer with no collector without blocking the rest", async () => {
@@ -255,12 +264,14 @@ describe("NotePeriodBriefCompose", () => {
       expect(onResolvedChange).toHaveBeenCalledWith(
         expect.objectContaining({
           canSubmit: true,
+          unconstrained: true,
           request: expect.objectContaining({
             collector_ids: expect.arrayContaining(["collector-a", "collector-b"]),
           }),
         }),
       );
     });
+    expect(screen.queryByTestId("period-brief-scope-all")).toBeNull();
     const missing = screen.getByTestId("period-brief-collector-missing-local:pc-daemon-cccc");
     await user.click(within(missing).getByTestId("period-brief-collector-missing-configure"));
     expect(onConfigureCollector).toHaveBeenCalledWith(
@@ -295,6 +306,15 @@ describe("NotePeriodBriefCompose", () => {
     expect(waiting).toHaveTextContent("还没有运行时");
   });
 
+  it("greys out a spent card and keeps it visible", () => {
+    renderCompose({ disabled: true, onCancel: vi.fn(), onStart: vi.fn() });
+    const card = screen.getByTestId("period-brief-compose");
+    expect(card).toHaveAttribute("data-spent", "true");
+    expect(card.className).toContain("opacity-60");
+    expect(screen.queryByTestId("period-brief-cancel")).toBeNull();
+    expect(screen.getByTestId("period-brief-start")).toBeDisabled();
+  });
+
   it("offers cancel while choosing chips", async () => {
     const user = userEvent.setup();
     const onCancel = vi.fn();
@@ -306,9 +326,9 @@ describe("NotePeriodBriefCompose", () => {
     expect(onCancel).toHaveBeenCalledOnce();
   });
 
-  it("disables cancel once submit starts", () => {
+  it("keeps cancel available while submit is in flight so the human can abort", () => {
     renderCompose({ onCancel: vi.fn(), submitting: true });
-    expect(screen.getByTestId("period-brief-cancel")).toBeDisabled();
+    expect(screen.getByTestId("period-brief-cancel")).toBeEnabled();
   });
 
   it("reopens collect-root setup on an existing collector", async () => {
@@ -342,11 +362,29 @@ describe("NotePeriodBriefCompose", () => {
     );
   });
 
-  it("shows the in-bubble run status instead of jumping away", () => {
-    renderCompose({
-      startedTitle: "工作介绍 本周 · 底稿",
+  it("disables Start collecting when computers are cleared", async () => {
+    const user = userEvent.setup();
+    const { onResolvedChange } = renderCompose({ onStart: vi.fn() });
+    await waitFor(() => {
+      expect(screen.getByTestId("period-brief-collector-collector-a")).toBeTruthy();
     });
-    expect(screen.getByTestId("period-brief-started")).toBeTruthy();
-    expect(screen.getByText(/工作介绍 本周/)).toBeTruthy();
+    await user.click(screen.getByTestId("period-brief-collector-collector-a"));
+    await user.click(screen.getByTestId("period-brief-collector-collector-b"));
+    expect(screen.getByTestId("period-brief-start")).toBeDisabled();
+    await waitFor(() => {
+      expect(onResolvedChange).toHaveBeenCalledWith(expect.objectContaining({ canSubmit: false }));
+    });
+  });
+
+  it("lets Start collecting run once a time range and computers are chosen", async () => {
+    const user = userEvent.setup();
+    const onStart = vi.fn();
+    renderCompose({ onStart });
+    await waitFor(() => {
+      expect(screen.getByTestId("period-brief-start")).toBeEnabled();
+    });
+    expect(screen.queryByTestId("period-brief-scope-all")).toBeNull();
+    await user.click(screen.getByTestId("period-brief-start"));
+    expect(onStart).toHaveBeenCalledTimes(1);
   });
 });

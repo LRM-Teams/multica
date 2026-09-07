@@ -141,8 +141,23 @@ export type MessagePart =
       type: "period_brief_insert";
       /** note_period_brief_run id */
       ref_id: string;
+      /** Issuing page the run started from. */
+      source_page_id?: string;
+      /** Issuing page title. */
+      label?: string;
       /** Set after the human picks a button. */
       selected_option_id?: "append" | "child";
+    }
+  | {
+      /** Notes Assistant: propose inserting the finished brief onto a resolved page. */
+      type: "period_brief_insert_propose";
+      /** note_period_brief_run id */
+      ref_id: string;
+      /** Writable target note. */
+      target_page_id: string;
+      mode: "append" | "child";
+      /** Target page title when known. */
+      label?: string;
     };
 
 /**

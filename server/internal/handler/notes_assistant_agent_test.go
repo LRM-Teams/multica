@@ -65,7 +65,7 @@ func TestEnsureNotesAssistantAgent_SoftProbeNeedsSetupThenClone(t *testing.T) {
 		t.Fatalf("model=%q", created.Agent.Model)
 	}
 	if !strings.Contains(created.Agent.Instructions, notesAssistantInstructionsCapabilityMarker) {
-		t.Fatal("expected selective-read instructions")
+		t.Fatal("expected no-fence card instructions")
 	}
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, created.Agent.ID)
@@ -235,6 +235,9 @@ func TestAgentTemplatesIncludeNotesAssistant(t *testing.T) {
 		"notes get",
 		"final assistant output",
 		"Never run `multica message send`",
+		"plan card",
+		"do not call start",
+		"period_brief_residue",
 	} {
 		if !strings.Contains(tmpl.Instructions, want) {
 			t.Fatalf("notes-assistant instructions missing %q", want)
@@ -242,6 +245,9 @@ func TestAgentTemplatesIncludeNotesAssistant(t *testing.T) {
 	}
 	for _, banned := range []string{
 		"message send --target chat:",
+		"period_brief_resynth",
+		"period_brief_compose",
+		"period_brief_start/>",
 	} {
 		if strings.Contains(tmpl.Instructions, banned) {
 			t.Fatalf("notes-assistant instructions must not teach %q", banned)

@@ -32,6 +32,7 @@ vi.mock("../../common/agent-creation-proposal-card", () => ({
 }));
 vi.mock("../../notes/period-brief-insert-actions", () => ({
   PeriodBriefInsertActions: () => <div data-testid="period-brief-insert-actions" />,
+  PeriodBriefInsertProposeCard: () => <div data-testid="period-brief-insert-propose" />,
 }));
 
 const catalogState = vi.hoisted(() => ({

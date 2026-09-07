@@ -41,6 +41,16 @@ func (h *Handler) CancelNotePeriodBrief(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusOK, cancelNotePeriodBriefResponse{Run: periodBriefActiveFromRun(run)})
 		return
 	}
+	if h.settleWrittenPeriodBriefRun(r.Context(), workspaceID, userID, userIDString, run) {
+		h.cancelPeriodBriefWorkerJobs(r, workspaceID, userIDString, run)
+		settled, err := h.loadNotePeriodBriefRunByID(r.Context(), workspaceID, userID, run.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load period brief run")
+			return
+		}
+		writeJSON(w, http.StatusOK, cancelNotePeriodBriefResponse{Run: periodBriefActiveFromRun(settled)})
+		return
+	}
 	if !periodBriefRunLocksComposerStatus(run.Status) {
 		writeError(w, http.StatusConflict, "period brief run is not running")
 		return
@@ -142,6 +152,46 @@ UPDATE note_worker_job
 SET status = 'cancelled', updated_at = now()
 WHERE id = $1 AND status IN ('pending', 'dispatched', 'running')`, job.id)
 	}
+}
+
+// stopActivePeriodBriefRunForPage cancels collector / planner / synthesizer
+// jobs for a locking 写汇报 on this note page. A synthesizing run whose
+// brief is already written is settled instead of cancelled. announce posts
+// 「好，已停止这次写汇报。」 when the run is marked cancelled.
+func (h *Handler) stopActivePeriodBriefRunForPage(
+	r *http.Request,
+	workspaceID, userID pgtype.UUID,
+	userIDString string,
+	pageID pgtype.UUID,
+	announce bool,
+) (bool, error) {
+	run, err := h.loadActivePeriodBriefRunForPage(r.Context(), workspaceID, userID, pageID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	full, err := h.loadNotePeriodBriefRunByID(r.Context(), workspaceID, userID, run.ID)
+	if err != nil {
+		return false, err
+	}
+	if h.settleWrittenPeriodBriefRun(r.Context(), workspaceID, userID, userIDString, full) {
+		h.cancelPeriodBriefWorkerJobs(r, workspaceID, userIDString, full)
+		return true, nil
+	}
+	if !periodBriefRunLocksComposerStatus(full.Status) {
+		return false, nil
+	}
+	h.cancelPeriodBriefWorkerJobs(r, workspaceID, userIDString, full)
+	if err := h.markNotePeriodBriefRunCancelled(r.Context(), full.ID); err != nil {
+		return false, err
+	}
+	if announce {
+		full.Status = "cancelled"
+		h.postPeriodBriefBubbleProgress(r.Context(), full, userIDString, "好，已停止这次写汇报。")
+	}
+	return true, nil
 }
 
 func extraPeriodBriefJobIDs(run notePeriodBriefRunRow) []pgtype.UUID {

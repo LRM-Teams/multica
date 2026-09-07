@@ -3,9 +3,11 @@ export type ChatWindowLayout = "floating" | "fullscreen" | "sidebar";
 export type ChatWindowMainPane = "skeleton" | "messages" | "empty" | "spacer";
 
 /**
- * Message-area slot. Composer chips always sit above the input — they
- * never replace this pane. An empty thread with chips uses a flex
- * spacer so the input stays pinned to the bottom.
+ * Message-area slot. Composer-pinned accessories (Highlights / setup)
+ * never replace this pane. 写汇报 chips live in the transcript
+ * (`transcriptAccessory`) so they scroll with the thread. An empty
+ * thread with only a composer accessory uses a flex spacer so the
+ * input stays pinned to the bottom.
  */
 export function chatWindowMainPane(
   showSkeleton: boolean,

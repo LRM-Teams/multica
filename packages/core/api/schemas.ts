@@ -77,6 +77,9 @@ import type {
   CreateNoteRetrospectiveResponse,
   CreateNotePeriodBriefResponse,
   NotePeriodBriefActiveResponse,
+  NotePeriodBriefPlan,
+  NotePeriodBriefPlanResponse,
+  NotePeriodBriefWindow,
   InsertNotePeriodBriefResponse,
   IssueNoteRef,
   IssueNoteRefListResponse,
@@ -412,9 +415,34 @@ export const EMPTY_NOTE_PERIOD_BRIEF_ACTIVE: NotePeriodBriefActiveResponse = {
   run: null,
 };
 
+export const NotePeriodBriefPlanSchema: z.ZodType<NotePeriodBriefPlan> = z.object({
+  window: z.string().nullish().transform((v): NotePeriodBriefWindow | "" => {
+    const kind = (v ?? "").trim();
+    if (kind === "day" || kind === "week" || kind === "month" || kind === "custom") {
+      return kind;
+    }
+    return "";
+  }),
+  date: z.string().nullish().transform((v) => v ?? ""),
+  start_date: z.string().nullish().transform((v) => v ?? ""),
+  end_date: z.string().nullish().transform((v) => v ?? ""),
+  collector_agent_ids: z.array(z.string()).nullish().transform((v) => v ?? []),
+  focus: z.string().nullish().transform((v) => v ?? ""),
+}).loose();
+
+export const NotePeriodBriefPlanResponseSchema: z.ZodType<NotePeriodBriefPlanResponse> = z.object({
+  plan: NotePeriodBriefPlanSchema.nullable(),
+}).loose();
+
+export const EMPTY_NOTE_PERIOD_BRIEF_PLAN_RESPONSE: NotePeriodBriefPlanResponse = {
+  plan: null,
+};
+
 export const InsertNotePeriodBriefResponseSchema: z.ZodType<InsertNotePeriodBriefResponse> = z.object({
   mode: z.enum(["append", "child"]),
   title: z.string().optional(),
+  page_id: z.string().optional(),
+  page_title: z.string().optional(),
 }).loose();
 
 export const EMPTY_INSERT_NOTE_PERIOD_BRIEF_RESPONSE = {

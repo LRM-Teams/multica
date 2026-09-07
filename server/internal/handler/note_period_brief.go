@@ -207,6 +207,9 @@ func (h *Handler) CreateNotePeriodBrief(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	if !h.mergePeriodBriefStartRequestFromPlan(w, r, workspaceID, userID, &req) {
+		return
+	}
 	agentID, ok := parseUUIDOrBadRequest(w, req.AgentID, "agent_id")
 	if !ok {
 		return
@@ -257,8 +260,7 @@ func (h *Handler) CreateNotePeriodBrief(w http.ResponseWriter, r *http.Request) 
 	}
 	var bubbleSessionID pgtype.UUID
 	if sourcePageID.Valid {
-		if existing, existingErr := h.loadActivePeriodBriefRunForPage(r.Context(), workspaceID, userID, sourcePageID); existingErr == nil && existing.ID.Valid {
-			writeError(w, http.StatusConflict, "a period brief is already running on this page")
+		if !h.allowPeriodBriefStartOnPage(w, r, workspaceID, userID, userIDString, sourcePageID) {
 			return
 		}
 		sessionID, sessErr := h.ensurePeriodBriefBubbleSession(r.Context(), workspaceID, userID, agentID, sourcePageID, req.ChatSessionID)
@@ -271,11 +273,12 @@ func (h *Handler) CreateNotePeriodBrief(w http.ResponseWriter, r *http.Request) 
 	used := append([]string(nil), bundle.SourcesUsed...)
 	empty := append([]string(nil), bundle.SourcesEmpty...)
 	skipped := append([]string(nil), bundle.SourcesSkipped...)
+	needCollect := periodBriefUniqueCollectorIDs(collectorIDs)
 
 	// Draft first so collectors can submit-pack onto the run without creating
 	// Notes「采集包」pages.
-	pendingPacks := make([]notePeriodBriefPackResult, len(collectorIDs))
-	for i, id := range collectorIDs {
+	pendingPacks := make([]notePeriodBriefPackResult, len(needCollect))
+	for i, id := range needCollect {
 		pendingPacks[i] = notePeriodBriefPackResult{
 			AgentID: id,
 			Status:  "pending",
@@ -299,8 +302,8 @@ RETURNING id, workspace_id, parent_id, owner_user_id, title, icon, content, sort
 	focus := normalizePeriodBriefUserFocus(req.Focus)
 
 	if focus != "" {
-		pendingRefs := make([]notePeriodBriefCollectorRef, 0, len(collectorIDs))
-		for _, id := range collectorIDs {
+		pendingRefs := make([]notePeriodBriefCollectorRef, 0, len(needCollect))
+		for _, id := range needCollect {
 			pendingRefs = append(pendingRefs, notePeriodBriefCollectorRef{
 				AgentID:     id,
 				WindowLabel: window.Label,
@@ -313,8 +316,10 @@ RETURNING id, workspace_id, parent_id, owner_user_id, title, icon, content, sort
 			return
 		}
 		h.startPeriodBriefBubbleTranscript(r.Context(), workspaceID, userID, bubbleSessionID, userIDString, window.Label, focus, collectorIDs, req.FromChat)
+		h.consumePeriodBriefSessionPlan(r.Context(), workspaceID, userID, bubbleSessionID)
+		h.wakePeriodBriefRunStarted(r.Context(), workspaceID, draft.ID, userIDString)
 		plannerJob, ok := h.dispatchNotePeriodBriefPlanner(
-			w, r, workspaceID, userID, userIDString, draft, agentID, window.Label, windowStart, windowEnd, channelID, focus, collectorIDs,
+			w, r, workspaceID, userID, userIDString, draft, agentID, window.Label, windowStart, windowEnd, channelID, focus, needCollect,
 		)
 		if !ok {
 			return
@@ -322,7 +327,7 @@ RETURNING id, workspace_id, parent_id, owner_user_id, title, icon, content, sort
 		if run, loadErr := h.loadNotePeriodBriefRunByDraft(r.Context(), workspaceID, draft.ID); loadErr == nil && plannerJob.ID != "" {
 			_ = h.updateNotePeriodBriefRunPlannerJob(r.Context(), run.ID, parseUUID(plannerJob.ID))
 		}
-		h.postPeriodBriefBubbleAssigned(r.Context(), workspaceID, userID, bubbleSessionID, userIDString, collectorIDs)
+		h.postPeriodBriefBubbleAssigned(r.Context(), workspaceID, userID, bubbleSessionID, userIDString, needCollect)
 		if notePeriodBriefFinishInBackground {
 			writeJSON(w, http.StatusCreated, createNotePeriodBriefResponse{
 				Page:              notePageToResponse(draft, userID, []string{}, nil),
@@ -337,11 +342,11 @@ RETURNING id, workspace_id, parent_id, owner_user_id, title, icon, content, sort
 				ChatSessionID:     uuidToString(bubbleSessionID),
 			})
 			bg := context.WithoutCancel(r.Context())
-			go h.finishNotePeriodBriefAfterPlan(bg, workspaceID, userID, userIDString, agentID, folderID, draft, window, channelID, factsText, collectorIDs, used, empty, skipped)
+			go h.finishNotePeriodBriefAfterPlan(bg, workspaceID, userID, userIDString, agentID, folderID, draft, window, channelID, factsText, needCollect, used, empty, skipped)
 			return
 		}
 		collectorJobs, ok := h.completePeriodBriefPlanAndDispatch(
-			w, r, workspaceID, userID, userIDString, draft, window, collectorIDs,
+			w, r, workspaceID, userID, userIDString, draft, window, needCollect,
 		)
 		if !ok {
 			return
@@ -374,7 +379,7 @@ RETURNING id, workspace_id, parent_id, owner_user_id, title, icon, content, sort
 	}
 
 	collectorJobs, ok := h.dispatchPeriodBriefCollectorsForIDs(
-		w, r, workspaceID, userID, userIDString, draft, window.Label, windowStart, windowEnd, collectorIDs, nil,
+		w, r, workspaceID, userID, userIDString, draft, window.Label, windowStart, windowEnd, needCollect, nil,
 	)
 	if !ok {
 		return
@@ -386,7 +391,9 @@ RETURNING id, workspace_id, parent_id, owner_user_id, title, icon, content, sort
 		return
 	}
 	h.startPeriodBriefBubbleTranscript(r.Context(), workspaceID, userID, bubbleSessionID, userIDString, window.Label, "", collectorIDs, req.FromChat)
-	h.postPeriodBriefBubbleAssigned(r.Context(), workspaceID, userID, bubbleSessionID, userIDString, collectorIDs)
+	h.consumePeriodBriefSessionPlan(r.Context(), workspaceID, userID, bubbleSessionID)
+	h.wakePeriodBriefRunStarted(r.Context(), workspaceID, draft.ID, userIDString)
+	h.postPeriodBriefBubbleAssigned(r.Context(), workspaceID, userID, bubbleSessionID, userIDString, needCollect)
 
 	if notePeriodBriefFinishInBackground {
 		primaryJob := collectorJobs[0]
@@ -563,16 +570,10 @@ UPDATE note_page SET content = $1, updated_at = now(), updated_by = $2 WHERE id 
 		content, userID, draft.ID, workspaceID)
 	draft.Content = content
 
-	retryOnly := !periodBriefAllCollectorResultsFinal(packResults)
-	run, err := h.loadNotePeriodBriefRunByDraft(ctx, workspaceID, draft.ID)
-	if err != nil || !periodBriefRunLocksComposerStatus(run.Status) {
+	_, retryOnly, blocked, ok := h.beginPeriodBriefPostCollect(ctx, workspaceID, draft.ID, userIDString, packResults)
+	if !ok || blocked {
 		return
 	}
-	advanced, advErr := h.tryAdvancePeriodBriefRunStatus(ctx, run.ID, "synthesizing")
-	if advErr != nil || !advanced {
-		return
-	}
-	h.postPeriodBriefBubbleProgress(ctx, run, userIDString, periodBriefMaterialsProgressCopy(packResults))
 
 	agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: agentID, WorkspaceID: workspaceID})
 	if err != nil || agent.ArchivedAt.Valid {
@@ -585,8 +586,8 @@ UPDATE note_page SET content = $1, updated_at = now(), updated_by = $2 WHERE id 
 		return
 	}
 	if run, err := h.loadNotePeriodBriefRunByDraft(ctx, workspaceID, draft.ID); err == nil {
-		// Purge ephemeral pack artifacts once the write wake has been issued.
-		// Ignore --note-write that landed before this wake (retry-only turn).
+		// Keep pack_markdown for same-session reuse. Ignore --note-write
+		// that landed before this wake (retry-only turn).
 		h.completePeriodBriefRunAfterSynth(ctx, run, userIDString, time.Now())
 	}
 }
@@ -644,18 +645,14 @@ UPDATE note_page SET content = $1, updated_at = now(), updated_by = $2 WHERE id 
 	}
 	draft.Content = content
 
-	retryOnly := !periodBriefAllCollectorResultsFinal(packResults)
-	run, loadErr := h.loadNotePeriodBriefRunByDraft(r.Context(), workspaceID, draft.ID)
-	if loadErr != nil || !periodBriefRunLocksComposerStatus(run.Status) {
+	_, retryOnly, blocked, ok := h.beginPeriodBriefPostCollect(r.Context(), workspaceID, draft.ID, userIDString, packResults)
+	if blocked {
+		return draft, NoteWorkerJobResponse{}, used, empty, skipped, true
+	}
+	if !ok {
 		writeError(w, http.StatusConflict, "period brief run is not running")
 		return notePageRow{}, NoteWorkerJobResponse{}, nil, nil, nil, false
 	}
-	advanced, advErr := h.tryAdvancePeriodBriefRunStatus(r.Context(), run.ID, "synthesizing")
-	if advErr != nil || !advanced {
-		writeError(w, http.StatusConflict, "period brief run is not running")
-		return notePageRow{}, NoteWorkerJobResponse{}, nil, nil, nil, false
-	}
-	h.postPeriodBriefBubbleProgress(r.Context(), run, userIDString, periodBriefMaterialsProgressCopy(packResults))
 
 	agent, err := h.Queries.GetAgentInWorkspace(r.Context(), db.GetAgentInWorkspaceParams{ID: agentID, WorkspaceID: workspaceID})
 	if err != nil || agent.ArchivedAt.Valid {
@@ -667,6 +664,41 @@ UPDATE note_page SET content = $1, updated_at = now(), updated_by = $2 WHERE id 
 		return notePageRow{}, NoteWorkerJobResponse{}, nil, nil, nil, false
 	}
 	return draft, job, used, empty, skipped, true
+}
+
+// beginPeriodBriefPostCollect advances a settled collect into retry, a write
+// wake, or a missing-harvest abort. blocked means no new official brief.
+func (h *Handler) beginPeriodBriefPostCollect(
+	ctx context.Context,
+	workspaceID, draftID pgtype.UUID,
+	userIDString string,
+	packResults []notePeriodBriefPackResult,
+) (run notePeriodBriefRunRow, retryOnly, blocked, ok bool) {
+	retryOnly = !periodBriefAllCollectorResultsFinal(packResults)
+	run, err := h.loadNotePeriodBriefRunByDraft(ctx, workspaceID, draftID)
+	if err != nil || !periodBriefRunLocksComposerStatus(run.Status) {
+		return run, retryOnly, false, false
+	}
+	if !retryOnly && periodBriefOfficialBriefBlocked(packResults) {
+		h.failPeriodBriefRunMissingHarvest(ctx, run, userIDString, packResults)
+		return run, false, true, true
+	}
+	advanced, advErr := h.tryAdvancePeriodBriefRunStatus(ctx, run.ID, "synthesizing")
+	if advErr != nil || !advanced {
+		return run, retryOnly, false, false
+	}
+	h.wakePeriodBriefProgress(ctx, run, userIDString, "materials_ready", packResults)
+	return run, retryOnly, false, true
+}
+
+func (h *Handler) failPeriodBriefRunMissingHarvest(
+	ctx context.Context,
+	run notePeriodBriefRunRow,
+	userIDString string,
+	packResults []notePeriodBriefPackResult,
+) {
+	h.wakePeriodBriefProgress(ctx, run, userIDString, "collect_failed", packResults)
+	_ = h.markNotePeriodBriefRunCancelled(ctx, run.ID)
 }
 
 // parsePeriodBriefCollectorAgentIDs requires at least one non-archived Period

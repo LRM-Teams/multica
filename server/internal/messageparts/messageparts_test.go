@@ -585,6 +585,36 @@ func TestNormalizeNoteWritePart(t *testing.T) {
 	}
 }
 
+func TestNormalizePeriodBriefInsertProposePart(t *testing.T) {
+	_, parts, err := Normalize("插到那篇下面。", []protocol.MessagePart{{
+		Type:             protocol.MessagePartTypePeriodBriefInsertPropose,
+		RefID:            " run-1 ",
+		TargetPageID:     " page-9 ",
+		SelectedOptionID: "append",
+		Label:            " Weekly ",
+		Text:             "ignore",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parts) != 1 {
+		t.Fatalf("propose parts = %+v", parts)
+	}
+	got := parts[0]
+	if got.RefID != "run-1" || got.TargetPageID != "page-9" || got.SelectedOptionID != "append" || got.Label != "Weekly" || got.Text != "" {
+		t.Fatalf("propose part = %+v", got)
+	}
+}
+
+func TestNormalizeRejectsRetiredPeriodBriefConductParts(t *testing.T) {
+	for _, typ := range []string{"period_brief_compose", "period_brief_start"} {
+		_, _, err := Normalize("好，打开选项。", []protocol.MessagePart{{Type: typ}})
+		if err == nil {
+			t.Fatalf("Normalize(%s) succeeded; retired conduct parts must be rejected", typ)
+		}
+	}
+}
+
 func TestUnwrapStructuredMessageSendLeavesNoteAIEditJSONAlone(t *testing.T) {
 	for _, raw := range []string{
 		`{"action":"insert","markdown":"hi","target":null,"title":null,"rationale":"x"}`,

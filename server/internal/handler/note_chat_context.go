@@ -158,12 +158,15 @@ type periodBriefChatResidue struct {
 	RunID         string
 	Status        string
 	WindowLabel   string
+	SourcePageID  string
+	SourceTitle   string
 	DraftPageID   string
 	DraftTitle    string
 	ResultPageID  string
 	ResultTitle   string
 	ResultMode    string
 	BriefMarkdown string
+	Materials     []periodBriefSessionMaterial
 }
 
 func formatPeriodBriefChatResidue(res periodBriefChatResidue) string {
@@ -177,6 +180,12 @@ func formatPeriodBriefChatResidue(res periodBriefChatResidue) string {
 	fmt.Fprintf(&b, "status: %s\n", res.Status)
 	if label := strings.TrimSpace(res.WindowLabel); label != "" {
 		fmt.Fprintf(&b, "window: %s\n", label)
+	}
+	if source := strings.TrimSpace(res.SourcePageID); source != "" {
+		fmt.Fprintf(&b, "source_page_id: %s\n", source)
+		if title := strings.TrimSpace(res.SourceTitle); title != "" {
+			fmt.Fprintf(&b, "source_page_title: %s\n", title)
+		}
 	}
 	inserted := strings.TrimSpace(res.ResultMode)
 	hasResult := strings.TrimSpace(res.ResultPageID) != ""
@@ -216,6 +225,7 @@ func formatPeriodBriefChatResidue(res periodBriefChatResidue) string {
 		b.WriteString("</period_brief>\n")
 	}
 	b.WriteString("</period_brief_residue>\n\n")
+	b.WriteString(formatPeriodBriefSessionMaterialsBoard(res.Materials))
 	return b.String()
 }
 
@@ -225,10 +235,12 @@ func (h *Handler) loadPeriodBriefChatResidue(ctx context.Context, sessionID pgty
 	var resultMode string
 	err := h.DB.QueryRow(ctx, `
 SELECT r.id::text, r.status, r.window_label,
+       COALESCE(r.source_page_id::text, ''), COALESCE(sp.title, ''),
        r.draft_page_id::text, COALESCE(d.title, ''),
        rp.id, COALESCE(rp.title, ''), COALESCE(r.result_mode, ''),
        COALESCE(r.result_markdown, '')
 FROM note_period_brief_run r
+LEFT JOIN note_page sp ON sp.id = r.source_page_id AND sp.deleted_at IS NULL
 LEFT JOIN note_page d ON d.id = r.draft_page_id AND d.deleted_at IS NULL
 LEFT JOIN note_page rp ON rp.id = r.result_page_id AND rp.deleted_at IS NULL
 WHERE r.chat_session_id = $1
@@ -236,6 +248,7 @@ WHERE r.chat_session_id = $1
 ORDER BY r.created_at DESC
 LIMIT 1`, sessionID).Scan(
 		&res.RunID, &res.Status, &res.WindowLabel,
+		&res.SourcePageID, &res.SourceTitle,
 		&res.DraftPageID, &res.DraftTitle,
 		&liveResultID, &res.ResultTitle, &resultMode,
 		&res.BriefMarkdown,
@@ -250,6 +263,7 @@ LIMIT 1`, sessionID).Scan(
 	if strings.TrimSpace(res.BriefMarkdown) == "" {
 		res.BriefMarkdown = h.loadPeriodBriefCardMarkdown(ctx, sessionID, res.DraftPageID)
 	}
+	res.Materials = h.loadPeriodBriefSessionMaterials(ctx, sessionID)
 	return res, true
 }
 
@@ -328,6 +342,7 @@ LIMIT 1`, agentID, workspaceID, pageID).Scan(&ownerID)
 
 // buildNoteChatWakePrefix prepends machine-readable note context for a
 // Notes assistant bubble delivery. Empty when the session has no note bind.
+// Includes this bubble chat_session_id so plan tools need no DB lookup.
 //
 // Intentionally omits the full subtree outline and page bodies — the Notes
 // Assistant must call `notes tree` / `notes get` for the pages it needs
@@ -348,14 +363,26 @@ WHERE cs.id = $1`, sessionID).Scan(&rootID, &title)
 	var b strings.Builder
 	b.WriteString("<note_chat_context>\n")
 	b.WriteString("You are the Notes Assistant chatting about one product note page and its subtree.\n")
+	fmt.Fprintf(&b, "chat_session_id: %s\n", uuidToString(sessionID))
 	fmt.Fprintf(&b, "context_note_page_id: %s\n", uuidToString(rootID))
 	fmt.Fprintf(&b, "context_note_title: %s\n", title)
+	b.WriteString("Use chat_session_id for `multica notes period-brief plan` when the plan card is missing. Do not query the database for it. Do not call start.\n")
 	b.WriteString("Selective note reads: do not assume child bodies are in context.\n")
 	b.WriteString("Use `multica notes tree <page-id>` for ids+titles, then `multica notes get <page-id>` only for pages you need this turn.\n")
 	b.WriteString("Read skill `multica-notes-assistant`. Stay within this subtree unless the human names another authorized page.\n")
 	b.WriteString("</note_chat_context>\n\n")
+	if row, err := h.loadPeriodBriefPromptForSession(ctx, sessionID); err == nil {
+		plan := periodBriefPlanFromRow(row)
+		b.WriteString(formatPeriodBriefCurrentPlanBoard(&plan))
+	} else {
+		b.WriteString(formatPeriodBriefCurrentPlanBoard(nil))
+	}
 	if res, ok := h.loadPeriodBriefChatResidue(ctx, sessionID); ok {
 		b.WriteString(formatPeriodBriefChatResidue(res))
+	}
+	if run, ok := h.loadOpenPeriodBriefRunForSession(ctx, sessionID); ok {
+		names := h.periodBriefProgressNames(ctx, run, nil)
+		b.WriteString(formatPeriodBriefProgressBoard(periodBriefProgressBoardFromRun(run, names, "update", nil)))
 	}
 	return b.String()
 }

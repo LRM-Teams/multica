@@ -253,8 +253,32 @@ export interface CreateNoteRetrospectiveResponse {
 }
 
 /** Period Work Brief synthesis (ADR 0019 / K0). */
+export interface NotePeriodBriefPlan {
+  window: NotePeriodBriefWindow | "";
+  date?: string;
+  start_date?: string;
+  end_date?: string;
+  collector_agent_ids: string[];
+  focus?: string;
+}
+
+export interface NotePeriodBriefPlanResponse {
+  plan: NotePeriodBriefPlan | null;
+}
+
+export interface PutNotePeriodBriefPlanRequest {
+  chat_session_id: string;
+  context_note_page_id?: string;
+  window?: string;
+  date?: string;
+  start_date?: string;
+  end_date?: string;
+  collector_agent_ids?: string[];
+  focus?: string;
+}
+
 export interface CreateNotePeriodBriefRequest {
-  window: NotePeriodBriefWindow;
+  window?: NotePeriodBriefWindow;
   /** Anchor date for day|week|month (YYYY-MM-DD in timezone). */
   date?: string;
   /** Inclusive start calendar day for `window: "custom"` (YYYY-MM-DD). */
@@ -264,8 +288,8 @@ export interface CreateNotePeriodBriefRequest {
   timezone?: string;
   /** Synthesizer Agent (defaults to Period Brief Agent / 周报 in the UI). */
   agent_id: string;
-  /** Dedicated per-Computer collector Agents (`period-collect-*`). At least one. */
-  collector_agent_ids: string[];
+  /** Dedicated per-Computer collector Agents (`period-collect-*`). At least one, or omit to use the session plan. */
+  collector_agent_ids?: string[];
   sources?: NoteRetrospectiveSource[];
   channel_id?: string;
   /** Optional scoped request (paths / topics / aspects). Empty = full-scope default. */
@@ -274,6 +298,8 @@ export interface CreateNotePeriodBriefRequest {
   context_note_page_id?: string;
   /** Existing notes-bubble chat session to continue. */
   chat_session_id?: string;
+  /** Skip the synthetic user turn when the bubble already has the ask. */
+  from_chat?: boolean;
 }
 
 export interface CreateNotePeriodBriefResponse {
@@ -316,9 +342,13 @@ export type NotePeriodBriefInsertMode = "append" | "child";
 
 export interface InsertNotePeriodBriefRequest {
   mode: NotePeriodBriefInsertMode;
+  /** Writable note to append under or create a child of. Defaults to the issuing page. */
+  target_page_id?: string;
 }
 
 export interface InsertNotePeriodBriefResponse {
   mode: NotePeriodBriefInsertMode;
   title?: string;
+  page_id?: string;
+  page_title?: string;
 }

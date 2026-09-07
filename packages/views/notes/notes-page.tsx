@@ -13,9 +13,20 @@ import { noteFormatCssVars, type NoteFormatDefaults } from "@multica/core/notes/
 import { useNoteFormatStore } from "@multica/core/notes/format-store";
 import { syncNotePageRefsFromContent } from "@multica/core/notes/issue-refs";
 import { collectNoteIdsRemovedOnDelete } from "@multica/core/notes/delete";
-import { useCreateNotePage, useDeleteNotePage, useDuplicateNotePage, useEmptyNoteTrash, useMoveNotePage, usePermanentlyDeleteNotePage, useRestoreNotePage, useUpdateNotePage } from "@multica/core/notes/mutations";
+import {
+  isNoteUpdateAbortError,
+  useCreateNotePage,
+  useDeleteNotePage,
+  useDuplicateNotePage,
+  useEmptyNoteTrash,
+  useMoveNotePage,
+  usePermanentlyDeleteNotePage,
+  useRestoreNotePage,
+  useUpdateNotePage,
+} from "@multica/core/notes/mutations";
 import { requestInlineNotePageAI, resolveNotesAssistantAgent } from "@multica/core/notes/notes-assistant-agent";
 import { applyNoteShareSeen, noteAIJobOptions, noteDetailOptions, noteListOptions, noteNeedsShareSeen, noteTrashOptions } from "@multica/core/notes/queries";
+import { reconcileNoteEditorDraft } from "@multica/core/notes/reconcile-editor-draft";
 import { useWorkspacePaths } from "@multica/core/paths";
 import type { Agent, NoteAIEditResult, NoteAIJobStatus, NotePage } from "@multica/core/types";
 import { agentListOptions, memberListOptions, workspaceListOptions } from "@multica/core/workspace/queries";
@@ -524,27 +535,28 @@ function NoteEditor({
   draftRef.current = draft;
   const saveInFlightRef = useRef(false);
   const saveAgainRef = useRef(false);
-  if (draft.serverTitle !== selected.title || draft.serverContent !== selected.content) {
-    const titleClean = draft.title === draft.serverTitle;
-    const contentClean = draft.content === draft.serverContent;
-    const title = titleClean ? selected.title : draft.title;
-    const content = contentClean ? selected.content : draft.content;
-    // Only advance baselines for clean fields. Advancing a dirty field's
-    // baseline to a transient optimistic/cache value makes a later stale
-    // selected snapshot look "authoritative" and wipes local keystrokes.
-    const serverTitle = titleClean ? selected.title : draft.serverTitle;
-    const serverContent = contentClean ? selected.content : draft.serverContent;
-    if (
-      title !== draft.title ||
-      content !== draft.content ||
-      serverTitle !== draft.serverTitle ||
-      serverContent !== draft.serverContent
-    ) {
-      setDraft({ title, content, serverTitle, serverContent });
+  const pendingEditorMarkdownRef = useRef<string | null>(null);
+  const reconciled = reconcileNoteEditorDraft(draft, {
+    title: selected.title,
+    content: selected.content,
+  });
+  if (reconciled) {
+    // Remote append (insert-below) must land in the open draft even when
+    // Tiptap left the body "dirty". Unrelated remote rewrites stay ignored.
+    if (reconciled.content !== draft.content) {
+      pendingEditorMarkdownRef.current = reconciled.content;
     }
+    setDraft(reconciled);
   }
   const dirty = draft.title !== draft.serverTitle || draft.content !== draft.serverContent;
   const [saveState, setSaveState] = useState<"saved" | "pending" | "saving" | "error">("saved");
+
+  useEffect(() => {
+    const pending = pendingEditorMarkdownRef.current;
+    if (pending === null) return;
+    pendingEditorMarkdownRef.current = null;
+    editorRef.current?.setMarkdown(pending);
+  }, [draft.content, draft.serverContent]);
 
   useEffect(() => {
     const textarea = titleTextareaRef.current;
@@ -601,6 +613,7 @@ function NoteEditor({
           }
         } catch (error: unknown) {
           if (!active) return;
+          if (isNoteUpdateAbortError(error)) return;
           setSaveState("error");
           showErrorToast(error instanceof Error ? error.message : t(($) => $.notes_page.note_save_failed));
         } finally {
@@ -628,6 +641,8 @@ function NoteEditor({
         void updateNotePage({
           id: selected.id,
           data: { title: latest.title, content: latest.content },
+        }).catch((error: unknown) => {
+          if (isNoteUpdateAbortError(error)) return;
         });
       }
     };

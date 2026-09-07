@@ -83,6 +83,7 @@ export function TaskStatusPill({
 
   return (
     <div
+      data-testid="chat-status-pill"
       className="flex items-center gap-1.5 px-1 text-xs text-muted-foreground"
       aria-live="polite"
     >

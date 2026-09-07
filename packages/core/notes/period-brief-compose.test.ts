@@ -1,109 +1,55 @@
 import { describe, expect, it } from "vitest";
 import {
-  formatPeriodBriefUserTurn,
+  isPeriodBriefPlanComplete,
   looksLikePeriodBriefRequest,
+  listPeriodBriefPlanGaps,
+  looksLikeUnconstrainedScope,
   periodBriefRunLocksComposer,
-  resolvePeriodBriefComposeRequest,
+  PERIOD_BRIEF_SATELLITE_ASK,
 } from "./period-brief-compose";
 
-const collectors = [
-  { id: "collector-a", label: "采集 · Laptop A", runtime_mode: "local" as const },
-  { id: "collector-b", label: "采集 · 云端 · Cloud Box", runtime_mode: "cloud" as const },
-];
-
-const chips = {
-  window: "week" as const,
-  date: "2026-08-21",
-  start_date: "2026-08-15",
-  end_date: "2026-08-21",
-  collector_ids: ["collector-a", "collector-b"],
-};
-
-describe("resolvePeriodBriefComposeRequest", () => {
-  it("keeps chip selections when the request is blank", () => {
-    expect(resolvePeriodBriefComposeRequest(chips, collectors, "  ")).toEqual({
-      window: "week",
-      date: "2026-08-21",
-      collector_ids: ["collector-a", "collector-b"],
-    });
-  });
-
-  it("passes trimmed text as focus without changing chips when it names neither window nor computer", () => {
-    expect(
-      resolvePeriodBriefComposeRequest(chips, collectors, "只整理 ~/multica 下笔记助手相关改动"),
-    ).toEqual({
-      window: "week",
-      date: "2026-08-21",
-      collector_ids: ["collector-a", "collector-b"],
-      focus: "只整理 ~/multica 下笔记助手相关改动",
-    });
-  });
-
-  it("lets text win when it names a different window than the chips", () => {
-    expect(
-      resolvePeriodBriefComposeRequest(chips, collectors, "写一份本月的汇报"),
-    ).toEqual({
-      window: "month",
-      date: "2026-08-21",
-      collector_ids: ["collector-a", "collector-b"],
-      focus: "写一份本月的汇报",
-    });
-  });
-
-  it("lets text win when it names a computer that conflicts with the chips", () => {
-    expect(
-      resolvePeriodBriefComposeRequest(chips, collectors, "只采集 Cloud Box"),
-    ).toEqual({
-      window: "week",
-      date: "2026-08-21",
-      collector_ids: ["collector-b"],
-      focus: "只采集 Cloud Box",
-    });
-  });
-
-  it("uses an explicit date range from text as a custom window", () => {
-    expect(
-      resolvePeriodBriefComposeRequest(chips, collectors, "采集 2026-08-10 到 2026-08-14"),
-    ).toEqual({
-      window: "custom",
-      start_date: "2026-08-10",
-      end_date: "2026-08-14",
-      collector_ids: ["collector-a", "collector-b"],
-      focus: "采集 2026-08-10 到 2026-08-14",
-    });
-  });
-
-  it("maps 上周 onto the week before the chip anchor date", () => {
-    expect(
-      resolvePeriodBriefComposeRequest(chips, collectors, "整理上周"),
-    ).toEqual({
-      window: "week",
-      date: "2026-08-14",
-      collector_ids: ["collector-a", "collector-b"],
-      focus: "整理上周",
-    });
+describe("PERIOD_BRIEF_SATELLITE_ASK", () => {
+  it("is the spoken 写汇报 funnel, not a compose fence", () => {
+    expect(PERIOD_BRIEF_SATELLITE_ASK).toBe("写汇报");
+    expect(PERIOD_BRIEF_SATELLITE_ASK).not.toContain("<period_brief");
   });
 });
 
-describe("formatPeriodBriefUserTurn", () => {
-  it("renders chips as one ordinary user turn", () => {
+describe("isPeriodBriefPlanComplete", () => {
+  it("requires collectors and a valid window, not a global scope chip", () => {
+    expect(isPeriodBriefPlanComplete({ collectorIds: ["c1"] })).toBe(true);
+    expect(isPeriodBriefPlanComplete({ collectorIds: [] })).toBe(false);
     expect(
-      formatPeriodBriefUserTurn({
-        windowLabel: "本周",
-        collectorLabels: ["采集 · Laptop A", "采集 · 云端 · Cloud Box"],
-        focus: "只整理 ~/multica",
+      isPeriodBriefPlanComplete({
+        collectorIds: ["c1"],
+        customRangeValid: false,
       }),
-    ).toBe(
-      ["写汇报", "", "时间：本周", "电脑：采集 · Laptop A、采集 · 云端 · Cloud Box", "", "只整理 ~/multica"].join(
-        "\n",
-      ),
-    );
+    ).toBe(false);
+  });
+});
+
+describe("listPeriodBriefPlanGaps", () => {
+  it("reports missing computers", () => {
+    expect(listPeriodBriefPlanGaps({ collectorIds: [] })).toEqual(["computers"]);
+    expect(listPeriodBriefPlanGaps({ collectorIds: ["c1"] })).toEqual([]);
+  });
+});
+
+describe("looksLikeUnconstrainedScope", () => {
+  it("treats empty text and an explicit full-scope phrase as unconstrained", () => {
+    expect(looksLikeUnconstrainedScope("")).toBe(true);
+    expect(looksLikeUnconstrainedScope("  ")).toBe(true);
+    expect(looksLikeUnconstrainedScope("全部")).toBe(true);
+    expect(looksLikeUnconstrainedScope("unconstrained")).toBe(true);
+    expect(looksLikeUnconstrainedScope("只整理 ~/multica")).toBe(false);
   });
 });
 
 describe("looksLikePeriodBriefRequest", () => {
   it("matches a spoken 写汇报 ask and ignores ordinary note chat", () => {
     expect(looksLikePeriodBriefRequest("帮我写汇报")).toBe(true);
+    expect(looksLikePeriodBriefRequest("帮我写个周报")).toBe(true);
+    expect(looksLikePeriodBriefRequest("写汇报")).toBe(true);
     expect(looksLikePeriodBriefRequest("整理一份周报")).toBe(true);
     expect(looksLikePeriodBriefRequest("period brief for this week")).toBe(true);
     expect(looksLikePeriodBriefRequest("Write report")).toBe(true);

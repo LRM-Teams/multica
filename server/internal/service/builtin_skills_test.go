@@ -580,6 +580,20 @@ func TestNotesAssistantSkillRequiresSelectiveReads(t *testing.T) {
 		"context_note_page_id",
 		"Insert below note",
 		"Insert as child note",
+		"notes period-brief plan",
+		"chat_session_id",
+		"Do not query the database",
+		"Do not call start",
+		"开始采集",
+		"notes period-brief insert",
+		"<period_brief_progress>",
+		"run_started",
+		"<period_brief_residue>",
+		"Period Brief no-fence cards",
+		"Session harvests",
+		"写汇报",
+		"os, and hostname",
+		"an OS, a hostname, or a collector name",
 		"references/notes-assistant-source-map.md",
 	} {
 		if !strings.Contains(body, want) && !strings.Contains(skill.Content, want) {
@@ -589,6 +603,11 @@ func TestNotesAssistantSkillRequiresSelectiveReads(t *testing.T) {
 	for _, banned := range []string{
 		"--note-write",
 		"message send --target chat:",
+		"<period_brief_resynth",
+		"<period_brief_compose",
+		"<period_brief_start",
+		"<period_brief_started",
+		"--recollect",
 	} {
 		if strings.Contains(skill.Content, banned) {
 			t.Errorf("notes-assistant skill must not teach %q", banned)

@@ -3,6 +3,8 @@
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronRight, FileText } from "lucide-react";
+import { stripPeriodBriefInsertProposeMarkers } from "@multica/core/notes/period-brief-insert";
+import { parsePeriodBriefInsertPropose } from "@multica/core/notes/period-brief-insert";
 import { stickerCatalogOptions } from "@multica/core/stickers";
 import { api } from "@multica/core/api";
 import type { AgentCreationProposal, MessagePart, StickerAsset, StickerCatalogResponse } from "@multica/core/types";
@@ -14,7 +16,10 @@ import { usePrefersReducedMotion } from "../../common/use-prefers-reduced-motion
 import { useT } from "../../i18n/use-t";
 import { ChoiceCard, ChoiceReplyPart } from "./choice-card";
 import { AgentCreationProposalCard } from "../../common/agent-creation-proposal-card";
-import { PeriodBriefInsertActions } from "../../notes/period-brief-insert-actions";
+import {
+  PeriodBriefInsertActions,
+  PeriodBriefInsertProposeCard,
+} from "../../notes/period-brief-insert-actions";
 import { AppLink } from "../../navigation";
 import { useWorkspacePaths } from "@multica/core/paths";
 
@@ -35,12 +40,21 @@ export function MessagePartsRenderer({
   choiceContext?: { channelId: string; messageId: string };
 }) {
   const keyCounts = new Map<string, number>();
+  const insertPart = parts.find((part) => part.type === "period_brief_insert");
+  const propose = parsePeriodBriefInsertPropose({
+    content: parts
+      .filter((part): part is Extract<MessagePart, { type: "text" }> => part.type === "text")
+      .map((part) => part.text)
+      .join("\n"),
+    parts,
+  });
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
       {parts.map((part) => {
         const key = createMessagePartKey(part, keyCounts);
         if (part.type === "text") {
-          if (!part.text.trim()) return null;
+          const text = stripPeriodBriefInsertProposeMarkers(part.text);
+          if (!text) return null;
           return (
             <MemoizedMarkdown
               key={key}
@@ -48,7 +62,7 @@ export function MessagePartsRenderer({
               enableStickerShortcodes={false}
               mentionVariant="plain"
             >
-              {part.text}
+              {text}
             </MemoizedMarkdown>
           );
         }
@@ -77,6 +91,9 @@ export function MessagePartsRenderer({
         if (part.type === "period_brief_insert") {
           return <PeriodBriefInsertActions key={key} part={part} />;
         }
+        if (part.type === "period_brief_insert_propose") {
+          return null;
+        }
         if (part.type === "reference") {
           if (part.ref_type === "agent:create" && choiceContext?.messageId) {
             return (
@@ -90,6 +107,12 @@ export function MessagePartsRenderer({
         }
         return null;
       })}
+      {propose ? (
+        <PeriodBriefInsertProposeCard
+          propose={propose}
+          sourcePageId={insertPart && insertPart.type === "period_brief_insert" ? insertPart.source_page_id : undefined}
+        />
+      ) : null}
     </div>
   );
 }
@@ -221,6 +244,8 @@ function createMessagePartKey(part: MessagePart, counts: Map<string, number>): s
     base = `note-write-${part.ref_id ?? "create"}-${hashString(part.label ?? "")}`;
   } else if (part.type === "period_brief_insert") {
     base = `period-brief-insert-${part.ref_id}-${part.selected_option_id ?? "open"}`;
+  } else if (part.type === "period_brief_insert_propose") {
+    base = `period-brief-insert-propose-${part.ref_id}-${part.target_page_id}-${part.mode}`;
   } else {
     base = `attachment-${part.attachment_id}`;
   }

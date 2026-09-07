@@ -2,10 +2,12 @@
  * @vitest-environment happy-dom
  */
 import type { ReactNode } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
+import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { chatKeys, chatMessagesOptions } from "@multica/core/chat/queries";
+import { noteKeys } from "@multica/core/notes/queries";
 import type { Agent } from "@multica/core/types";
 import { renderWithI18n } from "../test/i18n";
 import { NoteAssistantBubble } from "./note-assistant-bubble";
@@ -15,12 +17,16 @@ const {
   listRuntimes,
   listMembers,
   listChatSessions,
+  listChatMessages,
   listPendingChatTasks,
   ensureNotesAssistantAgent,
   ensurePeriodBriefCollectors,
   createNotePeriodBrief,
   cancelNotePeriodBrief,
+  deleteNotePeriodBriefPlan,
   getActiveNotePeriodBrief,
+  getNotePeriodBriefPlan,
+  putNotePeriodBriefPlan,
   toggleNoteBubble,
   setNoteBubbleOpenPageId,
   setNoteBubbleActiveSession,
@@ -32,12 +38,16 @@ const {
   listRuntimes: vi.fn(),
   listMembers: vi.fn(),
   listChatSessions: vi.fn(),
+  listChatMessages: vi.fn(),
   listPendingChatTasks: vi.fn(),
   ensureNotesAssistantAgent: vi.fn(),
   ensurePeriodBriefCollectors: vi.fn(),
   createNotePeriodBrief: vi.fn(),
   cancelNotePeriodBrief: vi.fn(),
+  deleteNotePeriodBriefPlan: vi.fn(),
   getActiveNotePeriodBrief: vi.fn(),
+  getNotePeriodBriefPlan: vi.fn(),
+  putNotePeriodBriefPlan: vi.fn(),
   toggleNoteBubble: vi.fn(),
   setNoteBubbleOpenPageId: vi.fn(),
   setNoteBubbleActiveSession: vi.fn(),
@@ -49,6 +59,7 @@ const {
 const chatState = {
   noteBubbleOpenPageId: null as string | null,
   noteBubbleActiveSessionByPage: {} as Record<string, string>,
+  inputDrafts: {} as Record<string, string>,
   noteSelectionQuote: null as {
     pageId: string;
     excerpts: { id: string; text: string }[];
@@ -67,12 +78,16 @@ vi.mock("@multica/core/api", () => ({
     listRuntimes: (...args: unknown[]) => listRuntimes(...args),
     listMembers: (...args: unknown[]) => listMembers(...args),
     listChatSessions: (...args: unknown[]) => listChatSessions(...args),
+    listChatMessages: (...args: unknown[]) => listChatMessages(...args),
     listPendingChatTasks: (...args: unknown[]) => listPendingChatTasks(...args),
     ensureNotesAssistantAgent: (...args: unknown[]) => ensureNotesAssistantAgent(...args),
     ensurePeriodBriefCollectors: (...args: unknown[]) => ensurePeriodBriefCollectors(...args),
     createNotePeriodBrief: (...args: unknown[]) => createNotePeriodBrief(...args),
     cancelNotePeriodBrief: (...args: unknown[]) => cancelNotePeriodBrief(...args),
+    deleteNotePeriodBriefPlan: (...args: unknown[]) => deleteNotePeriodBriefPlan(...args),
     getActiveNotePeriodBrief: (...args: unknown[]) => getActiveNotePeriodBrief(...args),
+    getNotePeriodBriefPlan: (...args: unknown[]) => getNotePeriodBriefPlan(...args),
+    putNotePeriodBriefPlan: (...args: unknown[]) => putNotePeriodBriefPlan(...args),
     getAgentTemplate: () => Promise.resolve(null),
     listComputers: () => Promise.resolve([]),
   },
@@ -91,6 +106,7 @@ vi.mock("@multica/core/auth", () => ({
 }));
 
 vi.mock("@multica/core/chat", () => ({
+  DRAFT_NEW_SESSION: "__new__",
   useChatStore: Object.assign(
     (sel: (s: typeof chatState) => unknown) => sel(chatState),
     { getState: () => chatState },
@@ -116,6 +132,10 @@ vi.mock("../navigation", () => ({
 
 vi.mock("@multica/ui/hooks/use-mobile", () => ({
   useIsMobile: () => false,
+}));
+
+vi.mock("@multica/ui/lib/error-toast", () => ({
+  showErrorToast: vi.fn(),
 }));
 
 vi.mock("./note-assistant-fab-cluster", () => ({
@@ -145,6 +165,7 @@ vi.mock("../chat/components/chat-window", () => ({
   ChatWindow: ({
     composerAccessory,
     transcriptAccessory,
+    messageAccessory,
     composerPrefix,
     transformOutgoing,
     onSendOverride,
@@ -153,9 +174,11 @@ vi.mock("../chat/components/chat-window", () => ({
     onLockedComposerStop,
     seedSend,
     layout,
+    contextNotePageId,
   }: {
     composerAccessory?: ReactNode;
     transcriptAccessory?: ReactNode;
+    messageAccessory?: (message: { id: string; content?: string; parts?: { type: string }[] }) => ReactNode;
     composerPrefix?: ReactNode;
     transformOutgoing?: (content: string) => string;
     onSendOverride?: (text: string) => boolean | Promise<boolean>;
@@ -164,12 +187,26 @@ vi.mock("../chat/components/chat-window", () => ({
     onLockedComposerStop?: () => void;
     seedSend?: { nonce: number; text: string } | null;
     layout?: string;
-  }) => (
+    contextNotePageId?: string;
+  }) => {
+    const sessionId = contextNotePageId
+      ? chatState.noteBubbleActiveSessionByPage[contextNotePageId] ?? ""
+      : "";
+    const { data: messages = [] } = useQuery({
+      ...chatMessagesOptions(sessionId),
+      enabled: Boolean(sessionId),
+    });
+    return (
     <div>
       <div data-testid="chat-window" data-layout={layout}>
         {composerPrefix}
-        {transcriptAccessory}
-        {composerAccessory}
+        <div data-testid="transcript-slot">
+          {messages.map((message: { id: string; content?: string; parts?: { type: string }[] }) => (
+            <div key={message.id}>{messageAccessory?.(message)}</div>
+          ))}
+          {transcriptAccessory}
+        </div>
+        <div data-testid="composer-slot">{composerAccessory}</div>
       </div>
       {seedSend ? <div data-testid="seed-send">{seedSend.text}</div> : null}
       <button
@@ -201,7 +238,8 @@ vi.mock("../chat/components/chat-window", () => ({
         stop-locked
       </button>
     </div>
-  ),
+    );
+  },
 }));
 
 function agent(overrides: Partial<Agent> = {}): Agent {
@@ -231,18 +269,34 @@ function agent(overrides: Partial<Agent> = {}): Agent {
   };
 }
 
+function sessionPlan(overrides: Record<string, unknown> = {}) {
+  return {
+    window: "week",
+    date: "2026-09-03",
+    start_date: "",
+    end_date: "",
+    collector_agent_ids: ["collector-a", "collector-b"],
+    focus: "",
+    ...overrides,
+  };
+}
+
 describe("NoteAssistantBubble period brief", () => {
   beforeEach(() => {
     listAgents.mockReset();
     listRuntimes.mockReset();
     listMembers.mockReset();
     listChatSessions.mockReset();
+    listChatMessages.mockReset();
     listPendingChatTasks.mockReset();
     ensureNotesAssistantAgent.mockReset();
     ensurePeriodBriefCollectors.mockReset();
     createNotePeriodBrief.mockReset();
     cancelNotePeriodBrief.mockReset();
+    deleteNotePeriodBriefPlan.mockReset();
     getActiveNotePeriodBrief.mockReset();
+    getNotePeriodBriefPlan.mockReset();
+    putNotePeriodBriefPlan.mockReset();
     toggleNoteBubble.mockReset();
     setNoteBubbleOpenPageId.mockReset();
     setNoteBubbleActiveSession.mockReset();
@@ -250,10 +304,30 @@ describe("NoteAssistantBubble period brief", () => {
     removeNoteSelectionExcerpt.mockReset();
     chatState.noteBubbleOpenPageId = null;
     chatState.noteBubbleActiveSessionByPage = {};
+    chatState.inputDrafts = {};
     chatState.noteSelectionQuote = null;
     lastOutgoing.text = "";
     getActiveNotePeriodBrief.mockResolvedValue({ run: null });
+    getNotePeriodBriefPlan.mockResolvedValue({ plan: null });
+    putNotePeriodBriefPlan.mockImplementation(async (data: {
+      window?: string;
+      date?: string;
+      start_date?: string;
+      end_date?: string;
+      collector_agent_ids?: string[];
+      focus?: string;
+    }) => ({
+      plan: {
+        window: data.window ?? "week",
+        date: data.date ?? "",
+        start_date: data.start_date ?? "",
+        end_date: data.end_date ?? "",
+        collector_agent_ids: data.collector_agent_ids ?? [],
+        focus: data.focus ?? "",
+      },
+    }));
     cancelNotePeriodBrief.mockResolvedValue({ run: { id: "run-1", status: "cancelled" } });
+    deleteNotePeriodBriefPlan.mockResolvedValue({ plan: null });
     const collectorA = agent({
       id: "collector-a",
       name: "period-collect-laptopa",
@@ -273,6 +347,7 @@ describe("NoteAssistantBubble period brief", () => {
     ]);
     listMembers.mockResolvedValue([]);
     listChatSessions.mockResolvedValue([]);
+    listChatMessages.mockResolvedValue([]);
     listPendingChatTasks.mockResolvedValue({ tasks: [] });
     ensureNotesAssistantAgent.mockResolvedValue({
       created: false,
@@ -298,7 +373,9 @@ describe("NoteAssistantBubble period brief", () => {
     });
   });
 
-  it("opens the bubble composer instead of a dialog and stays there after send", async () => {
+  it("starts 写汇报 from the session plan, not a local chip draft", async () => {
+    chatState.noteBubbleActiveSessionByPage = { "page-1": "sess-1" };
+    getNotePeriodBriefPlan.mockResolvedValue({ plan: sessionPlan() });
     const user = userEvent.setup();
     const qc = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -310,35 +387,31 @@ describe("NoteAssistantBubble period brief", () => {
       { locale: "zh-Hans" },
     );
 
-    await user.click(screen.getByRole("button", { name: "open-period" }));
     await waitFor(() => {
       expect(screen.getByTestId("period-brief-compose")).toBeTruthy();
     });
     expect(screen.queryByRole("dialog")).toBeNull();
-
+    await user.click(screen.getByTestId("period-brief-start"));
     await waitFor(() => {
-      expect(screen.getByTestId("period-brief-collector-collector-b")).toBeTruthy();
+      expect(createNotePeriodBrief).toHaveBeenCalledWith({
+        agent_id: "notes-1",
+        timezone: "UTC",
+        context_note_page_id: "page-1",
+        chat_session_id: "sess-1",
+        from_chat: true,
+      });
     });
-    await user.click(screen.getByRole("button", { name: "send-override" }));
-    await waitFor(() => {
-      expect(createNotePeriodBrief).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agent_id: "notes-1",
-          collector_agent_ids: ["collector-b"],
-          focus: "只采集 Cloud Box",
-          context_note_page_id: "page-1",
-        }),
-      );
-    });
-    expect(createNotePeriodBrief.mock.calls[0]?.[0]).not.toHaveProperty("chat_session_id");
+    expect(createNotePeriodBrief.mock.calls[0]?.[0]).not.toHaveProperty("window");
+    expect(createNotePeriodBrief.mock.calls[0]?.[0]).not.toHaveProperty("collector_agent_ids");
     expect(setNoteBubbleActiveSession).toHaveBeenCalledWith("page-1", "session-brief");
-    expect(screen.queryByTestId("period-brief-compose")).toBeNull();
-    expect(screen.queryByTestId("period-brief-cancel")).toBeNull();
+    expect(screen.queryByTestId("seed-send")).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("starts 写汇报 in a new thread even when a Q&A session is already open", async () => {
-    chatState.noteBubbleActiveSessionByPage = { "page-1": "old-qa-session" };
+  it("keeps the plan card after a failed start", async () => {
+    chatState.noteBubbleActiveSessionByPage = { "page-1": "sess-1" };
+    getNotePeriodBriefPlan.mockResolvedValue({ plan: sessionPlan() });
+    createNotePeriodBrief.mockRejectedValue(new Error("collectors offline"));
     const user = userEvent.setup();
     const qc = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -350,16 +423,127 @@ describe("NoteAssistantBubble period brief", () => {
       { locale: "zh-Hans" },
     );
 
-    await user.click(screen.getByRole("button", { name: "open-period" }));
     await waitFor(() => {
-      expect(screen.getByTestId("period-brief-collector-collector-b")).toBeTruthy();
+      expect(screen.getByTestId("period-brief-compose")).toBeTruthy();
     });
-    await user.click(screen.getByRole("button", { name: "send-override" }));
+    await user.click(screen.getByTestId("period-brief-start"));
     await waitFor(() => {
       expect(createNotePeriodBrief).toHaveBeenCalled();
     });
-    expect(createNotePeriodBrief.mock.calls[0]?.[0]).not.toHaveProperty("chat_session_id");
+    expect(screen.getByTestId("period-brief-compose")).toBeTruthy();
+    expect(screen.getByTestId("period-brief-start")).not.toBeDisabled();
+    expect(screen.getByTestId("period-brief-compose")).toHaveAttribute("data-spent", "false");
+  });
+
+  it("reuses the open bubble session when starting 写汇报", async () => {
+    chatState.noteBubbleActiveSessionByPage = { "page-1": "old-qa-session" };
+    getNotePeriodBriefPlan.mockResolvedValue({ plan: sessionPlan() });
+    const user = userEvent.setup();
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    renderWithI18n(
+      <QueryClientProvider client={qc}>
+        <NoteAssistantBubble pageId="page-1" pageTitle="Note" />
+      </QueryClientProvider>,
+      { locale: "zh-Hans" },
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("period-brief-start")).toBeTruthy();
+    });
+    await user.click(screen.getByTestId("period-brief-start"));
+    await waitFor(() => {
+      expect(createNotePeriodBrief).toHaveBeenCalledWith(
+        expect.objectContaining({
+          chat_session_id: "old-qa-session",
+          from_chat: true,
+        }),
+      );
+    });
     expect(setNoteBubbleActiveSession).toHaveBeenCalledWith("page-1", "session-brief");
+  });
+
+  it("writes chip edits onto the session plan", async () => {
+    chatState.noteBubbleActiveSessionByPage = { "page-1": "sess-1" };
+    getNotePeriodBriefPlan.mockResolvedValue({ plan: sessionPlan() });
+    const user = userEvent.setup();
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    renderWithI18n(
+      <QueryClientProvider client={qc}>
+        <NoteAssistantBubble pageId="page-1" pageTitle="Note" />
+      </QueryClientProvider>,
+      { locale: "zh-Hans" },
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("period-brief-window-day")).toBeTruthy();
+    });
+    await user.click(screen.getByTestId("period-brief-window-day"));
+    await waitFor(() => {
+      expect(putNotePeriodBriefPlan).toHaveBeenCalledWith(
+        expect.objectContaining({
+          chat_session_id: "sess-1",
+          window: "day",
+          collector_agent_ids: ["collector-a", "collector-b"],
+        }),
+      );
+    });
+    expect(createNotePeriodBrief).not.toHaveBeenCalled();
+  });
+
+  it("cancels the plan card and ends 写汇报", async () => {
+    chatState.noteBubbleActiveSessionByPage = { "page-1": "sess-1" };
+    getNotePeriodBriefPlan.mockResolvedValue({ plan: sessionPlan() });
+    deleteNotePeriodBriefPlan.mockImplementation(async () => {
+      getNotePeriodBriefPlan.mockResolvedValue({ plan: null });
+      return { plan: null };
+    });
+    const user = userEvent.setup();
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    renderWithI18n(
+      <QueryClientProvider client={qc}>
+        <NoteAssistantBubble pageId="page-1" pageTitle="Note" />
+      </QueryClientProvider>,
+      { locale: "zh-Hans" },
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("period-brief-cancel")).toBeTruthy();
+    });
+    await user.click(screen.getByTestId("period-brief-cancel"));
+    await waitFor(() => {
+      expect(deleteNotePeriodBriefPlan).toHaveBeenCalledWith("sess-1");
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("period-brief-compose")).toBeNull();
+    });
+    expect(createNotePeriodBrief).not.toHaveBeenCalled();
+  });
+
+  it("keeps Start disabled when the session plan has no computers", async () => {
+    chatState.noteBubbleActiveSessionByPage = { "page-1": "sess-1" };
+    getNotePeriodBriefPlan.mockResolvedValue({
+      plan: sessionPlan({ collector_agent_ids: [] }),
+    });
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    renderWithI18n(
+      <QueryClientProvider client={qc}>
+        <NoteAssistantBubble pageId="page-1" pageTitle="Note" />
+      </QueryClientProvider>,
+      { locale: "zh-Hans" },
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("period-brief-start")).toBeDisabled();
+    });
+    expect(createNotePeriodBrief).not.toHaveBeenCalled();
   });
 
   it("marks the FAB running while a page chat task is in flight", async () => {
@@ -465,11 +649,12 @@ describe("NoteAssistantBubble period brief", () => {
     });
     await user.click(screen.getByRole("button", { name: "open-period" }));
     await waitFor(() => {
-      expect(screen.getByTestId("period-brief-compose")).toBeTruthy();
+      expect(screen.getByTestId("seed-send")).toHaveTextContent("写汇报");
     });
+    expect(screen.queryByTestId("period-brief-compose")).toBeNull();
   });
 
-  it("cancels the compose chips without starting a run", async () => {
+  it("sends 写汇报 from the satellite without a local plan card", async () => {
     const user = userEvent.setup();
     const qc = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -483,14 +668,14 @@ describe("NoteAssistantBubble period brief", () => {
 
     await user.click(screen.getByRole("button", { name: "open-period" }));
     await waitFor(() => {
-      expect(screen.getByTestId("period-brief-cancel")).toBeTruthy();
+      expect(screen.getByTestId("seed-send")).toHaveTextContent("写汇报");
     });
-    await user.click(screen.getByTestId("period-brief-cancel"));
+    expect(screen.getByTestId("seed-send")).not.toHaveTextContent("<period_brief_compose");
     expect(screen.queryByTestId("period-brief-compose")).toBeNull();
     expect(createNotePeriodBrief).not.toHaveBeenCalled();
   });
 
-  it("asks before opening chips when the user asks for a Period Brief in chat", async () => {
+  it("sends 写汇报 to the assistant without a local confirm card", async () => {
     const user = userEvent.setup();
     const qc = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -503,65 +688,6 @@ describe("NoteAssistantBubble period brief", () => {
     );
 
     expect(screen.queryByTestId("period-brief-compose")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "send-intent" }));
-    await waitFor(() => {
-      expect(screen.getByTestId("period-brief-intent-confirm")).toBeTruthy();
-    });
-    expect(screen.getByTestId("period-brief-intent-confirm")).toHaveTextContent("帮我写汇报");
-    expect(screen.getByTestId("period-brief-intent-confirm")).toHaveTextContent(
-      "看起来像让我整理汇报，要走整理汇报的流程吗？",
-    );
-    expect(screen.queryByTestId("period-brief-compose")).toBeNull();
-    expect(createNotePeriodBrief).not.toHaveBeenCalled();
-    expect(screen.queryByTestId("seed-send")).toBeNull();
-
-    await user.click(screen.getByTestId("period-brief-intent-yes"));
-    await waitFor(() => {
-      expect(screen.getByTestId("period-brief-compose")).toBeTruthy();
-    });
-    expect(screen.queryByTestId("period-brief-intent-confirm")).toBeNull();
-    expect(createNotePeriodBrief).not.toHaveBeenCalled();
-
-    await waitFor(() => {
-      expect(screen.getByTestId("period-brief-collector-collector-b")).toBeTruthy();
-    });
-    await user.click(screen.getByRole("button", { name: "send-override" }));
-    await waitFor(() => {
-      expect(createNotePeriodBrief).toHaveBeenCalledWith(
-        expect.objectContaining({
-          context_note_page_id: "page-1",
-          collector_agent_ids: ["collector-b"],
-        }),
-      );
-      expect(createNotePeriodBrief.mock.calls[0]?.[0]).not.toHaveProperty("chat_session_id");
-    });
-  });
-
-  it("sends the original question when the user declines the Period Brief guess", async () => {
-    const user = userEvent.setup();
-    const qc = new QueryClient({
-      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-    });
-    renderWithI18n(
-      <QueryClientProvider client={qc}>
-        <NoteAssistantBubble pageId="page-1" pageTitle="Note" />
-      </QueryClientProvider>,
-      { locale: "zh-Hans" },
-    );
-
-    await user.click(screen.getByRole("button", { name: "send-intent" }));
-    await waitFor(() => {
-      expect(screen.getByTestId("period-brief-intent-confirm")).toBeTruthy();
-    });
-
-    await user.click(screen.getByTestId("period-brief-intent-no"));
-    await waitFor(() => {
-      expect(screen.getByTestId("seed-send")).toHaveTextContent("帮我写汇报");
-    });
-    expect(screen.queryByTestId("period-brief-intent-confirm")).toBeNull();
-    expect(screen.queryByTestId("period-brief-compose")).toBeNull();
-    expect(createNotePeriodBrief).not.toHaveBeenCalled();
-
     await user.click(screen.getByRole("button", { name: "send-intent" }));
     expect(screen.queryByTestId("period-brief-intent-confirm")).toBeNull();
     expect(screen.queryByTestId("period-brief-compose")).toBeNull();
@@ -569,8 +695,18 @@ describe("NoteAssistantBubble period brief", () => {
     expect(createNotePeriodBrief).not.toHaveBeenCalled();
   });
 
-  it("opens chips from the FAB without asking to confirm", async () => {
-    const user = userEvent.setup();
+  it("does not open the plan card from a historical compose fence", async () => {
+    chatState.noteBubbleActiveSessionByPage = { "page-1": "sess-1" };
+    listChatMessages.mockResolvedValue([
+      {
+        id: "m-compose-old",
+        chat_session_id: "sess-1",
+        role: "assistant",
+        content: "好，我打开写汇报选项。\n<period_brief_compose/>",
+        task_id: null,
+        created_at: "2026-01-01T00:00:00Z",
+      },
+    ]);
     const qc = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
@@ -581,15 +717,173 @@ describe("NoteAssistantBubble period brief", () => {
       { locale: "zh-Hans" },
     );
 
-    await user.click(screen.getByRole("button", { name: "open-period" }));
+    await waitFor(() => expect(getNotePeriodBriefPlan).toHaveBeenCalled());
+    expect(screen.queryByTestId("period-brief-compose")).toBeNull();
+    expect(toggleNoteBubble).not.toHaveBeenCalled();
+    expect(createNotePeriodBrief).not.toHaveBeenCalled();
+  });
+
+  it("opens the plan card when the session has a current plan", async () => {
+    chatState.noteBubbleActiveSessionByPage = { "page-1": "sess-1" };
+    getNotePeriodBriefPlan.mockResolvedValue({ plan: sessionPlan() });
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    renderWithI18n(
+      <QueryClientProvider client={qc}>
+        <NoteAssistantBubble pageId="page-1" pageTitle="Note" />
+      </QueryClientProvider>,
+      { locale: "zh-Hans" },
+    );
+
     await waitFor(() => {
       expect(screen.getByTestId("period-brief-compose")).toBeTruthy();
     });
-    expect(screen.queryByTestId("period-brief-intent-confirm")).toBeNull();
+    expect(
+      screen.getByTestId("transcript-slot").querySelector("[data-testid='period-brief-compose']"),
+    ).toBeTruthy();
+    expect(
+      screen.getByTestId("composer-slot").querySelector("[data-testid='period-brief-compose']"),
+    ).toBeNull();
+    expect(toggleNoteBubble).toHaveBeenCalledWith("page-1");
+    expect(createNotePeriodBrief).not.toHaveBeenCalled();
+  });
+
+  it("shows the plan card after the assistant writes a week-only session plan", async () => {
+    chatState.noteBubbleActiveSessionByPage = { "page-1": "sess-1" };
+    getNotePeriodBriefPlan.mockResolvedValue({ plan: null });
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    renderWithI18n(
+      <QueryClientProvider client={qc}>
+        <NoteAssistantBubble pageId="page-1" pageTitle="Note" />
+      </QueryClientProvider>,
+      { locale: "zh-Hans" },
+    );
+
+    await waitFor(() => expect(getNotePeriodBriefPlan).toHaveBeenCalled());
+    expect(screen.queryByTestId("period-brief-compose")).toBeNull();
+
+    getNotePeriodBriefPlan.mockResolvedValue({
+      plan: sessionPlan({ collector_agent_ids: [] }),
+    });
+    await act(async () => {
+      await qc.invalidateQueries({ queryKey: noteKeys.periodBriefPlan("ws-1", "sess-1") });
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("period-brief-compose")).toBeTruthy();
+    });
+    expect(screen.getByTestId("period-brief-start")).toBeDisabled();
+  });
+
+  it("hides the plan card after the session plan is consumed", async () => {
+    chatState.noteBubbleActiveSessionByPage = { "page-1": "sess-1" };
+    getNotePeriodBriefPlan.mockResolvedValue({ plan: null });
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    renderWithI18n(
+      <QueryClientProvider client={qc}>
+        <NoteAssistantBubble pageId="page-1" pageTitle="Note" />
+      </QueryClientProvider>,
+      { locale: "zh-Hans" },
+    );
+
+    await waitFor(() => expect(getNotePeriodBriefPlan).toHaveBeenCalled());
+    expect(screen.queryByTestId("period-brief-compose")).toBeNull();
+    expect(createNotePeriodBrief).not.toHaveBeenCalled();
+  });
+
+  it("does not start from a chat start fence; the assistant start tool does", async () => {
+    chatState.noteBubbleActiveSessionByPage = { "page-1": "sess-1" };
+    getNotePeriodBriefPlan.mockResolvedValue({ plan: sessionPlan() });
+    chatState.inputDrafts = { "sess-1": "只整理 ~/multica" };
+    listChatMessages.mockResolvedValue([]);
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    renderWithI18n(
+      <QueryClientProvider client={qc}>
+        <NoteAssistantBubble pageId="page-1" pageTitle="Note" />
+      </QueryClientProvider>,
+      { locale: "zh-Hans" },
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("period-brief-compose")).toBeTruthy();
+    });
+    qc.setQueryData(chatKeys.messages("sess-1"), [
+      {
+        id: "m-start",
+        chat_session_id: "sess-1",
+        role: "assistant",
+        content: "开始采集。\n<period_brief_start/>",
+        task_id: null,
+        created_at: "2026-01-01T00:00:01Z",
+      },
+    ]);
+    expect(createNotePeriodBrief).not.toHaveBeenCalled();
+    expect(screen.getByTestId("period-brief-compose")).toBeTruthy();
+  });
+
+  it("does not resynth from a chat resynth fence", async () => {
+    chatState.noteBubbleActiveSessionByPage = { "page-1": "sess-1" };
+    getNotePeriodBriefPlan.mockResolvedValue({ plan: sessionPlan() });
+    listChatMessages.mockResolvedValue([]);
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    renderWithI18n(
+      <QueryClientProvider client={qc}>
+        <NoteAssistantBubble pageId="page-1" pageTitle="Note" />
+      </QueryClientProvider>,
+      { locale: "zh-Hans" },
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId("period-brief-compose")).toBeTruthy();
+    });
+    qc.setQueryData(chatKeys.messages("sess-1"), [
+      {
+        id: "m-resynth",
+        chat_session_id: "sess-1",
+        role: "assistant",
+        content: "我把两台电脑的材料并在一起。\n<period_brief_resynth/>",
+        task_id: null,
+        created_at: "2026-01-01T00:00:01Z",
+      },
+    ]);
+    expect(createNotePeriodBrief).not.toHaveBeenCalled();
+  });
+
+  it("does not replay a historical resynth fence", async () => {
+    chatState.noteBubbleActiveSessionByPage = { "page-1": "sess-1" };
+    listChatMessages.mockResolvedValue([
+      {
+        id: "m-resynth-old",
+        chat_session_id: "sess-1",
+        role: "assistant",
+        content: "并入上一台电脑。\n<period_brief_resynth/>",
+        task_id: null,
+        created_at: "2026-01-01T00:00:00Z",
+      },
+    ]);
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    renderWithI18n(
+      <QueryClientProvider client={qc}>
+        <NoteAssistantBubble pageId="page-1" pageTitle="Note" />
+      </QueryClientProvider>,
+      { locale: "zh-Hans" },
+    );
+    await waitFor(() => expect(getNotePeriodBriefPlan).toHaveBeenCalled());
+    expect(createNotePeriodBrief).not.toHaveBeenCalled();
   });
 
   it("shows a collector setup card instead of silently creating agents", async () => {
-    const user = userEvent.setup();
+    chatState.noteBubbleActiveSessionByPage = { "page-1": "sess-1" };
+    getNotePeriodBriefPlan.mockResolvedValue({ plan: sessionPlan({ collector_agent_ids: [] }) });
     listAgents.mockResolvedValue([agent()]);
     listRuntimes.mockResolvedValue([
       {
@@ -621,7 +915,6 @@ describe("NoteAssistantBubble period brief", () => {
       { locale: "zh-Hans" },
     );
 
-    await user.click(screen.getByRole("button", { name: "open-period" }));
     await waitFor(() => {
       expect(screen.getByTestId("period-brief-collector-missing-local:pc-daemon-aaaa")).toBeTruthy();
       expect(screen.getByTestId("period-brief-collector-missing-cloud:runtime-cloud")).toBeTruthy();
@@ -740,24 +1033,31 @@ describe("NoteAssistantBubble highlights", () => {
     listRuntimes.mockReset();
     listMembers.mockReset();
     listChatSessions.mockReset();
+    listChatMessages.mockReset();
     listPendingChatTasks.mockReset();
     ensureNotesAssistantAgent.mockReset();
     createNotePeriodBrief.mockReset();
     cancelNotePeriodBrief.mockReset();
+    deleteNotePeriodBriefPlan.mockReset();
     getActiveNotePeriodBrief.mockReset();
+    getNotePeriodBriefPlan.mockReset();
+    putNotePeriodBriefPlan.mockReset();
     toggleNoteBubble.mockReset();
     setNoteBubbleOpenPageId.mockReset();
     chatState.noteBubbleOpenPageId = null;
     chatState.noteBubbleActiveSessionByPage = {};
+    chatState.inputDrafts = {};
     chatState.noteSelectionQuote = null;
     lastOutgoing.text = "";
     getActiveNotePeriodBrief.mockResolvedValue({ run: null });
+    getNotePeriodBriefPlan.mockResolvedValue({ plan: null });
     listAgents.mockResolvedValue([agent()]);
     listRuntimes.mockResolvedValue([
       { id: "runtime-1", status: "online", runtime_mode: "local", owner_id: "user-1" },
     ]);
     listMembers.mockResolvedValue([]);
     listChatSessions.mockResolvedValue([]);
+    listChatMessages.mockResolvedValue([]);
     listPendingChatTasks.mockResolvedValue({ tasks: [] });
     ensureNotesAssistantAgent.mockResolvedValue({
       created: false,
@@ -819,10 +1119,20 @@ describe("NoteAssistantBubble highlights", () => {
   });
 
   it("closes the period brief card when opening highlights", async () => {
+    chatState.noteBubbleActiveSessionByPage = { "page-1": "sess-1" };
+    getNotePeriodBriefPlan.mockResolvedValue({
+      plan: {
+        window: "week",
+        date: "2026-09-03",
+        start_date: "",
+        end_date: "",
+        collector_agent_ids: ["collector-a"],
+        focus: "",
+      },
+    });
     const user = userEvent.setup();
     renderBubble();
 
-    await user.click(screen.getByRole("button", { name: "open-period" }));
     await waitFor(() => {
       expect(screen.getByTestId("period-brief-compose")).toBeTruthy();
     });
@@ -842,10 +1152,10 @@ describe("NoteAssistantBubble highlights", () => {
 
     await user.click(screen.getByRole("button", { name: "open-period" }));
     await waitFor(() => {
-      expect(screen.getByTestId("period-brief-compose")).toBeTruthy();
+      expect(screen.getByTestId("seed-send")).toHaveTextContent("写汇报");
     });
     expect(screen.queryByTestId("highlights-compose")).toBeNull();
-    expect(screen.queryByTestId("seed-send")).toBeNull();
+    expect(screen.getByTestId("seed-send")).not.toHaveTextContent("<period_brief_compose");
   });
 
   it("keeps an in-progress draft when highlights is clicked again", async () => {

@@ -124,16 +124,19 @@ export interface ChatWindowProps {
   seedSend?: { nonce: number; text: string } | null;
   onSeedSendConsumed?: () => void;
   /**
-   * Optional slot rendered in the conversation area (empty state) and,
-   * when messages exist, above the composer (e.g. Period Brief chips).
+   * Optional slot pinned above the composer (e.g. Highlights compose,
+   * Notes assistant setup). Not for 写汇报 chips — those belong in the
+   * transcript.
    */
   composerAccessory?: React.ReactNode;
   /**
-   * Local conversation turn after persisted messages (e.g. 写汇报
-   * confirm). Treated as "has messages" so an empty thread still shows
-   * the list instead of the empty state.
+   * Local conversation turn after persisted messages (e.g. a pending
+   * 写汇报 card before the compose turn lands). Treated as "has messages"
+   * so an empty thread still shows the list instead of the empty state.
    */
   transcriptAccessory?: React.ReactNode;
+  /** Rendered under a transcript message (e.g. a persisted 写汇报 card). */
+  messageAccessory?: (message: import("@multica/core/types").ChatMessage) => React.ReactNode;
   /** Override the composer placeholder when the accessory is driving send. */
   composerPlaceholder?: string;
   /** Allow sending an empty composer (Period Brief chip-only start). */
@@ -301,6 +304,7 @@ export function ChatWindow({
   onSeedSendConsumed,
   composerAccessory,
   transcriptAccessory,
+  messageAccessory,
   composerPlaceholder,
   allowEmptySend = false,
   onSendOverride,
@@ -986,7 +990,7 @@ export function ChatWindow({
   const sidebarPresence = noteAssistantSidebarPresence(isOpen, sidebarStayMounted);
   const sidebarSlideOpen = sidebarPresence === "open" && sidebarEntered;
 
-  const hasMessages = messages.length > 0 || turnOutstanding || Boolean(transcriptAccessory);
+  const hasMessages = messages.length > 0 || turnOutstanding || Boolean(transcriptAccessory) || composerLocked;
   const mainPane = chatWindowMainPane(showSkeleton, hasMessages, Boolean(composerAccessory));
 
   const isVisible = isOpen && (isFullscreen || isSidebar || isExpanded || boundsReady);
@@ -1212,6 +1216,8 @@ export function ChatWindow({
           hoverMessageActions={isNoteBubble}
           noteInsertPageId={isNoteBubble ? contextNotePageId : undefined}
           trailingSlot={transcriptAccessory}
+          afterMessage={messageAccessory}
+          workingIndicator={composerLocked}
         />
       ) : mainPane === "spacer" ? (
         <div className={chatWindowMainPaneClassName(mainPane)} aria-hidden />

@@ -30,6 +30,7 @@ import {
 import { ChevronRight, ChevronDown, ChevronUp, Brain, AlertCircle, AlertTriangle, Copy } from "lucide-react";
 import { ChatMessageHoverShell } from "./chat-message-hover-actions";
 import { NoteChatInsertActions } from "./note-chat-insert-actions";
+import { stripPeriodBriefInsertProposeMarkers } from "@multica/core/notes/period-brief-insert";
 import { buildChatNoteWriteConfirmationByMessageId } from "@multica/core/notes/worker-reply-actions";
 import { useScrollFade } from "@multica/ui/hooks/use-scroll-fade";
 import { chatTranscriptOptions, isStandaloneSessionOutstanding, isTaskMessageTaskId } from "@multica/core/chat/queries";
@@ -78,8 +79,7 @@ import type { MessagePart } from "@multica/core/types";
 
 interface ChatListChrome {
   isFetchingOlderMessages: boolean;
-  showStatusPill: boolean;
-  pendingTask: ChatPendingTask | null | undefined;
+  statusPillTask: ChatPendingTask | null;
   availability: AgentPresence | undefined;
   loadingOlderLabel: string;
   trailingSlot: ReactNode;
@@ -87,6 +87,8 @@ interface ChatListChrome {
 
 const ChatListChromeContext = createContext<ChatListChrome | null>(null);
 const ChatMessageBodyLayoutContext = createContext<(() => void) | null>(null);
+
+const WORKING_INDICATOR_PILL_TASK: ChatPendingTask = { status: "running" };
 
 function ChatMessageListHeader() {
   const chrome = use(ChatListChromeContext);
@@ -103,16 +105,16 @@ function ChatMessageListHeader() {
 function ChatMessageListFooter() {
   const chrome = use(ChatListChromeContext);
   if (!chrome) return null;
-  if (!chrome.trailingSlot && !(chrome.showStatusPill && chrome.pendingTask)) return null;
+  if (!chrome.trailingSlot && !chrome.statusPillTask) return null;
   return (
     <div className="mx-auto w-full max-w-4xl px-5 pb-4 space-y-4">
       {chrome.trailingSlot}
-      {chrome.showStatusPill && chrome.pendingTask && (
+      {chrome.statusPillTask ? (
         <TaskStatusPill
-          pendingTask={chrome.pendingTask}
+          pendingTask={chrome.statusPillTask}
           availability={chrome.availability}
         />
-      )}
+      ) : null}
     </div>
   );
 }
@@ -130,9 +132,16 @@ interface ChatMessageListProps {
   messages: ChatMessage[];
   /**
    * Server-authoritative pending-task snapshot. `null` / undefined means
-   * no in-flight task — list renders without StatusPill.
+   * no in-flight standalone turn. Combined with `workingIndicator` to
+   * decide whether StatusPill renders.
    */
   pendingTask: ChatPendingTask | null | undefined;
+  /**
+   * Period-brief composer lock (collecting / synthesizing / submitting):
+   * keep the in-thread Thinking pill after the start turn has already
+   * landed, so in-flight work is not only the FAB stop pulse.
+   */
+  workingIndicator?: boolean;
   /** Resolved presence; pass `undefined` while loading to keep the pill copy neutral. */
   availability: AgentPresence | undefined;
   firstItemIndex?: number;
@@ -153,6 +162,8 @@ interface ChatMessageListProps {
   noteInsertPageId?: string | null;
   /** Local turn rendered after persisted messages (e.g. 写汇报 confirm). */
   trailingSlot?: ReactNode;
+  /** Rendered under a specific message (e.g. a 写汇报 collect-scope card). */
+  afterMessage?: (message: ChatMessage) => ReactNode;
 }
 
 export function ChatMessageList({
@@ -168,6 +179,8 @@ export function ChatMessageList({
   hoverMessageActions = false,
   noteInsertPageId,
   trailingSlot,
+  afterMessage,
+  workingIndicator = false,
 }: ChatMessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const lastTailIdRef = useRef<string | undefined>(undefined);
@@ -194,9 +207,16 @@ export function ChatMessageList({
   const turnOutstanding = isStandaloneSessionOutstanding(pendingTask);
   const lastMessage = messages[messages.length - 1];
   const pendingAlreadyPersisted = turnOutstanding && lastMessage?.role === "assistant";
-  // Standalone Raft deliver has no live task:message stream — StatusPill alone
-  // covers the outstanding wait until chat:done lands the assistant message.
-  const showStatusPill = turnOutstanding && !pendingAlreadyPersisted && !!pendingTask;
+  // Standalone Raft deliver has no live task:message stream — StatusPill
+  // covers the outstanding wait until chat:done. Period-brief collection
+  // also keeps the pill via workingIndicator after the start turn lands.
+  const showPendingTurnPill = turnOutstanding && !pendingAlreadyPersisted && !!pendingTask;
+  const showStatusPill = showPendingTurnPill || workingIndicator;
+  const statusPillTask: ChatPendingTask | null = !showStatusPill
+    ? null
+    : pendingTask && turnOutstanding
+      ? pendingTask
+      : WORKING_INDICATOR_PILL_TASK;
 
   const totalCount = messages.length + (showStatusPill ? 1 : 0);
   const firstIndex = totalCount > 0 ? firstItemIndex : 0;
@@ -275,16 +295,14 @@ export function ChatMessageList({
   const chromeValue = useMemo<ChatListChrome>(
     () => ({
       isFetchingOlderMessages,
-      showStatusPill,
-      pendingTask,
+      statusPillTask,
       availability,
       loadingOlderLabel: t(($) => $.message_list.loading_older),
       trailingSlot: trailingSlot ?? null,
     }),
     [
       isFetchingOlderMessages,
-      showStatusPill,
-      pendingTask,
+      statusPillTask,
       availability,
       t,
       trailingSlot,
@@ -330,6 +348,7 @@ export function ChatMessageList({
             components={chatMessageListVirtuosoComponents}
             itemContent={(_, msg) => {
               const dividerLabel = dayDividers.get(msg.id);
+              const accessory = afterMessage?.(msg);
               return (
                 <div className="mx-auto w-full max-w-4xl">
                   {dividerLabel ? <ChatDateDivider label={dividerLabel} /> : null}
@@ -343,6 +362,7 @@ export function ChatMessageList({
                       noteInsertPageId={noteInsertPageId}
                       offerNoteInsert={noteInsertOffers.has(msg.id)}
                     />
+                    {accessory ? <div className="mt-3">{accessory}</div> : null}
                   </div>
                 </div>
               );
@@ -862,10 +882,11 @@ function MessageProse({
   }
 
   const unwrapped = unwrapStructuredPreviewContent(content);
+  const visible = stripPeriodBriefInsertProposeMarkers(unwrapped ?? content);
   return (
     <ChatCollapsibleBody contentKey={contentKey}>
       <div className={cn("text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none", selectableMessageTextClass)}>
-        <Markdown attachments={attachments}>{unwrapped ?? content}</Markdown>
+        {visible ? <Markdown attachments={attachments}>{visible}</Markdown> : null}
       </div>
     </ChatCollapsibleBody>
   );

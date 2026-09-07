@@ -44,6 +44,30 @@ func TestFormatPeriodBriefChatResidueNamesInsertedChild(t *testing.T) {
 	}
 }
 
+func TestFormatPeriodBriefChatResidueListsSessionMaterials(t *testing.T) {
+	got := formatPeriodBriefChatResidue(periodBriefChatResidue{
+		RunID:         "run-4",
+		Status:        "done",
+		WindowLabel:   "2026-W36",
+		BriefMarkdown: "# 工作介绍\n只有 ubuntu",
+		Materials: []periodBriefSessionMaterial{
+			{AgentID: "lijian", Label: "采集 · Pi (lijian)", WindowLabel: "2026-W36", InLatestRun: false},
+		},
+	})
+	for _, want := range []string{
+		"<period_brief_session_materials>",
+		"in_latest_run: no",
+		"Do not call start",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("residue missing session materials %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "<period_brief_resynth/>") {
+		t.Fatalf("residue still teaches resynth fence:\n%s", got)
+	}
+}
+
 func TestFormatPeriodBriefChatResidueUsesDraftWhenNotInserted(t *testing.T) {
 	got := formatPeriodBriefChatResidue(periodBriefChatResidue{
 		RunID:       "run-2",
@@ -119,8 +143,10 @@ WHERE draft_page_id = $3`, sessionID, childID, draftID); err != nil {
 	prefix := testHandler.buildNoteChatWakePrefix(context.Background(), parseUUID(sessionID))
 	for _, want := range []string{
 		"<note_chat_context>",
+		"chat_session_id: " + sessionID,
 		"context_note_page_id: " + sourcePageID,
 		"<period_brief_residue>",
+		"source_page_id: " + sourcePageID,
 		"inserted: child",
 		"result_page_id: " + childID,
 		"notes get result_page_id",
@@ -148,8 +174,51 @@ UPDATE chat_session SET context_note_page_id = $1 WHERE id = $2`, sourcePageID, 
 	if !strings.Contains(prefix, "<note_chat_context>") {
 		t.Fatalf("expected note context:\n%s", prefix)
 	}
+	if !strings.Contains(prefix, "<period_brief_current_plan>") || !strings.Contains(prefix, "status: none") {
+		t.Fatalf("expected empty current-plan board:\n%s", prefix)
+	}
 	if strings.Contains(prefix, "<period_brief_residue>") {
 		t.Fatalf("plain bubble should not invent residue:\n%s", prefix)
+	}
+	if strings.Contains(prefix, "<period_brief_progress>") {
+		t.Fatalf("plain bubble should not invent progress:\n%s", prefix)
+	}
+}
+
+func TestBuildNoteChatWakePrefixIncludesProgressDuringCollect(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	sourcePageID := insertPeriodBriefFixtureDraft(t, "Source")
+	draftID := insertPeriodBriefFixtureDraft(t, "工作介绍 底稿")
+	synthID := createHandlerTestAgent(t, "Progress Wake "+uuid.NewString()[:8], nil)
+	sessionID := createHandlerTestChatSession(t, synthID)
+	if _, err := testPool.Exec(context.Background(), `
+UPDATE chat_session SET context_note_page_id = $1 WHERE id = $2`, sourcePageID, sessionID); err != nil {
+		t.Fatalf("bind session: %v", err)
+	}
+	folderID := insertPeriodBriefFixtureDraft(t, "工作介绍")
+	insertPeriodBriefFixtureRun(t, sourcePageID, folderID, synthID, draftID, "collecting", time.Now().UTC())
+	if _, err := testPool.Exec(context.Background(), `
+UPDATE note_period_brief_run SET chat_session_id = $1 WHERE draft_page_id = $2`, sessionID, draftID); err != nil {
+		t.Fatalf("bind run: %v", err)
+	}
+
+	prefix := testHandler.buildNoteChatWakePrefix(context.Background(), parseUUID(sessionID))
+	for _, want := range []string{
+		"<note_chat_context>",
+		"<period_brief_progress>",
+		"event: update",
+		"run_status: collecting",
+		"Do not start synthesis",
+	} {
+		if !strings.Contains(prefix, want) {
+			t.Fatalf("progress prefix missing %q:\n%s", want, prefix)
+		}
+	}
+	if strings.Contains(prefix, "<period_brief_residue>") {
+		t.Fatalf("in-flight run should not look finished:\n%s", prefix)
 	}
 }
 

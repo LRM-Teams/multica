@@ -751,8 +751,27 @@ func (h *Handler) SendChatMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.tryCompletePeriodBriefInsertFromChat(r.Context(), session, parseUUID(userID), parseUUID(workspaceID), userID, content) ||
-		h.tryHandlePeriodBriefBubbleChat(r, session, parseUUID(userID), parseUUID(workspaceID), userID, content) {
+	if h.tryCompletePeriodBriefInsertFromChat(r.Context(), session, parseUUID(userID), parseUUID(workspaceID), userID, content) {
+		if err := h.Queries.TouchChatSession(r.Context(), session.ID); err != nil {
+			slog.Warn("failed to touch chat session", "session_id", sessionID, "error", err)
+		}
+		h.publishChatToCreator(protocol.EventChatMessage, workspaceID, "member", userID, resolvedSessionID, uuidToString(session.CreatorID), protocol.ChatMessagePayload{
+			ChatSessionID: resolvedSessionID,
+			MessageID:     uuidToString(msg.ID),
+			Role:          "user",
+			Content:       content,
+			Parts:         parts,
+			CreatedAt:     timestampToString(msg.CreatedAt),
+		})
+		writeJSON(w, http.StatusCreated, SendChatMessageResponse{
+			MessageID: uuidToString(msg.ID),
+			Pending:   false,
+			CreatedAt: timestampToString(msg.CreatedAt),
+		})
+		return
+	}
+
+	if h.tryHandlePeriodBriefPlanAsk(r, session, parseUUID(userID), parseUUID(workspaceID), userID, content) {
 		if err := h.Queries.TouchChatSession(r.Context(), session.ID); err != nil {
 			slog.Warn("failed to touch chat session", "session_id", sessionID, "error", err)
 		}

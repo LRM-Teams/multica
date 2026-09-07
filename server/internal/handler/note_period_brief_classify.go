@@ -215,9 +215,58 @@ func periodBriefAnyCollectorReady(packs []notePeriodBriefPackResult) bool {
 	return false
 }
 
+func periodBriefFailedCollectorIDs(packs []notePeriodBriefPackResult) []string {
+	out := make([]string, 0)
+	seen := make(map[string]struct{}, len(packs))
+	for _, pack := range packs {
+		switch pack.Status {
+		case "failed", "stalled", "cancelled":
+		default:
+			continue
+		}
+		id := strings.TrimSpace(pack.AgentID)
+		if id == "" {
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
+// periodBriefOfficialBriefBlocked is true when every collector result is
+// received and at least one selected computer failed, stalled, or cancelled
+// with no pack. Remaining ready harvests must not become a new official brief.
+func periodBriefOfficialBriefBlocked(packs []notePeriodBriefPackResult) bool {
+	if !periodBriefAllCollectorResultsFinal(packs) {
+		return false
+	}
+	for _, pack := range packs {
+		switch pack.Status {
+		case "failed", "stalled", "cancelled":
+			return true
+		}
+	}
+	return false
+}
+
+func periodBriefMissingHarvestProgressCopy(spoken string) string {
+	spoken = strings.TrimSpace(spoken)
+	if spoken == "" {
+		return "有采集没有成功，正式稿没有更新。可以再说一次采集。"
+	}
+	return spoken + "没有采到材料，正式稿没有更新。可以再说一次采集。"
+}
+
 func periodBriefMaterialsProgressCopy(packs []notePeriodBriefPackResult) string {
 	if !periodBriefAllCollectorResultsFinal(packs) {
 		return "有采集没有成功，笔记助手会再发起一次采集。"
+	}
+	if periodBriefOfficialBriefBlocked(packs) {
+		return periodBriefMissingHarvestProgressCopy("")
 	}
 	if periodBriefAnyCollectorReady(packs) {
 		return "我已经收到了所有需要的材料，下面将根据这些材料整理一份汇报稿。"

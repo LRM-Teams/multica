@@ -138,6 +138,41 @@ export function invalidateVoiceCallFromRealtime(
   });
 }
 
+/** Assistant 写汇报 tools finish before chat:done; the plan query often
+ *  cached `{plan:null}` at send time. Refetch when the turn lands so the
+ *  plan card appears under the “I created the card” reply. */
+export function invalidateNotePeriodBriefPlanFromRealtime(
+  qc: QueryClient,
+  sessionId: string | undefined,
+): void {
+  const wsId = getCurrentWsId();
+  if (!wsId || !sessionId) return;
+  qc.invalidateQueries({ queryKey: noteKeys.periodBriefPlan(wsId, sessionId) });
+}
+
+/** Start consumes the plan card. The composer lock lives on the page's
+ *  active run, which is a different query — refetch it or the rail looks
+ *  idle while collectors are still running. */
+export function invalidateNotePeriodBriefLockFromRealtime(qc: QueryClient): void {
+  const wsId = getCurrentWsId();
+  if (!wsId) return;
+  qc.invalidateQueries({ queryKey: [...noteKeys.all(wsId), "period-brief-active"] });
+}
+
+export function applyNotePeriodBriefPlanFromRealtime(
+  qc: QueryClient,
+  payload: { chat_session_id?: string; plan?: unknown },
+): void {
+  const wsId = getCurrentWsId();
+  const sessionId = payload.chat_session_id;
+  if (!wsId || !sessionId) return;
+  if ("plan" in payload) {
+    qc.setQueryData(noteKeys.periodBriefPlan(wsId, sessionId), { plan: payload.plan ?? null });
+  }
+  invalidateNotePeriodBriefPlanFromRealtime(qc, sessionId);
+  invalidateNotePeriodBriefLockFromRealtime(qc);
+}
+
 export function applyChatDoneToCache(
   qc: QueryClient,
   payload: ChatDonePayload,
@@ -741,6 +776,7 @@ export function useRealtimeSync(
       // Direct note shares notify recipients here; skip the prefix path so a
       // future notes:* refreshMap entry cannot double-invalidate.
       "notes:share_unread",
+      "notes:period_brief_plan",
       // task:completed / task:failed deliberately NOT here. They go through
       // both the task-prefix invalidate (refreshes the agent-task-snapshot
       // cache) AND the chat-specific ws.on() handlers below. The two
@@ -1082,6 +1118,7 @@ export function useRealtimeSync(
       invalidateChatMessageQueries(qc, payload.chat_session_id);
       qc.invalidateQueries({ queryKey: chatKeys.pendingTask(payload.chat_session_id) });
       invalidatePendingAggregate();
+      invalidateNotePeriodBriefLockFromRealtime(qc);
       // A new message can flip has_unread and reorder the session list — e.g.
       // an agent-initiated DM arriving in a thread the user isn't viewing.
       // Refresh the lists so the contact row / FAB badge update live.
@@ -1110,6 +1147,8 @@ export function useRealtimeSync(
       applyChatDoneToCache(qc, payload);
       invalidateNoteAIJob(payload.task_id);
       invalidatePendingAggregate();
+      invalidateNotePeriodBriefPlanFromRealtime(qc, payload.chat_session_id);
+      invalidateNotePeriodBriefLockFromRealtime(qc);
       // Assistant message just landed → has_unread may have flipped to true.
       invalidateChatConversationLists();
     });
@@ -1413,6 +1452,10 @@ export function useRealtimeSync(
       if (wsId) qc.invalidateQueries({ queryKey: noteKeys.all(wsId) });
     });
 
+    const unsubNotePeriodBriefPlan = ws.on("notes:period_brief_plan", (p) => {
+      applyNotePeriodBriefPlanFromRealtime(qc, p as { chat_session_id?: string; plan?: unknown });
+    });
+
     return () => {
       unsubAny();
       unsubAgentActivity();
@@ -1472,6 +1515,7 @@ export function useRealtimeSync(
       unsubResearchProductRound();
       unsubResearchV6Projection();
       unsubNotesShareUnread();
+      unsubNotePeriodBriefPlan();
       timers.forEach(clearTimeout);
       timers.clear();
     };

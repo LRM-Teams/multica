@@ -26,10 +26,16 @@ const (
 	// existing note_page. Label may carry a suggested title.
 	MessagePartTypeNoteWrite = "note_write"
 	// MessagePartTypePeriodBriefInsert is the two-button insert card on a
-	// Notes-bubble Period Brief result (append below the issuing page, or
-	// create a child page). RefID is the run id; SelectedOptionID is set
-	// after the human picks append or child.
+	// Notes-bubble Period Brief result (append below a chosen page, or
+	// create a child page). RefID is the run id; SourcePageID is the
+	// issuing page; SelectedOptionID is set after the human picks append
+	// or child.
 	MessagePartTypePeriodBriefInsert = "period_brief_insert"
+	// MessagePartTypePeriodBriefInsertPropose is a speech-resolved insert
+	// target. RefID is the run id; TargetPageID + SelectedOptionID are
+	// the proposed page and mode. The human still confirms when the
+	// target is not the issuing page.
+	MessagePartTypePeriodBriefInsertPropose = "period_brief_insert_propose"
 	// MessagePartTypeConfirmation is the structured acknowledgement part (LRM-1523
 	// L1). A pure confirmation carries no new information, no @-directive and no
 	// action, and must not wake any agent.
@@ -168,6 +174,10 @@ type MessagePart struct {
 	ExpiresAt        string         `json:"expires_at,omitempty"`
 	SelectedOptionID string         `json:"selected_option_id,omitempty"`
 	SelectCount      int            `json:"select_count,omitempty"`
+	// SourcePageID is the issuing note for a Period Brief insert card.
+	SourcePageID string `json:"source_page_id,omitempty"`
+	// TargetPageID is the resolved note for a Period Brief insert proposal.
+	TargetPageID string `json:"target_page_id,omitempty"`
 
 	// Choice reply fields (type=choice_reply) — user-visible answer after click.
 	OptionID string `json:"option_id,omitempty"`

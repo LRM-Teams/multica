@@ -9,7 +9,7 @@ import type { ReactNode } from "react";
 import { setApiInstance } from "../api";
 import type { ApiClient } from "../api/client";
 import type { NotePage, NotePageListResponse } from "../types";
-import { useUpdateNotePage } from "./mutations";
+import { useUpdateNotePage, abortInFlightNotePageUpdate, applyFetchedNotePageToCache } from "./mutations";
 import { noteKeys } from "./queries";
 
 vi.mock("../hooks", () => ({
@@ -157,5 +157,51 @@ describe("useUpdateNotePage", () => {
     });
 
     expect(qc.getQueryData<NotePage>(noteKeys.detail(WS_ID, NOTE_ID))?.content).toBe("ab");
+  });
+
+  it("does not let an aborted autosave overwrite a fetched insert snapshot", async () => {
+    const updateNotePage = vi
+      .fn<(id: string, data: { content?: string }, init?: { signal?: AbortSignal }) => Promise<NotePage>>()
+      .mockImplementation((_id, _data, init) => {
+        return new Promise<NotePage>((_resolve, reject) => {
+          const fail = () => {
+            const error = new Error("aborted");
+            error.name = "AbortError";
+            reject(error);
+          };
+          if (init?.signal?.aborted) {
+            fail();
+            return;
+          }
+          init?.signal?.addEventListener("abort", fail);
+        });
+      });
+
+    setApiInstance({ updateNotePage } as unknown as ApiClient);
+
+    const { result } = renderHook(() => useUpdateNotePage(), {
+      wrapper: createWrapper(qc),
+    });
+
+    let saveDone!: Promise<unknown>;
+    await act(async () => {
+      saveDone = result.current.mutateAsync({ id: NOTE_ID, data: { content: "stale draft" } }).catch((error: unknown) => error);
+    });
+
+    abortInFlightNotePageUpdate(NOTE_ID);
+    applyFetchedNotePageToCache(
+      qc,
+      WS_ID,
+      makeNote({
+        content: "Existing body\n\n## 工作介绍 本周\n\nDone.",
+        updated_at: "2026-08-01T00:00:05.000Z",
+      }),
+    );
+
+    await act(async () => {
+      await saveDone;
+    });
+
+    expect(qc.getQueryData<NotePage>(noteKeys.detail(WS_ID, NOTE_ID))?.content).toContain("工作介绍");
   });
 });

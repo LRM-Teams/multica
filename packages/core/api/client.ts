@@ -269,6 +269,8 @@ import type {
   CreateNotePeriodBriefRequest,
   CreateNotePeriodBriefResponse,
   NotePeriodBriefActiveResponse,
+  NotePeriodBriefPlanResponse,
+  PutNotePeriodBriefPlanRequest,
   InsertNotePeriodBriefRequest,
   InsertNotePeriodBriefResponse,
   IssueNoteRefListResponse,
@@ -531,6 +533,8 @@ import {
   EMPTY_CREATE_NOTE_PERIOD_BRIEF_RESPONSE,
   NotePeriodBriefActiveResponseSchema,
   EMPTY_NOTE_PERIOD_BRIEF_ACTIVE,
+  NotePeriodBriefPlanResponseSchema,
+  EMPTY_NOTE_PERIOD_BRIEF_PLAN_RESPONSE,
   InsertNotePeriodBriefResponseSchema,
   EMPTY_INSERT_NOTE_PERIOD_BRIEF_RESPONSE,
 } from "./schemas";
@@ -1115,10 +1119,15 @@ export class ApiClient {
     });
   }
 
-  async updateNotePage(id: string, data: UpdateNotePageRequest): Promise<NotePage> {
+  async updateNotePage(
+    id: string,
+    data: UpdateNotePageRequest,
+    init?: Pick<RequestInit, "signal">,
+  ): Promise<NotePage> {
     const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify(data),
+      signal: init?.signal,
     });
     return parseWithFallback(raw, NotePageSchema, EMPTY_NOTE_PAGE, {
       endpoint: "PATCH /api/notes/pages/{id}",
@@ -1307,6 +1316,35 @@ export class ApiClient {
     );
     return parseWithFallback(raw, NotePeriodBriefActiveResponseSchema, EMPTY_NOTE_PERIOD_BRIEF_ACTIVE, {
       endpoint: "GET /api/notes/period-briefs/active",
+    });
+  }
+
+  async getNotePeriodBriefPlan(chatSessionId: string): Promise<NotePeriodBriefPlanResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/notes/period-briefs/plan?chat_session_id=${encodeURIComponent(chatSessionId)}`,
+    );
+    return parseWithFallback(raw, NotePeriodBriefPlanResponseSchema, EMPTY_NOTE_PERIOD_BRIEF_PLAN_RESPONSE, {
+      endpoint: "GET /api/notes/period-briefs/plan",
+    });
+  }
+
+  async putNotePeriodBriefPlan(data: PutNotePeriodBriefPlanRequest): Promise<NotePeriodBriefPlanResponse> {
+    const raw = await this.fetch<unknown>("/api/notes/period-briefs/plan", {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, NotePeriodBriefPlanResponseSchema, EMPTY_NOTE_PERIOD_BRIEF_PLAN_RESPONSE, {
+      endpoint: "PUT /api/notes/period-briefs/plan",
+    });
+  }
+
+  async deleteNotePeriodBriefPlan(chatSessionId: string): Promise<NotePeriodBriefPlanResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/notes/period-briefs/plan?chat_session_id=${encodeURIComponent(chatSessionId)}`,
+      { method: "DELETE" },
+    );
+    return parseWithFallback(raw, NotePeriodBriefPlanResponseSchema, EMPTY_NOTE_PERIOD_BRIEF_PLAN_RESPONSE, {
+      endpoint: "DELETE /api/notes/period-briefs/plan",
     });
   }
 

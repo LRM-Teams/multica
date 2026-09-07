@@ -20,7 +20,8 @@ import {
   type PeriodBriefCollectorSlot,
 } from "@multica/core/notes/period-brief-collectors";
 import {
-  resolvePeriodBriefComposeRequest,
+  isPeriodBriefPlanComplete,
+  looksLikeUnconstrainedScope,
   type PeriodBriefComposeCollector,
   type PeriodBriefComposeRequest,
   type PeriodBriefComposeSelection,
@@ -30,7 +31,7 @@ import {
   isValidPeriodBriefCustomRange,
 } from "@multica/core/notes/period-brief-window";
 import { computerListOptions, runtimeListOptions } from "@multica/core/runtimes";
-import type { NotePeriodBriefWindow } from "@multica/core/types";
+import type { NotePeriodBriefPlan, NotePeriodBriefWindow } from "@multica/core/types";
 import { agentListOptions } from "@multica/core/workspace/queries";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
@@ -50,6 +51,7 @@ export type NotePeriodBriefResolved = {
   agentId: string | null;
   timezone: string;
   canSubmit: boolean;
+  unconstrained: boolean;
   selection: PeriodBriefComposeSelection;
   collectors: PeriodBriefComposeCollector[];
   request: PeriodBriefComposeRequest;
@@ -97,16 +99,22 @@ export function NotePeriodBriefCompose({
   active,
   text = "",
   submitting = false,
-  startedTitle = null,
+  disabled = false,
+  plan = null,
+  onPlanChange,
   onResolvedChange,
+  onStart,
   onCancel,
   onConfigureCollector,
 }: {
   active: boolean;
   text?: string;
   submitting?: boolean;
-  startedTitle?: string | null;
+  disabled?: boolean;
+  plan?: NotePeriodBriefPlan | null;
+  onPlanChange?: (plan: NotePeriodBriefPlan) => void;
   onResolvedChange?: (resolved: NotePeriodBriefResolved) => void;
+  onStart?: () => void;
   onCancel?: () => void;
   onConfigureCollector?: (slot: PeriodBriefCollectorSlot) => void;
 }) {
@@ -116,15 +124,15 @@ export function NotePeriodBriefCompose({
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const { data: agents = [] } = useQuery({
     ...agentListOptions(wsId),
-    enabled: Boolean(wsId) && active,
+    enabled: Boolean(wsId),
   });
   const { data: runtimes = [] } = useQuery({
     ...runtimeListOptions(wsId),
-    enabled: Boolean(wsId) && active,
+    enabled: Boolean(wsId),
   });
   const { data: computers = [] } = useQuery({
     ...computerListOptions(wsId ?? ""),
-    enabled: Boolean(wsId) && active,
+    enabled: Boolean(wsId),
   });
   const today = useMemo(() => {
     try {
@@ -149,7 +157,6 @@ export function NotePeriodBriefCompose({
     label: string;
     online: boolean;
   } | null>(null);
-
   const agentId = resolvePeriodBriefSynthesizerId(agents);
   const collectorAgents = useMemo(
     () => listOwnedPeriodBriefCollectorAgents(agents, runtimes, currentUserId),
@@ -183,12 +190,13 @@ export function NotePeriodBriefCompose({
     () => listOwnedPeriodBriefCollectorSlots(runtimes, agents, currentUserId, computers),
     [agents, computers, currentUserId, runtimes],
   );
-  const collectorIds = collectorOverride ?? defaultCollectors;
+  const collectorIds = collectorOverride ?? (plan ? plan.collector_agent_ids : defaultCollectors);
 
-  const prevActiveRef = useRef(active);
-  if (active !== prevActiveRef.current) {
-    prevActiveRef.current = active;
-    if (active) {
+  const interactive = active && !disabled;
+  const prevInteractiveRef = useRef(interactive);
+  if (!plan && interactive !== prevInteractiveRef.current) {
+    prevInteractiveRef.current = interactive;
+    if (interactive) {
       setCollectorOverride(null);
       setDismissedMissingKeys([]);
       setWindowKind("week");
@@ -196,7 +204,23 @@ export function NotePeriodBriefCompose({
       setStartDate(custom.start_date);
       setEndDate(custom.end_date);
     }
+  } else {
+    prevInteractiveRef.current = interactive;
   }
+
+  const planKey = plan
+    ? `${plan.window}|${plan.date ?? ""}|${plan.start_date ?? ""}|${plan.end_date ?? ""}|${plan.collector_agent_ids.join(",")}|${plan.focus ?? ""}`
+    : "";
+  useEffect(() => {
+    if (!plan) return;
+    const kind = plan.window === "day" || plan.window === "week" || plan.window === "month" || plan.window === "custom"
+      ? plan.window
+      : "week";
+    setWindowKind(kind);
+    if (plan.start_date) setStartDate(plan.start_date);
+    if (plan.end_date) setEndDate(plan.end_date);
+    setCollectorOverride(plan.collector_agent_ids);
+  }, [plan, planKey]);
 
   const collectors = useMemo(
     () =>
@@ -210,55 +234,85 @@ export function NotePeriodBriefCompose({
   const selection = useMemo<PeriodBriefComposeSelection>(
     () => ({
       window: windowKind,
-      date: today,
+      date: plan?.date || today,
       start_date: startDate,
       end_date: endDate,
       collector_ids: collectorIds,
     }),
-    [collectorIds, endDate, startDate, today, windowKind],
+    [collectorIds, endDate, plan?.date, startDate, today, windowKind],
   );
-  const request = useMemo(
-    () => resolvePeriodBriefComposeRequest(selection, collectors, text),
-    [collectors, selection, text],
+  const request = useMemo<PeriodBriefComposeRequest>(
+    () => ({
+      window: selection.window,
+      date: selection.window === "custom" ? undefined : selection.date,
+      start_date: selection.start_date,
+      end_date: selection.end_date,
+      collector_ids: [...selection.collector_ids],
+      focus: plan?.focus?.trim() || undefined,
+    }),
+    [plan?.focus, selection],
   );
   const customRangeValid =
     request.window !== "custom" ||
     isValidPeriodBriefCustomRange(request.start_date ?? "", request.end_date ?? "");
+  const unconstrained = looksLikeUnconstrainedScope(plan?.focus ?? text);
   const canSubmit =
     Boolean(agentId) &&
-    request.collector_ids.length > 0 &&
     !submitting &&
-    customRangeValid;
+    isPeriodBriefPlanComplete({
+      collectorIds: request.collector_ids,
+      customRangeValid,
+    });
+
+  const emitPlan = (next: {
+    window: NotePeriodBriefWindow;
+    date: string;
+    start_date: string;
+    end_date: string;
+    collector_agent_ids: string[];
+  }) => {
+    onPlanChange?.({
+      window: next.window,
+      date: next.window === "custom" ? undefined : next.date,
+      start_date: next.window === "custom" ? next.start_date : undefined,
+      end_date: next.window === "custom" ? next.end_date : undefined,
+      collector_agent_ids: next.collector_agent_ids,
+      focus: plan?.focus ?? "",
+    });
+  };
 
   useEffect(() => {
     onResolvedChange?.({
       agentId,
       timezone,
       canSubmit,
+      unconstrained,
       selection,
       collectors,
       request,
     });
-  }, [agentId, canSubmit, collectors, onResolvedChange, request, selection, timezone]);
+  }, [
+    agentId,
+    canSubmit,
+    collectors,
+    onResolvedChange,
+    request,
+    selection,
+    timezone,
+    unconstrained,
+  ]);
 
-  if (startedTitle) {
-    return (
-      <div
-        className="mx-3 mb-2 rounded-xl border bg-card px-3 py-3 text-sm"
-        data-testid="period-brief-started"
-      >
-        <p className="font-medium">{t(($) => $.notes_page.period_brief_started_title, { title: startedTitle })}</p>
-        <p className="mt-1 text-xs text-muted-foreground">
-          {t(($) => $.notes_page.period_brief_started_hint)}
-        </p>
-      </div>
-    );
-  }
-
-  const busy = submitting;
+  const busy = submitting || disabled;
 
   return (
-    <div className="mx-3 mb-2 space-y-3 rounded-xl border bg-card px-3 py-3" data-testid="period-brief-compose">
+    <div
+      className={cn(
+        "space-y-3 rounded-xl border bg-card px-3 py-3",
+        disabled && "opacity-60",
+      )}
+      data-testid="period-brief-compose"
+      data-spent={disabled ? "true" : "false"}
+    >
       <div className="space-y-1.5">
         <p className="text-xs font-medium text-muted-foreground">
           {t(($) => $.notes_page.period_brief_window_label)}
@@ -270,7 +324,16 @@ export function NotePeriodBriefCompose({
               type="button"
               size="sm"
               variant={windowKind === kind ? "default" : "outline"}
-              onClick={() => setWindowKind(kind)}
+              onClick={() => {
+                setWindowKind(kind);
+                emitPlan({
+                  window: kind,
+                  date: plan?.date || today,
+                  start_date: startDate,
+                  end_date: endDate,
+                  collector_agent_ids: collectorIds,
+                });
+              }}
               disabled={busy}
               data-testid={`period-brief-window-${kind}`}
             >
@@ -290,7 +353,17 @@ export function NotePeriodBriefCompose({
           <Input
             type="date"
             value={startDate}
-            onChange={(event) => setStartDate(event.target.value)}
+            onChange={(event) => {
+              const value = event.target.value;
+              setStartDate(value);
+              emitPlan({
+                window: "custom",
+                date: selection.date,
+                start_date: value,
+                end_date: endDate,
+                collector_agent_ids: collectorIds,
+              });
+            }}
             disabled={busy}
             aria-label={t(($) => $.notes_page.period_brief_start_date_label)}
             data-testid="period-brief-start-date"
@@ -298,7 +371,17 @@ export function NotePeriodBriefCompose({
           <Input
             type="date"
             value={endDate}
-            onChange={(event) => setEndDate(event.target.value)}
+            onChange={(event) => {
+              const value = event.target.value;
+              setEndDate(value);
+              emitPlan({
+                window: "custom",
+                date: selection.date,
+                start_date: startDate,
+                end_date: value,
+                collector_agent_ids: collectorIds,
+              });
+            }}
             disabled={busy}
             aria-label={t(($) => $.notes_page.period_brief_end_date_label)}
             data-testid="period-brief-end-date"
@@ -340,9 +423,20 @@ export function NotePeriodBriefCompose({
                     type="button"
                     className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm hover:bg-muted/70"
                     onClick={() =>
-                      setCollectorOverride((current) =>
-                        togglePeriodBriefCollectorId(current ?? defaultCollectors, agent.id),
-                      )
+                      setCollectorOverride((current) => {
+                        const next = togglePeriodBriefCollectorId(
+                          current ?? (plan ? plan.collector_agent_ids : defaultCollectors),
+                          agent.id,
+                        );
+                        emitPlan({
+                          window: windowKind,
+                          date: selection.date,
+                          start_date: startDate,
+                          end_date: endDate,
+                          collector_agent_ids: next,
+                        });
+                        return next;
+                      })
                     }
                     disabled={busy}
                     data-testid={`period-brief-collector-${agent.id}`}
@@ -457,20 +551,30 @@ export function NotePeriodBriefCompose({
       <p className="text-[11px] leading-4 text-muted-foreground">
         {t(($) => $.notes_page.period_brief_compose_hint)}
       </p>
-      {onCancel ? (
-        <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
+        {onCancel && !disabled ? (
           <Button
             type="button"
             size="sm"
             variant="ghost"
-            disabled={busy}
             data-testid="period-brief-cancel"
             onClick={onCancel}
           >
             {t(($) => $.notes_page.period_brief_cancel)}
           </Button>
-        </div>
-      ) : null}
+        ) : null}
+        {onStart ? (
+          <Button
+            type="button"
+            size="sm"
+            disabled={busy || !agentId || !canSubmit}
+            data-testid="period-brief-start"
+            onClick={disabled ? undefined : onStart}
+          >
+            {t(($) => $.notes_page.period_brief_start_collect)}
+          </Button>
+        ) : null}
+      </div>
       {collectRootsTarget ? (
         <PeriodBriefCollectRootsDialog
           machineId={collectRootsTarget.machineId}

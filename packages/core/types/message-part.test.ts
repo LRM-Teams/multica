@@ -73,18 +73,35 @@ describe("MessagePart choice contract", () => {
 });
 
 describe("MessagePart period_brief_insert contract", () => {
-  it("carries the run id and optional selected insert mode", () => {
+  it("carries the run id, issuing page, and optional selected insert mode", () => {
     const open: Extract<MessagePart, { type: "period_brief_insert" }> = {
       type: "period_brief_insert",
       ref_id: "run-1",
+      source_page_id: "page-1",
+      label: "Issuing note",
     };
     const picked: Extract<MessagePart, { type: "period_brief_insert" }> = {
       type: "period_brief_insert",
       ref_id: "run-1",
       selected_option_id: "append",
     };
+    expect(open.source_page_id).toBe("page-1");
     expect(open.selected_option_id).toBeUndefined();
     expect(picked.selected_option_id).toBe("append");
+  });
+});
+
+describe("MessagePart period_brief_insert_propose contract", () => {
+  it("names the run, target page, and insert mode", () => {
+    const propose: Extract<MessagePart, { type: "period_brief_insert_propose" }> = {
+      type: "period_brief_insert_propose",
+      ref_id: "run-1",
+      target_page_id: "page-9",
+      mode: "append",
+      label: "周报",
+    };
+    expect(propose.target_page_id).toBe("page-9");
+    expect(propose.mode).toBe("append");
   });
 });
 

@@ -7,7 +7,11 @@ import { api } from "@multica/core/api";
 import { agentTemplateDetailOptions } from "@multica/core/agents/queries";
 import { useAuthStore } from "@multica/core/auth";
 import { useChatStore } from "@multica/core/chat";
-import { chatKeys, chatSessionsOptions, pendingChatTasksOptions } from "@multica/core/chat/queries";
+import {
+  chatKeys,
+  chatSessionsOptions,
+  pendingChatTasksOptions,
+} from "@multica/core/chat/queries";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { createLogger } from "@multica/core/logger";
 import {
@@ -16,23 +20,23 @@ import {
   notesAssistantSetupDismissKey,
   resolveNotesAssistantAgent,
 } from "@multica/core/notes/notes-assistant-agent";
+import { resolvePeriodBriefSynthesizerId } from "@multica/core/notes/period-brief-agent";
 import {
+  PERIOD_BRIEF_SATELLITE_ASK,
   periodBriefRunLocksComposer,
-  looksLikePeriodBriefRequest,
-  resolvePeriodBriefComposeRequest,
 } from "@multica/core/notes/period-brief-compose";
 import { type PeriodBriefCollectorSlot } from "@multica/core/notes/period-brief-collectors";
-import { isValidPeriodBriefCustomRange } from "@multica/core/notes/period-brief-window";
-import { noteKeys, noteListOptions, notePeriodBriefActiveOptions } from "@multica/core/notes/queries";
+import { noteKeys, noteListOptions, notePeriodBriefActiveOptions, notePeriodBriefPlanOptions } from "@multica/core/notes/queries";
 import { abbreviateNoteSelection, attachNoteSelectionQuote, type NoteSelectionExcerpt } from "@multica/core/notes/selection-quote";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { runtimeListOptions } from "@multica/core/runtimes";
 import { agentListOptions, memberListOptions, workspaceKeys } from "@multica/core/workspace/queries";
-import type { Agent, CreateAgentRequest, EnsureNotesAssistantAgentResponse } from "@multica/core/types";
+import type { Agent, CreateAgentRequest, EnsureNotesAssistantAgentResponse, NotePeriodBriefPlan } from "@multica/core/types";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { CreateAgentDialog } from "../agents/components/create-agent-dialog";
 import { useT } from "../i18n";
+import { useViewingTimezone } from "../common/use-viewing-timezone";
 import { usePrefersReducedMotion } from "../common/use-prefers-reduced-motion";
 import { excludeChannelShellSessions } from "../chat/lib/exclude-channel-shell-sessions";
 import { ChatWindow } from "../chat/components/chat-window";
@@ -41,9 +45,7 @@ import { NoteAssistantFabCluster, type NoteAssistantFabAction } from "./note-ass
 import { NoteHighlightsCompose } from "./note-highlights-compose";
 import {
   NotePeriodBriefCompose,
-  type NotePeriodBriefResolved,
 } from "./note-period-brief-compose";
-import { NotePeriodBriefIntentConfirm } from "./note-period-brief-intent-confirm";
 import { NoteSelectionQuotePreview } from "./note-selection-quote-preview";
 import { NotesAssistantSetupCard } from "./notes-assistant-setup-card";
 
@@ -86,11 +88,18 @@ export function NoteAssistantBubble({
   const setNoteSelectionQuote = useChatStore((s) => s.setNoteSelectionQuote);
   const removeNoteSelectionExcerpt = useChatStore((s) => s.removeNoteSelectionExcerpt);
   const setNoteBubbleActiveSession = useChatStore((s) => s.setNoteBubbleActiveSession);
+  const bubbleSessionId = useChatStore((s) => s.noteBubbleActiveSessionByPage[pageId] ?? "");
   const quotePageId = useChatStore((s) => s.noteSelectionQuote?.pageId ?? null);
   const quoteExcerpts = useChatStore((s) => s.noteSelectionQuote?.excerpts);
   const quoteAskedAt = useChatStore((s) => s.noteSelectionQuote?.askedAt ?? 0);
   const excerptsForPage = quotePageId === pageId ? (quoteExcerpts ?? EMPTY_SELECTION_EXCERPTS) : EMPTY_SELECTION_EXCERPTS;
   const { data: activePeriodBrief } = useQuery(notePeriodBriefActiveOptions(wsId, pageId));
+  const { data: periodBriefPlanResponse } = useQuery({
+    ...notePeriodBriefPlanOptions(wsId, bubbleSessionId),
+    enabled: Boolean(wsId && bubbleSessionId),
+  });
+  const timezone = useViewingTimezone();
+  const currentPlan = periodBriefPlanResponse?.plan ?? null;
   const { data: sessions = [] } = useQuery(chatSessionsOptions(wsId));
   const { data: pending } = useQuery(pendingChatTasksOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
@@ -128,18 +137,26 @@ export function NoteAssistantBubble({
   const [collectorConfigSlot, setCollectorConfigSlot] =
     React.useState<PeriodBriefCollectorSlot | null>(null);
   const [composerFocusToken, setComposerFocusToken] = React.useState(0);
-  const [composerResetToken, setComposerResetToken] = React.useState(0);
   const [pendingSend, setPendingSend] = React.useState<{ nonce: number; text: string } | null>(null);
   const seedNonceRef = React.useRef(0);
-  const [periodBriefOpen, setPeriodBriefOpen] = React.useState(false);
+  const periodBriefCancelRequestedRef = React.useRef(false);
   const [periodBriefSubmitting, setPeriodBriefSubmitting] = React.useState(false);
-  const [periodBriefConfirmText, setPeriodBriefConfirmText] = React.useState<string | null>(null);
   const [highlightsOpen, setHighlightsOpen] = React.useState(false);
-  const periodBriefResolvedRef = React.useRef<NotePeriodBriefResolved | null>(null);
-  const periodBriefBypassRef = React.useRef<string | null>(null);
+  const hadPlanRef = React.useRef(false);
   const composerLocked =
     periodBriefRunLocksComposer(activePeriodBrief?.run?.status) || periodBriefSubmitting;
+  const showPlanCard = Boolean(currentPlan) && !composerLocked && !highlightsOpen;
   const isRunning = chatTaskRunning || composerLocked;
+
+  React.useEffect(() => {
+    if (!currentPlan) {
+      hadPlanRef.current = false;
+      return;
+    }
+    if (hadPlanRef.current) return;
+    hadPlanRef.current = true;
+    if (!isOpen) toggleNoteBubble(pageId);
+  }, [currentPlan, isOpen, pageId, toggleNoteBubble]);
 
   React.useEffect(() => {
     if (excerptsForPage.length === 0 || !quoteAskedAt) return;
@@ -287,9 +304,7 @@ export function NoteAssistantBubble({
   React.useEffect(() => {
     if (openPageId !== pageId) {
       setPendingSend(null);
-      setPeriodBriefOpen(false);
       setPeriodBriefSubmitting(false);
-      setPeriodBriefConfirmText(null);
       setHighlightsOpen(false);
     }
   }, [openPageId, pageId]);
@@ -298,102 +313,109 @@ export function NoteAssistantBubble({
     setPendingSend(null);
   }, []);
 
-  const handlePeriodBriefResolved = React.useCallback((resolved: NotePeriodBriefResolved) => {
-    periodBriefResolvedRef.current = resolved;
-  }, []);
-
-  const submitPeriodBrief = React.useCallback(async (text: string): Promise<boolean> => {
-    const resolved = periodBriefResolvedRef.current;
-    if (!resolved) return false;
-    const request = resolvePeriodBriefComposeRequest(
-      resolved.selection,
-      resolved.collectors,
-      text,
+  const handlePeriodBriefPlanChange = React.useCallback((next: NotePeriodBriefPlan) => {
+    if (!bubbleSessionId) return;
+    void api.putNotePeriodBriefPlan({
+      chat_session_id: bubbleSessionId,
+      context_note_page_id: pageId,
+      window: next.window,
+      date: next.date,
+      start_date: next.start_date,
+      end_date: next.end_date,
+      collector_agent_ids: next.collector_agent_ids,
+      focus: next.focus,
+    }).then(
+      (saved) => {
+        queryClient.setQueryData(noteKeys.periodBriefPlan(wsId, bubbleSessionId), saved);
+      },
+      (err: unknown) => {
+        showErrorToast(
+          err instanceof Error && err.message
+            ? err.message
+            : t(($) => $.notes_page.period_brief_failed),
+        );
+        void queryClient.invalidateQueries({ queryKey: noteKeys.periodBriefPlan(wsId, bubbleSessionId) });
+      },
     );
-    if (!resolved.agentId) {
-      showErrorToast(t(($) => $.notes_page.period_brief_agent_required));
-      return false;
-    }
-    if (request.collector_ids.length === 0) {
-      showErrorToast(t(($) => $.notes_page.period_brief_collectors_required));
-      return false;
-    }
-    if (
-      request.window === "custom" &&
-      !isValidPeriodBriefCustomRange(request.start_date ?? "", request.end_date ?? "")
-    ) {
-      showErrorToast(t(($) => $.notes_page.period_brief_custom_range_invalid));
-      return false;
-    }
-    setPeriodBriefSubmitting(true);
-    try {
-      const result = await api.createNotePeriodBrief({
-        window: request.window,
-        date: request.date,
-        start_date: request.start_date,
-        end_date: request.end_date,
-        timezone: resolved.timezone,
-        agent_id: resolved.agentId,
-        collector_agent_ids: request.collector_ids,
-        context_note_page_id: pageId,
-        ...(request.focus ? { focus: request.focus } : {}),
-      });
-      if (!result.job?.id) {
-        throw new Error(t(($) => $.notes_page.period_brief_failed));
-      }
-      if (result.chat_session_id) {
-        setNoteBubbleActiveSession(pageId, result.chat_session_id);
-        void queryClient.invalidateQueries({ queryKey: chatKeys.messages(result.chat_session_id) });
-        void queryClient.invalidateQueries({ queryKey: chatKeys.messagesPage(result.chat_session_id) });
-      }
-      setPeriodBriefOpen(false);
-      void queryClient.invalidateQueries({ queryKey: chatKeys.sessions(wsId) });
-      void queryClient.invalidateQueries({ queryKey: noteListOptions(wsId).queryKey });
-      void queryClient.invalidateQueries({
-        queryKey: notePeriodBriefActiveOptions(wsId, pageId).queryKey,
-      });
-      return true;
-    } catch (error: unknown) {
-      showErrorToast(
-        error instanceof Error && error.message
-          ? error.message
-          : t(($) => $.notes_page.period_brief_failed),
-      );
-      return false;
-    } finally {
-      setPeriodBriefSubmitting(false);
-    }
-  }, [pageId, queryClient, setNoteBubbleActiveSession, t, wsId]);
+  }, [bubbleSessionId, pageId, queryClient, t, wsId]);
 
-  const interceptPeriodBriefCompose = React.useCallback((text: string) => {
-    if (periodBriefBypassRef.current !== null) {
-      const bypass = periodBriefBypassRef.current;
-      periodBriefBypassRef.current = null;
-      if (text === bypass) {
-        setPeriodBriefConfirmText(null);
-        return false;
-      }
+  const handleStartPeriodBrief = React.useCallback(() => {
+    const agentId = resolvePeriodBriefSynthesizerId(agents);
+    if (!agentId) {
+      showErrorToast(t(($) => $.notes_page.period_brief_agent_required));
+      return;
     }
-    if (highlightsOpen) {
-      if (looksLikePeriodBriefRequest(text)) {
-        setHighlightsOpen(false);
-        setPeriodBriefOpen(false);
-        setPeriodBriefConfirmText(text);
-        return true;
-      }
-      return true;
-    }
-    if (periodBriefOpen || composerLocked) {
-      setPeriodBriefConfirmText(null);
-      return false;
-    }
-    if (!looksLikePeriodBriefRequest(text)) {
-      setPeriodBriefConfirmText(null);
-      return false;
-    }
-    setPeriodBriefConfirmText(text);
-    return true;
-  }, [composerLocked, highlightsOpen, periodBriefOpen]);
+    const sessionId = useChatStore.getState().noteBubbleActiveSessionByPage[pageId] ?? "";
+    if (!sessionId) return;
+    periodBriefCancelRequestedRef.current = false;
+    setPendingSend(null);
+    setPeriodBriefSubmitting(true);
+    void api.createNotePeriodBrief({
+      agent_id: agentId,
+      timezone,
+      context_note_page_id: pageId,
+      chat_session_id: sessionId,
+      from_chat: true,
+    }).then(
+      (result) => {
+        if (!result.job?.id) {
+          throw new Error(t(($) => $.notes_page.period_brief_failed));
+        }
+        if (result.chat_session_id) {
+          setNoteBubbleActiveSession(pageId, result.chat_session_id);
+          void queryClient.invalidateQueries({ queryKey: chatKeys.messages(result.chat_session_id) });
+          void queryClient.invalidateQueries({ queryKey: chatKeys.messagesPage(result.chat_session_id) });
+        }
+        queryClient.setQueryData(noteKeys.periodBriefPlan(wsId, sessionId), { plan: null });
+        void queryClient.invalidateQueries({ queryKey: chatKeys.sessions(wsId) });
+        void queryClient.invalidateQueries({ queryKey: noteListOptions(wsId).queryKey });
+        void queryClient.invalidateQueries({
+          queryKey: notePeriodBriefActiveOptions(wsId, pageId).queryKey,
+        });
+        if (periodBriefCancelRequestedRef.current) {
+          void api.deleteNotePeriodBriefPlan(result.chat_session_id || sessionId).then(() => {
+            void queryClient.invalidateQueries({
+              queryKey: notePeriodBriefActiveOptions(wsId, pageId).queryKey,
+            });
+          });
+        }
+      },
+      (error: unknown) => {
+        showErrorToast(
+          error instanceof Error && error.message
+            ? error.message
+            : t(($) => $.notes_page.period_brief_failed),
+        );
+      },
+    ).finally(() => {
+      setPeriodBriefSubmitting(false);
+    });
+  }, [agents, pageId, queryClient, setNoteBubbleActiveSession, t, timezone, wsId]);
+
+  const handleCancelPeriodBrief = React.useCallback(() => {
+    if (!bubbleSessionId) return;
+    periodBriefCancelRequestedRef.current = true;
+    setPeriodBriefSubmitting(false);
+    queryClient.setQueryData(noteKeys.periodBriefPlan(wsId, bubbleSessionId), { plan: null });
+    queryClient.setQueryData(noteKeys.periodBriefActive(wsId, pageId), { run: null });
+    void api.deleteNotePeriodBriefPlan(bubbleSessionId).then(
+      () => {
+        void queryClient.invalidateQueries({ queryKey: noteKeys.periodBriefPlan(wsId, bubbleSessionId) });
+        void queryClient.invalidateQueries({ queryKey: noteKeys.periodBriefActive(wsId, pageId) });
+        void queryClient.invalidateQueries({ queryKey: chatKeys.messages(bubbleSessionId) });
+        void queryClient.invalidateQueries({ queryKey: chatKeys.messagesPage(bubbleSessionId) });
+      },
+      (err: unknown) => {
+        void queryClient.invalidateQueries({ queryKey: noteKeys.periodBriefPlan(wsId, bubbleSessionId) });
+        void queryClient.invalidateQueries({ queryKey: noteKeys.periodBriefActive(wsId, pageId) });
+        showErrorToast(
+          err instanceof Error && err.message
+            ? err.message
+            : t(($) => $.notes_page.period_brief_stop_failed),
+        );
+      },
+    );
+  }, [bubbleSessionId, pageId, queryClient, t, wsId]);
 
   const handleStopPeriodBrief = React.useCallback(() => {
     const run = activePeriodBrief?.run;
@@ -414,25 +436,6 @@ export function NoteAssistantBubble({
     );
   }, [activePeriodBrief?.run, pageId, queryClient, t, wsId]);
 
-  const acceptPeriodBriefIntent = React.useCallback(() => {
-    setPeriodBriefConfirmText(null);
-    setHighlightsOpen(false);
-    setPeriodBriefOpen(true);
-  }, []);
-
-  const declinePeriodBriefIntent = React.useCallback(() => {
-    const text = periodBriefConfirmText;
-    setPeriodBriefConfirmText(null);
-    if (!text) return;
-    periodBriefBypassRef.current = text;
-    seedNonceRef.current += 1;
-    setComposerResetToken((n) => n + 1);
-    setPendingSend({
-      nonce: seedNonceRef.current,
-      text,
-    });
-  }, [periodBriefConfirmText]);
-
   const handleHighlightsSend = React.useCallback((text: string) => {
     seedNonceRef.current += 1;
     setPendingSend({
@@ -442,22 +445,27 @@ export function NoteAssistantBubble({
     setHighlightsOpen(false);
   }, []);
 
+  const interceptComposerSend = React.useCallback(() => {
+    return highlightsOpen;
+  }, [highlightsOpen]);
+
   const handleFabAction = (action: NoteAssistantFabAction) => {
     logger.info("noteBubble.fab.action", { pageId, action, isOpen });
     if (action === "period_brief") {
       if (!isOpen) toggleNoteBubble(pageId);
-      if (!composerLocked) {
-        setHighlightsOpen(false);
-        setPeriodBriefConfirmText(null);
-        setPeriodBriefOpen(true);
-      }
+      setHighlightsOpen(false);
+      if (composerLocked) return;
+      if (currentPlan) return;
+      seedNonceRef.current += 1;
+      setPendingSend({
+        nonce: seedNonceRef.current,
+        text: PERIOD_BRIEF_SATELLITE_ASK,
+      });
       return;
     }
     if (action === "highlights") {
       if (!isOpen) toggleNoteBubble(pageId);
       if (!composerLocked) {
-        setPeriodBriefOpen(false);
-        setPeriodBriefConfirmText(null);
         setHighlightsOpen(true);
       }
       return;
@@ -496,20 +504,10 @@ export function NoteAssistantBubble({
         lockPreferredAgent
         layout={layout}
         composerFocusToken={composerFocusToken}
-        composerResetToken={composerResetToken}
-        seedSend={periodBriefOpen || highlightsOpen ? null : pendingSend}
+        seedSend={highlightsOpen ? null : pendingSend}
         onSeedSendConsumed={handleSeedSendConsumed}
         transformOutgoing={wrapOutgoing}
         onSendAccepted={clearSelectionQuote}
-        transcriptAccessory={
-          periodBriefConfirmText ? (
-            <NotePeriodBriefIntentConfirm
-              userText={periodBriefConfirmText}
-              onYes={acceptPeriodBriefIntent}
-              onNo={declinePeriodBriefIntent}
-            />
-          ) : null
-        }
         composerPrefix={
           excerptsForPage.length > 0 ? (
             <NoteSelectionQuotePreview
@@ -521,42 +519,41 @@ export function NoteAssistantBubble({
             />
           ) : null
         }
+        transcriptAccessory={
+          showPlanCard && currentPlan ? (
+            <NotePeriodBriefCompose
+              active
+              plan={currentPlan}
+              submitting={periodBriefSubmitting}
+              onPlanChange={handlePeriodBriefPlanChange}
+              onStart={handleStartPeriodBrief}
+              onCancel={handleCancelPeriodBrief}
+              onConfigureCollector={setCollectorConfigSlot}
+            />
+          ) : null
+        }
         composerAccessory={
-          setupSlot
-          || (periodBriefOpen && !composerLocked)
-          || (highlightsOpen && !composerLocked)
-            ? (
-              <>
-                {setupSlot}
-                {periodBriefOpen && !composerLocked ? (
-                  <NotePeriodBriefCompose
-                    active={periodBriefOpen}
-                    submitting={periodBriefSubmitting}
-                    onResolvedChange={handlePeriodBriefResolved}
-                    onCancel={() => setPeriodBriefOpen(false)}
-                    onConfigureCollector={setCollectorConfigSlot}
-                  />
-                ) : null}
-                {highlightsOpen && !composerLocked ? (
-                  <NoteHighlightsCompose
-                    initialText={t(($) => $.notes_page.assistant_highlights_prompt)}
-                    onSend={handleHighlightsSend}
-                    onCancel={() => setHighlightsOpen(false)}
-                  />
-                ) : null}
-              </>
-            ) : null
+          setupSlot || (highlightsOpen && !composerLocked) ? (
+            <>
+              {setupSlot}
+              {highlightsOpen && !composerLocked ? (
+                <NoteHighlightsCompose
+                  initialText={t(($) => $.notes_page.assistant_highlights_prompt)}
+                  onSend={handleHighlightsSend}
+                  onCancel={() => setHighlightsOpen(false)}
+                />
+              ) : null}
+            </>
+          ) : null
         }
         composerPlaceholder={
-          periodBriefOpen && !composerLocked
+          showPlanCard
             ? t(($) => $.notes_page.period_brief_focus_placeholder)
             : excerptsForPage.length > 0
               ? t(($) => $.notes_page.assistant_selection_quote_placeholder)
               : undefined
         }
-        allowEmptySend={periodBriefOpen && !composerLocked}
-        onSendIntercept={interceptPeriodBriefCompose}
-        onSendOverride={periodBriefOpen && !composerLocked ? submitPeriodBrief : undefined}
+        onSendIntercept={interceptComposerSend}
         composerLocked={composerLocked}
         onLockedComposerStop={handleStopPeriodBrief}
       />

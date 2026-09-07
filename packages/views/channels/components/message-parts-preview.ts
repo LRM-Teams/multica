@@ -60,6 +60,9 @@ export function formatMessagePartsPreview(parts?: MessagePart[] | null): string 
     if (part.type === "period_brief_insert") {
       return ["插入汇报稿"];
     }
+    if (part.type === "period_brief_insert_propose") {
+      return [];
+    }
     return [];
   });
   return chunks.length > 0 ? chunks.join(" ") : null;

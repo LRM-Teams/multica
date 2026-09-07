@@ -142,8 +142,10 @@ Collectors deliver packs with
 `multica notes period-brief submit-pack --draft-page-id <draft>`.
 The platform stores markdown on `note_period_brief_run.collectors[].pack_markdown`
 (implicit artifact). **Do not** create「采集包」Notes pages and **do not**
-`--note-write` the pack into Notes. After the synthesizer is woken with the
-packs text, the platform **purges** `pack_markdown`.
+`--note-write` the pack into Notes. Pack markdown stays on the run after
+synthesis so a later collect in the **same bubble session** can reuse
+computers that were not re-selected. Residue still does not dump pack
+bodies; it only lists which computers have a ready harvest.
 
 They still **must not** stream keymouse, screenshots, clipboard, browser
 history, full repo dumps, secrets (`.env` / `.ssh` / keys), or runtime
@@ -187,8 +189,8 @@ The platform **waits until each collector settles**. A pack is **ready** when
 `submit-pack`) — including when the inbox task later fails
 (`api_invalid_request` / Pi `input[n].status` 400). It does **not**
 treat “N minutes elapsed while still running” as empty. An absolute safety
-ceiling only marks remaining runners as **stalled**. After the synthesizer
-wake, the platform **clears** `pack_markdown` (ephemeral artifact).
+ceiling only marks remaining runners as **stalled**. Pack markdown is
+kept after the synthesizer wake so the same bubble session can reuse it.
 
 Each collect, retry, and synthesizer wake sets `force_fresh_session=true`.
 These are one-shot prompts: they must not resume a prior Pi conversation.

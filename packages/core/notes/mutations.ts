@@ -23,6 +23,37 @@ function isCurrentNoteUpdateEpoch(id: string, epoch: number) {
   return noteUpdateEpoch.get(id) === epoch;
 }
 
+const noteUpdateAborts = new Map<string, Set<AbortController>>();
+
+function trackNoteUpdateAbort(id: string, controller: AbortController) {
+  let controllers = noteUpdateAborts.get(id);
+  if (!controllers) {
+    controllers = new Set();
+    noteUpdateAborts.set(id, controllers);
+  }
+  controllers.add(controller);
+}
+
+function untrackNoteUpdateAbort(id: string, controller: AbortController) {
+  const controllers = noteUpdateAborts.get(id);
+  if (!controllers) return;
+  controllers.delete(controller);
+  if (controllers.size === 0) noteUpdateAborts.delete(id);
+}
+
+export function isNoteUpdateAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+/** Cancel in-flight autosaves so they cannot overwrite a just-inserted body. */
+export function abortInFlightNotePageUpdate(id: string) {
+  const controllers = noteUpdateAborts.get(id);
+  if (!controllers) return;
+  for (const controller of controllers) controller.abort();
+  controllers.clear();
+  noteUpdateAborts.delete(id);
+}
+
 function applyNotePageToCache(qc: QueryClient, wsId: string, page: NotePage) {
   qc.setQueryData<NotePage>(noteKeys.detail(wsId, page.id), (old) => {
     if (old && old.updated_at > page.updated_at) return old;
@@ -39,6 +70,12 @@ function applyNotePageToCache(qc: QueryClient, wsId: string, page: NotePage) {
         }
       : old,
   );
+}
+
+/** Put a server snapshot into cache and retire older overlapping autosaves. */
+export function applyFetchedNotePageToCache(qc: QueryClient, wsId: string, page: NotePage) {
+  nextNoteUpdateEpoch(page.id);
+  applyNotePageToCache(qc, wsId, page);
 }
 
 export function useCreateNotePage() {
@@ -79,7 +116,15 @@ export function useUpdateNotePage() {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
   return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: UpdateNotePageRequest }) => api.updateNotePage(id, data),
+    mutationFn: async ({ id, data }: { id: string; data: UpdateNotePageRequest }) => {
+      const controller = new AbortController();
+      trackNoteUpdateAbort(id, controller);
+      try {
+        return await api.updateNotePage(id, data, { signal: controller.signal });
+      } finally {
+        untrackNoteUpdateAbort(id, controller);
+      }
+    },
     onMutate: async ({ id, data }) => {
       const epoch = nextNoteUpdateEpoch(id);
       await qc.cancelQueries({ queryKey: noteKeys.detail(wsId, id) });
@@ -92,7 +137,10 @@ export function useUpdateNotePage() {
       );
       return { prevDetail, prevList, id, epoch };
     },
-    onError: (_err, _vars, ctx) => {
+    onError: (err, _vars, ctx) => {
+      // Aborted because a later write (insert-below, a newer autosave) owns
+      // the page now — rolling back would clobber that snapshot.
+      if (isNoteUpdateAbortError(err)) return;
       // A newer in-flight/completed update owns the cache now — do not roll
       // a superseded failure back over fresher keystrokes.
       if (!ctx || !isCurrentNoteUpdateEpoch(ctx.id, ctx.epoch)) return;

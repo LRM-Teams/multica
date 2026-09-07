@@ -46,8 +46,13 @@ func (h *Handler) periodBriefCollectorSpokenNames(
 ) []string {
 	out := make([]string, 0, len(collectorIDs))
 	for _, id := range collectorIDs {
+		agentID, ok := parseUUIDQuiet(id)
+		if !ok {
+			out = append(out, id)
+			continue
+		}
 		agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
-			ID:          parseUUID(id),
+			ID:          agentID,
 			WorkspaceID: workspaceID,
 		})
 		if err != nil {
@@ -125,7 +130,7 @@ func (h *Handler) postPeriodBriefBubbleMessage(
 	userIDString, role, content string,
 	parts ...protocol.MessagePart,
 ) {
-	if !sessionID.Valid || strings.TrimSpace(content) == "" {
+	if !sessionID.Valid || (strings.TrimSpace(content) == "" && len(parts) == 0) {
 		return
 	}
 	msg, err := h.Queries.CreateChatMessage(ctx, db.CreateChatMessageParams{
@@ -181,10 +186,12 @@ func periodBriefCollapsiblePart(refID, label, text string) protocol.MessagePart 
 	}
 }
 
-func periodBriefInsertActionsPart(runID string) protocol.MessagePart {
+func periodBriefInsertActionsPart(runID, sourcePageID, sourceTitle string) protocol.MessagePart {
 	return protocol.MessagePart{
-		Type:  protocol.MessagePartTypePeriodBriefInsert,
-		RefID: strings.TrimSpace(runID),
+		Type:         protocol.MessagePartTypePeriodBriefInsert,
+		RefID:        strings.TrimSpace(runID),
+		SourcePageID: strings.TrimSpace(sourcePageID),
+		Label:        strings.TrimSpace(sourceTitle),
 	}
 }
 
@@ -200,14 +207,12 @@ func (h *Handler) startPeriodBriefBubbleTranscript(
 	if !sessionID.Valid {
 		return
 	}
-	names := h.periodBriefCollectorSpokenNames(ctx, workspaceID, collectorIDs)
-	spoken := joinPeriodBriefSpokenNames(names)
-	if !skipUserTurn {
-		h.postPeriodBriefBubbleMessage(ctx, sessionID, workspaceID, userID, userIDString, "user",
-			formatPeriodBriefBubbleUserTurn(windowLabel, names, focus))
+	if skipUserTurn {
+		return
 	}
-	h.postPeriodBriefBubbleMessage(ctx, sessionID, workspaceID, userID, userIDString, "assistant",
-		"我将让"+spoken+"先采集信息。")
+	names := h.periodBriefCollectorSpokenNames(ctx, workspaceID, collectorIDs)
+	h.postPeriodBriefBubbleMessage(ctx, sessionID, workspaceID, userID, userIDString, "user",
+		formatPeriodBriefBubbleUserTurn(windowLabel, names, focus))
 }
 
 func (h *Handler) postPeriodBriefBubbleAssigned(
@@ -263,7 +268,7 @@ type notePeriodBriefActiveResponse struct {
 }
 
 func (h *Handler) GetActiveNotePeriodBrief(w http.ResponseWriter, r *http.Request) {
-	workspaceID, userID, _, ok := h.notesWorkspaceAndUser(w, r)
+	workspaceID, userID, userIDString, ok := h.notesWorkspaceAndUser(w, r)
 	if !ok {
 		return
 	}
@@ -282,6 +287,11 @@ func (h *Handler) GetActiveNotePeriodBrief(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "failed to load period brief run")
+		return
+	}
+	row = h.reconcilePeriodBriefLock(r, workspaceID, userID, userIDString, row)
+	if !periodBriefRunIsOpen(row.Status) {
+		writeJSON(w, http.StatusOK, map[string]any{"run": nil})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -360,7 +370,7 @@ UPDATE note_period_brief_run SET status = 'done', updated_at = now() WHERE id = 
 	if decision == "append" {
 		mode = "append"
 	}
-	title, err := h.applyPeriodBriefInsert(ctx, run, workspaceID, userID, mode)
+	title, err := h.applyPeriodBriefInsert(ctx, run, workspaceID, userID, mode, run.SourcePageID)
 	if err != nil {
 		if err == errPeriodBriefInsertNoPage {
 			_, _ = h.DB.Exec(ctx, `
@@ -443,18 +453,17 @@ func (h *Handler) completePeriodBriefRunAfterSynth(ctx context.Context, run note
 	if !periodBriefRunLocksComposerStatus(run.Status) {
 		return
 	}
-	cleared := clearCollectorPackMarkdown(run.Collectors)
 	if run.ChatSessionID.Valid {
 		harvested := h.awaitPeriodBriefSynthesizerWrite(ctx, run, writeAfter)
 		if latest, err := h.loadNotePeriodBriefRunByID(ctx, run.WorkspaceID, run.OwnerUserID, run.ID); err != nil || !periodBriefRunLocksComposerStatus(latest.Status) {
 			return
 		}
-		_ = h.updateNotePeriodBriefRunCollectors(ctx, run.ID, cleared, "awaiting_confirm")
+		_ = h.updateNotePeriodBriefRunCollectors(ctx, run.ID, run.Collectors, "awaiting_confirm")
 		run.Status = "awaiting_confirm"
 		h.postPeriodBriefResultMessage(ctx, run, userIDString, harvested, writeAfter)
 		return
 	}
-	_ = h.updateNotePeriodBriefRunCollectors(ctx, run.ID, cleared, "done")
+	_ = h.updateNotePeriodBriefRunStatus(ctx, run.ID, "done")
 }
 
 func (h *Handler) markPeriodBriefAwaitingConfirm(ctx context.Context, workspaceID, draftID pgtype.UUID, userIDString string) {
@@ -475,18 +484,23 @@ func (h *Handler) postPeriodBriefPackReceived(ctx context.Context, run notePerio
 		name = "采集员"
 	}
 	h.postPeriodBriefBubbleMessage(ctx, run.ChatSessionID, run.WorkspaceID, run.OwnerUserID, "", "assistant",
-		"刚刚收到了"+name+"的采集包。",
+		"",
 		periodBriefCollapsiblePart("", "采集包 · "+name, markdown),
 	)
+	h.wakePeriodBriefProgress(ctx, run, "", "pack_received", nil)
 }
 
 func (h *Handler) postPeriodBriefResultMessage(ctx context.Context, run notePeriodBriefRunRow, userIDString, harvested string, writeAfter time.Time) {
 	title, body := h.periodBriefResultMarkdown(ctx, run, harvested, writeAfter)
 	_ = h.persistPeriodBriefResultMarkdown(ctx, run.ID, body)
+	var sourceTitle string
+	if run.SourcePageID.Valid {
+		_ = h.DB.QueryRow(ctx, `SELECT title FROM note_page WHERE id = $1`, run.SourcePageID).Scan(&sourceTitle)
+	}
 	h.postPeriodBriefBubbleMessage(ctx, run.ChatSessionID, run.WorkspaceID, run.OwnerUserID, userIDString, "assistant",
 		"汇报稿整理完成了。",
 		periodBriefCollapsiblePart(uuidToString(run.DraftPageID), title, body),
-		periodBriefInsertActionsPart(uuidToString(run.ID)),
+		periodBriefInsertActionsPart(uuidToString(run.ID), uuidToString(run.SourcePageID), sourceTitle),
 	)
 }
 
@@ -525,13 +539,47 @@ func appendPeriodBriefBelowNote(existing, title, body string) string {
 	return base + "\n\n" + section
 }
 
+func (h *Handler) resolvePeriodBriefInsertTarget(
+	ctx context.Context,
+	workspaceID, userID pgtype.UUID,
+	run notePeriodBriefRunRow,
+	rawTarget string,
+) (pgtype.UUID, string, error) {
+	target := run.SourcePageID
+	if trimmed := strings.TrimSpace(rawTarget); trimmed != "" {
+		id, ok := parseUUIDQuiet(trimmed)
+		if !ok {
+			return pgtype.UUID{}, "", errPeriodBriefInsertBadTarget
+		}
+		target = id
+	}
+	if !target.Valid {
+		return pgtype.UUID{}, "", errPeriodBriefInsertNoPage
+	}
+	accessible, _, err := h.noteAccess(ctx, target, workspaceID, userID)
+	if err != nil {
+		return pgtype.UUID{}, "", err
+	}
+	if !accessible {
+		return pgtype.UUID{}, "", errPeriodBriefInsertForbidden
+	}
+	var title string
+	if err := h.DB.QueryRow(ctx, `
+SELECT title FROM note_page
+WHERE id = $1 AND deleted_at IS NULL`, target).Scan(&title); err != nil {
+		return pgtype.UUID{}, "", errPeriodBriefInsertNoPage
+	}
+	return target, strings.TrimSpace(title), nil
+}
+
 func (h *Handler) applyPeriodBriefInsert(
 	ctx context.Context,
 	run notePeriodBriefRunRow,
 	workspaceID, userID pgtype.UUID,
 	mode string,
+	targetPageID pgtype.UUID,
 ) (string, error) {
-	if !run.SourcePageID.Valid {
+	if !targetPageID.Valid {
 		return "", errPeriodBriefInsertNoPage
 	}
 	title, body := h.periodBriefResultMarkdown(ctx, run, "", time.Time{})
@@ -539,17 +587,17 @@ func (h *Handler) applyPeriodBriefInsert(
 		var current string
 		if err := h.DB.QueryRow(ctx, `
 SELECT content FROM note_page
-WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`, run.SourcePageID, workspaceID).Scan(&current); err != nil {
+WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`, targetPageID, workspaceID).Scan(&current); err != nil {
 			return "", err
 		}
 		next := appendPeriodBriefBelowNote(current, title, body)
 		if _, err := h.DB.Exec(ctx, `
 UPDATE note_page SET content = $1, updated_at = now(), updated_by = $2
 WHERE id = $3 AND workspace_id = $4 AND deleted_at IS NULL`,
-			next, userID, run.SourcePageID, workspaceID); err != nil {
+			next, userID, targetPageID, workspaceID); err != nil {
 			return "", err
 		}
-		if err := h.persistPeriodBriefInsertResult(ctx, run.ID, run.SourcePageID, mode); err != nil {
+		if err := h.persistPeriodBriefInsertResult(ctx, run.ID, targetPageID, mode); err != nil {
 			return "", err
 		}
 		return title, nil
@@ -558,7 +606,7 @@ WHERE id = $3 AND workspace_id = $4 AND deleted_at IS NULL`,
 INSERT INTO note_page (workspace_id, parent_id, owner_user_id, title, content, sort_key, created_by, updated_by)
 VALUES ($1, $2, $3, $4, $5, lpad((extract(epoch from now()) * 1000000)::bigint::text, 20, '0'), $3, $3)
 RETURNING id, workspace_id, parent_id, owner_user_id, title, icon, content, sort_key, created_at, updated_at, deleted_at`,
-		workspaceID, run.SourcePageID, userID, normalizeNoteTitle(title), body))
+		workspaceID, targetPageID, userID, normalizeNoteTitle(title), body))
 	if err != nil {
 		return "", err
 	}
@@ -576,18 +624,43 @@ WHERE id = $1`, runID, resultPageID, mode)
 	return err
 }
 
-var errPeriodBriefInsertNoPage = errors.New("period brief has no source page")
+var (
+	errPeriodBriefInsertNoPage    = errors.New("period brief has no source page")
+	errPeriodBriefInsertBadTarget = errors.New("period brief target page is invalid")
+	errPeriodBriefInsertForbidden = errors.New("period brief target page is not writable")
+)
 
 type insertNotePeriodBriefRequest struct {
-	Mode string `json:"mode"`
+	Mode         string `json:"mode"`
+	TargetPageID string `json:"target_page_id,omitempty"`
 }
 
 type insertNotePeriodBriefResponse struct {
-	Mode  string `json:"mode"`
-	Title string `json:"title,omitempty"`
+	Mode      string `json:"mode"`
+	Title     string `json:"title,omitempty"`
+	PageID    string `json:"page_id,omitempty"`
+	PageTitle string `json:"page_title,omitempty"`
 }
 
-// InsertNotePeriodBrief applies the finished brief onto the issuing page.
+func periodBriefInsertDoneCopy(mode, targetTitle string, sameAsSource bool, resultTitle string) string {
+	label := strings.TrimSpace(targetTitle)
+	if label == "" {
+		label = "目标笔记"
+	}
+	if mode == "append" {
+		if sameAsSource {
+			return "已插入当前页下面。"
+		}
+		return "已插入「" + label + "」下面。"
+	}
+	if sameAsSource {
+		return "已插入当前页的子笔记「" + resultTitle + "」。"
+	}
+	return "已插入「" + label + "」的子笔记「" + resultTitle + "」。"
+}
+
+// InsertNotePeriodBrief applies the finished brief onto a writable note
+// (default: the issuing page).
 // POST /api/notes/period-briefs/{runId}/insert
 func (h *Handler) InsertNotePeriodBrief(w http.ResponseWriter, r *http.Request) {
 	workspaceID, userID, userIDString, ok := h.notesWorkspaceAndUser(w, r)
@@ -621,7 +694,19 @@ func (h *Handler) InsertNotePeriodBrief(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusConflict, "period brief is not ready to insert")
 		return
 	}
-	title, err := h.applyPeriodBriefInsert(r.Context(), run, workspaceID, userID, mode)
+	target, targetTitle, err := h.resolvePeriodBriefInsertTarget(r.Context(), workspaceID, userID, run, req.TargetPageID)
+	if err != nil {
+		switch {
+		case errors.Is(err, errPeriodBriefInsertBadTarget):
+			writeError(w, http.StatusBadRequest, "target_page_id is invalid")
+		case errors.Is(err, errPeriodBriefInsertForbidden), errors.Is(err, errPeriodBriefInsertNoPage):
+			writeError(w, http.StatusNotFound, "note page not found")
+		default:
+			writeError(w, http.StatusInternalServerError, "failed to authorize note page")
+		}
+		return
+	}
+	title, err := h.applyPeriodBriefInsert(r.Context(), run, workspaceID, userID, mode, target)
 	if err != nil {
 		if err == errPeriodBriefInsertNoPage {
 			writeError(w, http.StatusConflict, "period brief has no source page")
@@ -633,10 +718,12 @@ func (h *Handler) InsertNotePeriodBrief(w http.ResponseWriter, r *http.Request) 
 	}
 	_, _ = h.DB.Exec(r.Context(), `
 UPDATE note_period_brief_run SET status = 'done', updated_at = now() WHERE id = $1`, run.ID)
-	if mode == "append" {
-		h.postPeriodBriefBubbleProgress(r.Context(), run, userIDString, "已插入当前页下面。")
-	} else {
-		h.postPeriodBriefBubbleProgress(r.Context(), run, userIDString, "已插入当前页的子笔记「"+title+"」。")
-	}
-	writeJSON(w, http.StatusOK, insertNotePeriodBriefResponse{Mode: mode, Title: title})
+	sameAsSource := !run.SourcePageID.Valid || uuidToString(target) == uuidToString(run.SourcePageID)
+	h.postPeriodBriefBubbleProgress(r.Context(), run, userIDString, periodBriefInsertDoneCopy(mode, targetTitle, sameAsSource, title))
+	writeJSON(w, http.StatusOK, insertNotePeriodBriefResponse{
+		Mode:      mode,
+		Title:     title,
+		PageID:    uuidToString(target),
+		PageTitle: targetTitle,
+	})
 }

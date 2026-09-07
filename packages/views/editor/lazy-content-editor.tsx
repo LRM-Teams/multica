@@ -98,6 +98,7 @@ export const ContentEditor = forwardRef<
     getSelectedText: () => loadedRef.current?.getSelectedText() ?? "",
     insertIssueReference: (attrs) => loadedRef.current?.insertIssueReference(attrs),
     insertRunReference: (attrs) => loadedRef.current?.insertRunReference(attrs),
+    setMarkdown: (markdown) => loadedRef.current?.setMarkdown(markdown),
     openPageAI: () => loadedRef.current?.openPageAI() ?? false,
   }), [props.defaultValue]);
 

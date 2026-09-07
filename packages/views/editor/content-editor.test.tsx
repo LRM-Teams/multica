@@ -20,8 +20,9 @@ const editorChain = vi.hoisted(() => {
 const editorState = vi.hoisted(() => ({
   isFocused: false,
   isDestroyed: false,
-  markdown: "",
-  docContentSize: 0,
+    markdown: "",
+    composing: false,
+    docContentSize: 0,
   selection: { empty: true, from: 0, to: 0 } as any,
 }));
 
@@ -83,6 +84,9 @@ const editorOptions = vi.hoisted<{
     onUpdate?: (args: { editor: unknown }) => void;
     editorProps?: {
       handleKeyDown?: (view: any, event: KeyboardEvent) => boolean;
+      handleDOMEvents?: {
+        compositionend?: (view: any, event: Event) => boolean;
+      };
       attributes?: { class?: string };
     };
   } | null;
@@ -94,6 +98,9 @@ vi.mock("@tiptap/react", () => ({
     onUpdate?: (args: { editor: unknown }) => void;
     editorProps?: {
       handleKeyDown?: (view: any, event: KeyboardEvent) => boolean;
+      handleDOMEvents?: {
+        compositionend?: (view: any, event: Event) => boolean;
+      };
       attributes?: { class?: string };
     };
   }) => {
@@ -114,7 +121,12 @@ vi.mock("@tiptap/react", () => ({
         },
         chain: () => editorChain,
         getMarkdown: () => editorState.markdown,
-        view: { dom: document.createElement("div") },
+        view: {
+          get composing() {
+            return editorState.composing;
+          },
+          dom: document.createElement("div"),
+        },
         state: {
           doc: {
             content: { get size() { return editorState.docContentSize; } },
@@ -147,6 +159,7 @@ describe("ContentEditor", () => {
     editorState.isFocused = false;
     editorState.isDestroyed = false;
     editorState.markdown = "";
+    editorState.composing = false;
     editorState.docContentSize = 0;
     editorState.selection = { empty: true, from: 0, to: 0 };
     editorRef.current = null;
@@ -255,6 +268,20 @@ describe("ContentEditor", () => {
     expect(mockSetContent).not.toHaveBeenCalled();
   });
 
+  it("syncs a remote append even when the editor still has unsaved local bytes", () => {
+    editorState.markdown = "old content";
+    const { rerender } = render(<ContentEditor defaultValue="old content" />);
+    editorState.isFocused = true;
+    editorState.markdown = "old content plus typing";
+    rerender(
+      <ContentEditor defaultValue={"old content plus typing\n\n## 工作介绍 本周\n\nDone."} />,
+    );
+    expect(mockSetContent).toHaveBeenCalledWith(
+      "old content plus typing\n\n## 工作介绍 本周\n\nDone.",
+      expect.objectContaining({ emitUpdate: false, contentType: "markdown" }),
+    );
+  });
+
   it("does not sync when defaultValue normalizes to the current editor markdown", () => {
     editorState.markdown = "same content";
     const { rerender } = render(<ContentEditor defaultValue="same content" />);
@@ -277,6 +304,47 @@ describe("ContentEditor", () => {
     });
 
     expect(onUpdate).toHaveBeenCalledWith("draft before switching");
+  });
+
+  it("does not emit markdown while an IME composition is in progress", () => {
+    const onUpdate = vi.fn();
+    render(<ContentEditor debounceMs={0} onUpdate={onUpdate} />);
+
+    editorState.composing = true;
+    editorState.markdown = "nihao";
+    act(() => {
+      editorOptions.current?.onUpdate?.({ editor: editorRef.current });
+    });
+    expect(onUpdate).not.toHaveBeenCalled();
+
+    editorState.composing = false;
+    editorState.markdown = "你好";
+    act(() => {
+      editorOptions.current?.onUpdate?.({ editor: editorRef.current });
+    });
+    expect(onUpdate).toHaveBeenCalledWith("你好");
+  });
+
+  it("flushes committed IME text on compositionend", () => {
+    const onUpdate = vi.fn();
+    render(<ContentEditor debounceMs={0} onUpdate={onUpdate} />);
+
+    editorState.composing = true;
+    editorState.markdown = "nihao";
+    act(() => {
+      editorOptions.current?.onUpdate?.({ editor: editorRef.current });
+    });
+    expect(onUpdate).not.toHaveBeenCalled();
+
+    editorState.composing = false;
+    editorState.markdown = "你好";
+    act(() => {
+      editorOptions.current?.editorProps?.handleDOMEvents?.compositionend?.(
+        { composing: false },
+        new Event("compositionend"),
+      );
+    });
+    expect(onUpdate).toHaveBeenCalledWith("你好");
   });
 
   it("opens the empty-line AI prompt when Space is pressed in an empty paragraph", () => {
@@ -525,6 +593,7 @@ describe("ContentEditor — mediaMode external (chat tray)", () => {
     editorState.isFocused = false;
     editorState.isDestroyed = false;
     editorState.markdown = "";
+    editorState.composing = false;
     editorState.docContentSize = 0;
     editorState.selection = { empty: true, from: 0, to: 0 };
     editorRef.current = null;

@@ -214,6 +214,10 @@ const (
 	// Direct note-page share granted to a member. Routed to the new
 	// recipient only; opening the page clears their unseen share row.
 	EventNotesShareUnread = "notes:share_unread"
+
+	// Bubble-session 写汇报 plan created or updated. The plan card is this
+	// plan — speech and chips share it.
+	EventNotePeriodBriefPlan = "notes:period_brief_plan"
 )
 
 type VoiceCallUpdatedPayload struct {

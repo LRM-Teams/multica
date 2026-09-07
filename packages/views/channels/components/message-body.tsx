@@ -144,7 +144,8 @@ function MessageBodyInner({
             part.type === "choice" ||
             part.type === "choice_reply" ||
             part.type === "note_brief" ||
-            part.type === "period_brief_insert",
+            part.type === "period_brief_insert" ||
+            part.type === "period_brief_insert_propose",
         ) || (hasReferenceParts && content.trim() !== "" && !suppressHiringProtocolFallback);
       if (!hasBodyContent && !hasHiringProposal) return null;
       // Structured mention / issue-ref parts (#463): the canonical `content` now
@@ -160,6 +161,8 @@ function MessageBodyInner({
             part.type === "choice" ||
             part.type === "choice_reply" ||
             part.type === "note_brief" ||
+            part.type === "period_brief_insert" ||
+            part.type === "period_brief_insert_propose" ||
             (part.type === "reference" && part.ref_type === "agent:create"),
         );
         return (

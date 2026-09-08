@@ -110,6 +110,7 @@ export function NoteAssistantBubble({
   const pageRefBubbleId = useChatStore((s) => s.notePageRefs?.bubblePageId ?? null);
   const pageRefs = useChatStore((s) => s.notePageRefs?.refs);
   const refsForPage = pageRefBubbleId === pageId ? (pageRefs ?? EMPTY_PAGE_REFS) : EMPTY_PAGE_REFS;
+  const { data: notesList } = useQuery(noteListOptions(wsId));
   const { data: activePeriodBrief } = useQuery(notePeriodBriefActiveOptions(wsId, pageId));
   const { data: periodBriefPlanResponse } = useQuery({
     ...notePeriodBriefPlanOptions(wsId, bubbleSessionId),
@@ -223,9 +224,11 @@ export function NoteAssistantBubble({
 
   const handleNotePageDrop = React.useCallback(
     (ref: NotePageRef) => {
-      addNotePageRef(pageId, ref);
+      const listed = notesList?.pages?.find((page) => page.id === ref.pageId);
+      const title = listed?.title?.trim() || ref.title.trim() || "Untitled";
+      addNotePageRef(pageId, { pageId: ref.pageId, title });
     },
-    [addNotePageRef, pageId],
+    [addNotePageRef, notesList?.pages, pageId],
   );
 
   const handleRemovePageRef = React.useCallback(

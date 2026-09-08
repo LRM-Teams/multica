@@ -294,7 +294,14 @@ function NoteTreeRow({
         onDragStart={(event) => {
           if (!canDrag) return;
           event.dataTransfer.effectAllowed = canReorder ? "copyMove" : "copy";
+          // text/plain stays the raw id so the tree can reorder. Custom MIME +
+          // uri-list carry title for the bubble composer (Safari often drops
+          // custom MIME and only keeps text/*).
           event.dataTransfer.setData("text/plain", node.id);
+          event.dataTransfer.setData(
+            "text/uri-list",
+            `multica-note-page:${node.id}`,
+          );
           event.dataTransfer.setData(
             NOTE_PAGE_DRAG_MIME,
             encodeNotePageDragPayload({

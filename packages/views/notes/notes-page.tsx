@@ -13,6 +13,7 @@ import { noteFormatCssVars, type NoteFormatDefaults } from "@multica/core/notes/
 import { useNoteFormatStore } from "@multica/core/notes/format-store";
 import { syncNotePageRefsFromContent } from "@multica/core/notes/issue-refs";
 import { collectNoteIdsRemovedOnDelete } from "@multica/core/notes/delete";
+import { encodeNotePageDragPayload, NOTE_PAGE_DRAG_MIME } from "@multica/core/notes/page-ref";
 import {
   isNoteUpdateAbortError,
   useCreateNotePage,
@@ -264,7 +265,8 @@ function NoteTreeRow({
   const isExpanded = expandedIds.has(node.id);
   const title = node.title || "Untitled";
   const toggleLabel = isExpanded ? t(($) => $.notes_page.collapse_page, { title }) : t(($) => $.notes_page.expand_page, { title });
-  const canDrag = node.can_manage_shares && !editingTitle;
+  const canReorder = node.can_manage_shares && !editingTitle;
+  const canDrag = !editingTitle;
   const activeDropPosition = dropTarget?.id === node.id ? dropTarget.position : null;
 
   const startEditingTitle = () => {
@@ -291,8 +293,15 @@ function NoteTreeRow({
         draggable={canDrag}
         onDragStart={(event) => {
           if (!canDrag) return;
-          event.dataTransfer.effectAllowed = "move";
+          event.dataTransfer.effectAllowed = canReorder ? "copyMove" : "copy";
           event.dataTransfer.setData("text/plain", node.id);
+          event.dataTransfer.setData(
+            NOTE_PAGE_DRAG_MIME,
+            encodeNotePageDragPayload({
+              pageId: node.id,
+              title: node.title || "Untitled",
+            }),
+          );
           onDragStart(node.id);
         }}
         onDragEnd={onDragEnd}

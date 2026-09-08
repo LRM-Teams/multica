@@ -52,6 +52,7 @@ import {
   useUpdateChatSession,
 } from "@multica/core/chat/mutations";
 import { evictInactiveChatMessageCaches, useChatStore } from "@multica/core/chat";
+import type { NotePageRef } from "@multica/core/notes/page-ref";
 import { ChatMessageList, ChatMessageSkeleton } from "./chat-message-list";
 import { ChatInput } from "./chat-input";
 import { ChatContactList } from "./chat-contact-list";
@@ -157,6 +158,8 @@ export interface ChatWindowProps {
   onSendAccepted?: () => void;
   /** Rendered inside the composer card, above the editor. */
   composerPrefix?: React.ReactNode;
+  /** Accept a whole Notes page dragged from the tree into the composer. */
+  onNotePageDrop?: (ref: NotePageRef) => void;
   /** Hide the composer until a page-bound Period Brief run finishes. */
   composerLocked?: boolean;
   /** Stop a locked 写汇报 run. Chat cancel only covers standalone turns. */
@@ -312,6 +315,7 @@ export function ChatWindow({
   transformOutgoing,
   onSendAccepted,
   composerPrefix,
+  onNotePageDrop,
   composerLocked = false,
   onLockedComposerStop,
   layout = "floating",
@@ -1266,6 +1270,7 @@ export function ChatWindow({
         placeholder={composerPlaceholder}
         allowEmptySend={allowEmptySend}
         composerPrefix={composerPrefix}
+        onNotePageDrop={onNotePageDrop}
         leftAdornment={
           isDmBubble || isNoteBubble || lockPreferredAgent ? undefined : (
             <AgentDropdown

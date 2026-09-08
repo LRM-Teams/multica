@@ -751,7 +751,9 @@ func (h *Handler) SendChatMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.tryCompletePeriodBriefInsertFromChat(r.Context(), session, parseUUID(userID), parseUUID(workspaceID), userID, content) {
+	// Soft-confirm 写汇报 (awaiting_intent) must win over insert-confirm
+	// speech like 「是」— otherwise a finished brief steals the yes.
+	if outcome := h.tryHandlePeriodBriefPlanAsk(r, session, parseUUID(userID), parseUUID(workspaceID), userID, content); outcome.Handled {
 		if err := h.Queries.TouchChatSession(r.Context(), session.ID); err != nil {
 			slog.Warn("failed to touch chat session", "session_id", sessionID, "error", err)
 		}
@@ -763,6 +765,28 @@ func (h *Handler) SendChatMessage(w http.ResponseWriter, r *http.Request) {
 			Parts:         parts,
 			CreatedAt:     timestampToString(msg.CreatedAt),
 		})
+		if wake := strings.TrimSpace(outcome.WakeContent); wake != "" {
+			deliveryID := h.deliverStandaloneChatMessage(r.Context(), session, msg, wake, parts, userID)
+			h.clearDMPeerHiddenForChatSession(r.Context(), workspaceID, userID, session.AgentID)
+			platform, _, _ := middleware.ClientMetadataFromContext(r.Context())
+			obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.ChatMessageSent(
+				userID,
+				workspaceID,
+				uuidToString(session.ID),
+				"",
+				uuidToString(session.AgentID),
+				"",
+				"",
+				platform,
+			))
+			writeJSON(w, http.StatusCreated, SendChatMessageResponse{
+				MessageID:  uuidToString(msg.ID),
+				DeliveryID: deliveryID,
+				Pending:    true,
+				CreatedAt:  timestampToString(msg.CreatedAt),
+			})
+			return
+		}
 		writeJSON(w, http.StatusCreated, SendChatMessageResponse{
 			MessageID: uuidToString(msg.ID),
 			Pending:   false,
@@ -771,7 +795,7 @@ func (h *Handler) SendChatMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.tryHandlePeriodBriefPlanAsk(r, session, parseUUID(userID), parseUUID(workspaceID), userID, content) {
+	if h.tryCompletePeriodBriefInsertFromChat(r.Context(), session, parseUUID(userID), parseUUID(workspaceID), userID, content) {
 		if err := h.Queries.TouchChatSession(r.Context(), session.ID); err != nil {
 			slog.Warn("failed to touch chat session", "session_id", sessionID, "error", err)
 		}

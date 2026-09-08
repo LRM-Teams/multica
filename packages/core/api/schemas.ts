@@ -416,6 +416,13 @@ export const EMPTY_NOTE_PERIOD_BRIEF_ACTIVE: NotePeriodBriefActiveResponse = {
 };
 
 export const NotePeriodBriefPlanSchema: z.ZodType<NotePeriodBriefPlan> = z.object({
+  status: z.string().nullish().transform((v): NotePeriodBriefPlan["status"] => {
+    const status = (v ?? "").trim();
+    if (status === "clarifying" || status === "awaiting_intent") {
+      return status;
+    }
+    return "";
+  }),
   window: z.string().nullish().transform((v): NotePeriodBriefWindow | "" => {
     const kind = (v ?? "").trim();
     if (kind === "day" || kind === "week" || kind === "month" || kind === "custom") {

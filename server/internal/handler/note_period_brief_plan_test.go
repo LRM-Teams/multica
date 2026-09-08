@@ -358,9 +358,24 @@ func periodBriefSpeechOpensPlanCard(t *testing.T, text string) {
 		t.Fatalf("first start = %d: %s", startRec.Code, startRec.Body.String())
 	}
 
-	send := sendNoteBubbleChat(t, sessionID, text)
-	if send.Pending {
-		t.Fatalf("%q must open the plan card, not wake the assistant to start collect", text)
+	ask := sendNoteBubbleChat(t, sessionID, text)
+	if ask.Pending {
+		t.Fatalf("%q must soft-confirm on the platform path, not wake the assistant", text)
+	}
+	getAsk := newRequest(http.MethodGet, "/api/notes/period-briefs/plan?chat_session_id="+sessionID, nil)
+	getAskRec := httptest.NewRecorder()
+	testHandler.GetNotePeriodBriefPlan(getAskRec, getAsk)
+	var pending notePeriodBriefPlanResponse
+	if err := json.NewDecoder(getAskRec.Body).Decode(&pending); err != nil {
+		t.Fatalf("decode pending plan: %v", err)
+	}
+	if pending.Plan == nil || pending.Plan.Status != periodBriefPromptStatusAwaitingIntent {
+		t.Fatalf("%q must soft-confirm first, got %+v", text, pending.Plan)
+	}
+
+	yes := sendNoteBubbleChat(t, sessionID, "是")
+	if yes.Pending {
+		t.Fatalf("confirm yes must open the plan card, not wake the assistant")
 	}
 
 	get := newRequest(http.MethodGet, "/api/notes/period-briefs/plan?chat_session_id="+sessionID, nil)
@@ -371,7 +386,7 @@ func periodBriefSpeechOpensPlanCard(t *testing.T, text string) {
 		t.Fatalf("decode plan: %v", err)
 	}
 	if loaded.Plan == nil || loaded.Plan.Window != "day" || len(loaded.Plan.CollectorAgentIDs) != 1 || loaded.Plan.CollectorAgentIDs[0] != collectorA {
-		t.Fatalf("%q must restore the last plan card, got %+v", text, loaded.Plan)
+		t.Fatalf("after yes, %q must restore the last plan card, got %+v", text, loaded.Plan)
 	}
 
 	var runCount int

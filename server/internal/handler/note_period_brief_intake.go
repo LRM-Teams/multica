@@ -19,6 +19,23 @@ var (
 	periodBriefIntentRe    = regexp.MustCompile(`(?i)(写|整理|做|生成|帮我).{0,12}(汇报|周报)|period\s*work\s*brief|period\s*brief|weekly\s*report|write\s+(a\s+)?(period\s+work\s+)?reports?|^(report|reports)$`)
 	periodBriefCancelRe    = regexp.MustCompile(`(?i)^(取消|算了|先不写|不用写了|不要写了)`)
 	periodBriefRecollectRe = regexp.MustCompile(`(?i)重新采集|再采集|再采一遍|再采一次|重采|重新走一遍|再扫一遍|re-?collect(?:ing)?|collect(?:ion)? again|walk again|re-?walk`)
+	// Soft-confirm after a 写汇报 detect (typed or FAB satellite seed).
+	periodBriefIntentYesRe = regexp.MustCompile(`(?i)^(是|好|好的|确认|可以|要|嗯|行|开始)([的了吧啊～~]*)?$`)
+	periodBriefIntentNoRe  = regexp.MustCompile(`(?i)^(否|不|不是|不要|不用|先不要|先不用)([的了吧啊～~]*)?$`)
+)
+
+// periodBriefPlanAskOutcome is how chat send continues after the 写汇报 intercept.
+type periodBriefPlanAskOutcome struct {
+	Handled bool
+	// WakeContent, when non-empty, means Handled consumed the speech turn but
+	// the Notes Assistant should still answer this text (decline / other ask).
+	WakeContent string
+}
+
+const (
+	periodBriefPromptStatusClarifying     = "clarifying"
+	periodBriefPromptStatusAwaitingIntent = "awaiting_intent"
+	periodBriefIntentConfirmCopy          = "看起来你是想写汇报。确认的话点「是」或回复「是」，我会打开采集卡；如果只是普通提问，点「否」或回复「否」，我按你的原话正常回答。"
 )
 
 type notePeriodBriefPromptRow struct {
@@ -33,6 +50,7 @@ type notePeriodBriefPromptRow struct {
 	EndDate           string
 	CollectorAgentIDs []string
 	Focus             string
+	SourceAsk         string
 	AwaitingConfirm   bool
 	Status            string
 }
@@ -57,6 +75,19 @@ func looksLikePeriodBriefPlanAsk(text string) bool {
 
 func periodBriefIntakeCancelled(text string) bool {
 	return periodBriefCancelRe.MatchString(strings.TrimSpace(text))
+}
+
+func periodBriefIntentConfirmed(text string) bool {
+	// Only explicit yes — repeating 「写汇报」 must not open the plan card.
+	return periodBriefIntentYesRe.MatchString(strings.TrimSpace(text))
+}
+
+func periodBriefIntentDeclined(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if periodBriefIntentNoRe.MatchString(trimmed) {
+		return true
+	}
+	return periodBriefIntakeCancelled(trimmed)
 }
 
 func (h *Handler) listOwnedPeriodBriefCollectors(
@@ -97,24 +128,41 @@ func (h *Handler) loadPeriodBriefPrompt(
 	ctx context.Context,
 	sessionID, workspaceID, userID pgtype.UUID,
 ) (notePeriodBriefPromptRow, error) {
+	return h.loadPeriodBriefPromptWithStatus(ctx, sessionID, workspaceID, userID, periodBriefPromptStatusClarifying)
+}
+
+func (h *Handler) loadPeriodBriefAwaitingIntent(
+	ctx context.Context,
+	sessionID, workspaceID, userID pgtype.UUID,
+) (notePeriodBriefPromptRow, error) {
+	return h.loadPeriodBriefPromptWithStatus(ctx, sessionID, workspaceID, userID, periodBriefPromptStatusAwaitingIntent)
+}
+
+func (h *Handler) loadPeriodBriefPromptWithStatus(
+	ctx context.Context,
+	sessionID, workspaceID, userID pgtype.UUID,
+	status string,
+) (notePeriodBriefPromptRow, error) {
 	var row notePeriodBriefPromptRow
 	err := h.DB.QueryRow(ctx, `
 SELECT id, workspace_id, owner_user_id, chat_session_id, source_page_id,
        window_kind, window_date, start_date, end_date, collector_agent_ids,
-       focus, awaiting_confirm, status
+       focus, COALESCE(source_ask, ''), awaiting_confirm, status
 FROM note_period_brief_prompt
 WHERE chat_session_id = $1 AND workspace_id = $2 AND owner_user_id = $3
-  AND status = 'clarifying'
+  AND status = $4
 ORDER BY created_at DESC
-LIMIT 1`, sessionID, workspaceID, userID).Scan(
+LIMIT 1`, sessionID, workspaceID, userID, status).Scan(
 		&row.ID, &row.WorkspaceID, &row.OwnerUserID, &row.ChatSessionID, &row.SourcePageID,
 		&row.WindowKind, &row.WindowDate, &row.StartDate, &row.EndDate, &row.CollectorAgentIDs,
-		&row.Focus, &row.AwaitingConfirm, &row.Status,
+		&row.Focus, &row.SourceAsk, &row.AwaitingConfirm, &row.Status,
 	)
 	return row, err
 }
 
-func (h *Handler) loadLatestPeriodBriefPromptAnyStatus(
+// loadLatestPeriodBriefPromptForSeed restores the last real collect draft,
+// skipping soft-confirm awaiting_intent rows (empty window).
+func (h *Handler) loadLatestPeriodBriefPromptForSeed(
 	ctx context.Context,
 	sessionID, workspaceID, userID pgtype.UUID,
 ) (notePeriodBriefPromptRow, error) {
@@ -122,14 +170,16 @@ func (h *Handler) loadLatestPeriodBriefPromptAnyStatus(
 	err := h.DB.QueryRow(ctx, `
 SELECT id, workspace_id, owner_user_id, chat_session_id, source_page_id,
        window_kind, window_date, start_date, end_date, collector_agent_ids,
-       focus, awaiting_confirm, status
+       focus, COALESCE(source_ask, ''), awaiting_confirm, status
 FROM note_period_brief_prompt
 WHERE chat_session_id = $1 AND workspace_id = $2 AND owner_user_id = $3
+  AND status <> $4
+  AND trim(window_kind) <> ''
 ORDER BY created_at DESC
-LIMIT 1`, sessionID, workspaceID, userID).Scan(
+LIMIT 1`, sessionID, workspaceID, userID, periodBriefPromptStatusAwaitingIntent).Scan(
 		&row.ID, &row.WorkspaceID, &row.OwnerUserID, &row.ChatSessionID, &row.SourcePageID,
 		&row.WindowKind, &row.WindowDate, &row.StartDate, &row.EndDate, &row.CollectorAgentIDs,
-		&row.Focus, &row.AwaitingConfirm, &row.Status,
+		&row.Focus, &row.SourceAsk, &row.AwaitingConfirm, &row.Status,
 	)
 	return row, err
 }
@@ -138,14 +188,18 @@ func (h *Handler) upsertPeriodBriefPrompt(ctx context.Context, row *notePeriodBr
 	if row.CollectorAgentIDs == nil {
 		row.CollectorAgentIDs = []string{}
 	}
+	if row.Status == "" {
+		row.Status = periodBriefPromptStatusClarifying
+	}
 	if row.ID.Valid {
 		_, err := h.DB.Exec(ctx, `
 UPDATE note_period_brief_prompt
 SET window_kind = $2, window_date = $3, start_date = $4, end_date = $5,
-    collector_agent_ids = $6, focus = $7, awaiting_confirm = $8, updated_at = now()
+    collector_agent_ids = $6, focus = $7, source_ask = $8, awaiting_confirm = $9,
+    status = $10, updated_at = now()
 WHERE id = $1`,
 			row.ID, row.WindowKind, row.WindowDate, row.StartDate, row.EndDate,
-			row.CollectorAgentIDs, row.Focus, row.AwaitingConfirm,
+			row.CollectorAgentIDs, row.Focus, row.SourceAsk, row.AwaitingConfirm, row.Status,
 		)
 		return err
 	}
@@ -153,12 +207,12 @@ WHERE id = $1`,
 INSERT INTO note_period_brief_prompt (
   workspace_id, owner_user_id, chat_session_id, source_page_id,
   window_kind, window_date, start_date, end_date, collector_agent_ids,
-  focus, awaiting_confirm, status
-) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'clarifying')
+  focus, source_ask, awaiting_confirm, status
+) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 RETURNING id`,
 		row.WorkspaceID, row.OwnerUserID, row.ChatSessionID, row.SourcePageID,
 		row.WindowKind, row.WindowDate, row.StartDate, row.EndDate, row.CollectorAgentIDs,
-		row.Focus, row.AwaitingConfirm,
+		row.Focus, row.SourceAsk, row.AwaitingConfirm, row.Status,
 	).Scan(&row.ID)
 }
 
@@ -167,24 +221,94 @@ func (h *Handler) closePeriodBriefPrompt(ctx context.Context, id pgtype.UUID, st
 UPDATE note_period_brief_prompt SET status = $2, updated_at = now() WHERE id = $1`, id, status)
 }
 
+func (h *Handler) openPeriodBriefPlanCard(
+	ctx context.Context,
+	session db.ChatSession,
+	workspaceID, userID, pageID pgtype.UUID,
+	userIDString string,
+) bool {
+	owned := h.listOwnedPeriodBriefCollectors(ctx, workspaceID, userID)
+	row, err := h.seedPeriodBriefPlan(ctx, session.ID, workspaceID, userID, pageID, owned)
+	if err != nil {
+		slog.Warn("period brief plan ask failed to seed plan", "error", err)
+		return false
+	}
+	row.Status = periodBriefPromptStatusClarifying
+	row.AwaitingConfirm = true
+	row.SourceAsk = ""
+	if err := h.upsertPeriodBriefPrompt(ctx, &row); err != nil {
+		slog.Warn("period brief plan ask failed to save plan", "error", err)
+		return false
+	}
+	plan := periodBriefPlanFromRow(row)
+	// Speak first, then show the card — otherwise the FE paints the card
+	// before the bubble line that explains it.
+	h.postPeriodBriefBubbleMessage(ctx, session.ID, workspaceID, session.CreatorID, userIDString, "assistant", "好，先确认这次的时间段和电脑。改完再点开始采集。")
+	h.publishPeriodBriefPlanChanged(workspaceID, "user", uuidToString(userID), uuidToString(session.ID), uuidToString(userID), &plan)
+	return true
+}
+
 func (h *Handler) tryHandlePeriodBriefPlanAsk(
 	r *http.Request,
 	session db.ChatSession,
 	userID, workspaceID pgtype.UUID,
 	userIDString, content string,
-) bool {
+) periodBriefPlanAskOutcome {
 	pageID := session.ContextNotePageID
 	if !pageID.Valid {
 		raw := h.chatSessionContextNotePageID(r.Context(), session.ID)
 		if raw == "" {
-			return false
+			return periodBriefPlanAskOutcome{}
 		}
 		pageID = parseUUID(raw)
 	}
+
+	pending, pendingErr := h.loadPeriodBriefAwaitingIntent(r.Context(), session.ID, workspaceID, userID)
+	if pendingErr != nil && !errors.Is(pendingErr, pgx.ErrNoRows) {
+		return periodBriefPlanAskOutcome{}
+	}
+	if pendingErr == nil {
+		original := strings.TrimSpace(pending.SourceAsk)
+		if periodBriefIntentDeclined(content) {
+			h.closePeriodBriefPrompt(r.Context(), pending.ID, "cancelled")
+			h.publishPeriodBriefPlanChanged(workspaceID, "user", uuidToString(userID), uuidToString(session.ID), uuidToString(userID), nil)
+			wake := original
+			if wake == "" {
+				wake = content
+			}
+			return periodBriefPlanAskOutcome{Handled: true, WakeContent: wake}
+		}
+		if periodBriefIntentConfirmed(content) {
+			h.closePeriodBriefPrompt(r.Context(), pending.ID, "cancelled")
+			if !h.openPeriodBriefPlanCard(r.Context(), session, workspaceID, userID, pageID, userIDString) {
+				return periodBriefPlanAskOutcome{}
+			}
+			return periodBriefPlanAskOutcome{Handled: true}
+		}
+		if looksLikePeriodBriefPlanAsk(content) {
+			// Same funnel again while we asked — keep waiting; refresh the ask.
+			pending.SourceAsk = strings.TrimSpace(content)
+			pending.AwaitingConfirm = true
+			pending.Status = periodBriefPromptStatusAwaitingIntent
+			if err := h.upsertPeriodBriefPrompt(r.Context(), &pending); err != nil {
+				slog.Warn("period brief intent confirm failed to refresh", "error", err)
+				return periodBriefPlanAskOutcome{}
+			}
+			intentPlan := periodBriefIntentConfirmPlan()
+			h.postPeriodBriefBubbleMessage(r.Context(), session.ID, workspaceID, session.CreatorID, userIDString, "assistant", periodBriefIntentConfirmCopy)
+			h.publishPeriodBriefPlanChanged(workspaceID, "user", uuidToString(userID), uuidToString(session.ID), uuidToString(userID), &intentPlan)
+			return periodBriefPlanAskOutcome{Handled: true}
+		}
+		// Other speech while we asked — drop the soft confirm and answer this turn.
+		h.closePeriodBriefPrompt(r.Context(), pending.ID, "cancelled")
+		h.publishPeriodBriefPlanChanged(workspaceID, "user", uuidToString(userID), uuidToString(session.ID), uuidToString(userID), nil)
+		return periodBriefPlanAskOutcome{Handled: true, WakeContent: content}
+	}
+
 	if periodBriefIntakeCancelled(content) {
 		prompt, promptErr := h.loadPeriodBriefPrompt(r.Context(), session.ID, workspaceID, userID)
 		if promptErr != nil && !errors.Is(promptErr, pgx.ErrNoRows) {
-			return false
+			return periodBriefPlanAskOutcome{}
 		}
 		closedPlan := promptErr == nil
 		if closedPlan {
@@ -195,40 +319,42 @@ func (h *Handler) tryHandlePeriodBriefPlanAsk(
 			slog.Warn("period brief cancel from speech failed to stop run", "error", stopErr)
 		}
 		if !closedPlan && !stopped {
-			return false
+			return periodBriefPlanAskOutcome{}
 		}
 		h.publishPeriodBriefPlanChanged(workspaceID, "user", uuidToString(userID), uuidToString(session.ID), uuidToString(userID), nil)
 		if !stopped {
 			h.postPeriodBriefBubbleMessage(r.Context(), session.ID, workspaceID, session.CreatorID, userIDString, "assistant", "好，那这次先不写汇报。")
 		}
-		return true
+		return periodBriefPlanAskOutcome{Handled: true}
 	}
 	if !looksLikePeriodBriefPlanAsk(content) {
-		return false
+		return periodBriefPlanAskOutcome{}
 	}
 	if run, err := h.loadActivePeriodBriefRunForPage(r.Context(), workspaceID, userID, pageID); err == nil && run.ID.Valid {
 		run = h.reconcilePeriodBriefLock(r, workspaceID, userID, userIDString, run)
 		if periodBriefRunLocksComposerStatus(run.Status) {
 			h.postPeriodBriefBubbleMessage(r.Context(), session.ID, workspaceID, session.CreatorID, userIDString, "assistant", "上一份写汇报还在进行中，结束后我们再开新的。")
-			return true
+			return periodBriefPlanAskOutcome{Handled: true}
 		}
 	}
-	owned := h.listOwnedPeriodBriefCollectors(r.Context(), workspaceID, userID)
-	row, err := h.seedPeriodBriefPlan(r.Context(), session.ID, workspaceID, userID, pageID, owned)
-	if err != nil {
-		slog.Warn("period brief plan ask failed to seed plan", "error", err)
-		return false
+
+	row := notePeriodBriefPromptRow{
+		WorkspaceID:     workspaceID,
+		OwnerUserID:     userID,
+		ChatSessionID:   session.ID,
+		SourcePageID:    pageID,
+		SourceAsk:       strings.TrimSpace(content),
+		AwaitingConfirm: true,
+		Status:          periodBriefPromptStatusAwaitingIntent,
 	}
-	row.Status = "clarifying"
-	row.AwaitingConfirm = true
 	if err := h.upsertPeriodBriefPrompt(r.Context(), &row); err != nil {
-		slog.Warn("period brief plan ask failed to save plan", "error", err)
-		return false
+		slog.Warn("period brief intent confirm failed to save", "error", err)
+		return periodBriefPlanAskOutcome{}
 	}
-	plan := periodBriefPlanFromRow(row)
-	h.publishPeriodBriefPlanChanged(workspaceID, "user", uuidToString(userID), uuidToString(session.ID), uuidToString(userID), &plan)
-	h.postPeriodBriefBubbleMessage(r.Context(), session.ID, workspaceID, session.CreatorID, userIDString, "assistant", "好，先确认这次的时间段和电脑。改完再点开始采集。")
-	return true
+	intentPlan := periodBriefIntentConfirmPlan()
+	h.postPeriodBriefBubbleMessage(r.Context(), session.ID, workspaceID, session.CreatorID, userIDString, "assistant", periodBriefIntentConfirmCopy)
+	h.publishPeriodBriefPlanChanged(workspaceID, "user", uuidToString(userID), uuidToString(session.ID), uuidToString(userID), &intentPlan)
+	return periodBriefPlanAskOutcome{Handled: true}
 }
 
 func (h *Handler) seedPeriodBriefPlan(
@@ -243,11 +369,12 @@ func (h *Handler) seedPeriodBriefPlan(
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return notePeriodBriefPromptRow{}, err
 	}
-	prev, prevErr := h.loadLatestPeriodBriefPromptAnyStatus(ctx, sessionID, workspaceID, userID)
+	prev, prevErr := h.loadLatestPeriodBriefPromptForSeed(ctx, sessionID, workspaceID, userID)
 	if prevErr == nil {
 		prev.ID = pgtype.UUID{}
-		prev.Status = "clarifying"
+		prev.Status = periodBriefPromptStatusClarifying
 		prev.SourcePageID = pageID
+		prev.SourceAsk = ""
 		return prev, nil
 	}
 	if prevErr != nil && !errors.Is(prevErr, pgx.ErrNoRows) {
@@ -259,7 +386,7 @@ func (h *Handler) seedPeriodBriefPlan(
 		ChatSessionID: sessionID,
 		SourcePageID:  pageID,
 		WindowKind:    "week",
-		Status:        "clarifying",
+		Status:        periodBriefPromptStatusClarifying,
 	}
 	if latest, runErr := h.loadLatestPeriodBriefRunForPage(ctx, workspaceID, userID, pageID); runErr == nil && latest.ID.Valid {
 		full, loadErr := h.loadNotePeriodBriefRunByID(ctx, workspaceID, userID, latest.ID)

@@ -43,6 +43,35 @@ export function listPeriodBriefPlanGaps(input: {
 /** Satellite button: say 写汇报 into the same assistant path. */
 export const PERIOD_BRIEF_SATELLITE_ASK = "写汇报";
 
+/** Soft-confirm answers — same strings the platform speech path accepts. */
+export const PERIOD_BRIEF_INTENT_YES = "是";
+export const PERIOD_BRIEF_INTENT_NO = "否";
+
+export function isPeriodBriefAwaitingIntent(
+  plan: { status?: string | null } | null | undefined,
+): boolean {
+  return (plan?.status ?? "").trim() === "awaiting_intent";
+}
+
+export function isPeriodBriefClarifyingPlan(
+  plan: {
+    status?: string | null;
+    window?: string | null;
+    collector_agent_ids?: readonly string[] | null;
+  } | null | undefined,
+): boolean {
+  if (!plan || isPeriodBriefAwaitingIntent(plan)) return false;
+  const status = (plan.status ?? "").trim();
+  if (status === "clarifying") return true;
+  // Legacy payloads without status: only a real collect draft, not soft-confirm.
+  if (status === "") {
+    const window = (plan.window ?? "").trim();
+    const collectors = plan.collector_agent_ids ?? [];
+    return window.length > 0 || collectors.length > 0;
+  }
+  return false;
+}
+
 export type PeriodBriefComposeSelection = {
   window: NotePeriodBriefWindow;
   date: string;

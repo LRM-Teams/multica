@@ -695,6 +695,42 @@ describe("NoteAssistantBubble period brief", () => {
     expect(createNotePeriodBrief).not.toHaveBeenCalled();
   });
 
+  it("shows 是/否 buttons while awaiting intent and seeds the reply", async () => {
+    chatState.noteBubbleActiveSessionByPage = { "page-1": "sess-1" };
+    getNotePeriodBriefPlan.mockResolvedValue({
+      plan: sessionPlan({ status: "awaiting_intent", window: "", collector_agent_ids: [] }),
+    });
+    const user = userEvent.setup();
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    renderWithI18n(
+      <QueryClientProvider client={qc}>
+        <NoteAssistantBubble pageId="page-1" pageTitle="Note" />
+      </QueryClientProvider>,
+      { locale: "zh-Hans" },
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("period-brief-intent-confirm")).toBeTruthy();
+    });
+    expect(screen.queryByTestId("period-brief-compose")).toBeNull();
+
+    await user.click(screen.getByTestId("period-brief-intent-yes"));
+    await waitFor(() => {
+      expect(screen.getByTestId("seed-send")).toHaveTextContent("是");
+    });
+
+    getNotePeriodBriefPlan.mockResolvedValue({
+      plan: sessionPlan({ status: "awaiting_intent", window: "", collector_agent_ids: [] }),
+    });
+    await user.click(screen.getByTestId("period-brief-intent-no"));
+    await waitFor(() => {
+      expect(screen.getByTestId("seed-send")).toHaveTextContent("否");
+    });
+    expect(createNotePeriodBrief).not.toHaveBeenCalled();
+  });
+
   it("does not open the plan card from a historical compose fence", async () => {
     chatState.noteBubbleActiveSessionByPage = { "page-1": "sess-1" };
     listChatMessages.mockResolvedValue([

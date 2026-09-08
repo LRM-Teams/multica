@@ -645,7 +645,7 @@ SELECT result_page_id::text, result_mode FROM note_period_brief_run WHERE id = $
 	}
 }
 
-func TestNoteBubbleChatOpensPlanCardOnWriteReportAsk(t *testing.T) {
+func TestNoteBubbleChatAsksBeforeOpeningPlanCard(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -654,7 +654,7 @@ func TestNoteBubbleChatOpensPlanCardOnWriteReportAsk(t *testing.T) {
 	if err := testPool.QueryRow(context.Background(), `
 INSERT INTO note_page (workspace_id, owner_user_id, title, content, sort_key, created_by, updated_by)
 VALUES ($1, $2, $3, '', lpad((extract(epoch from now()) * 1000000)::bigint::text, 20, '0'), $2, $2)
-RETURNING id`, testWorkspaceID, testUserID, "Intake page "+uuid.NewString()[:8]).Scan(&sourcePageID); err != nil {
+RETURNING id`, testWorkspaceID, testUserID, "Intent page "+uuid.NewString()[:8]).Scan(&sourcePageID); err != nil {
 		t.Fatalf("create source page: %v", err)
 	}
 	t.Cleanup(func() {
@@ -670,7 +670,7 @@ UPDATE chat_session SET context_note_page_id = $2 WHERE id = $1`, sessionID, sou
 
 	ask := sendNoteBubbleChat(t, sessionID, "帮我写汇报")
 	if ask.Pending {
-		t.Fatal("写汇报 must open the plan card on the platform path, not wake the notes assistant")
+		t.Fatal("ambiguous 写汇报 must soft-confirm on the platform path, not wake yet")
 	}
 	var joined string
 	if err := testPool.QueryRow(context.Background(), `
@@ -681,25 +681,184 @@ FROM chat_message WHERE chat_session_id = $1`, sessionID).Scan(&joined); err != 
 	if !strings.Contains(joined, "帮我写汇报") {
 		t.Fatalf("user text should stay in the transcript:\n%s", joined)
 	}
-	if !strings.Contains(joined, "开始采集") {
-		t.Fatalf("platform must ask the human to confirm on the plan card:\n%s", joined)
+	if !strings.Contains(joined, "点「是」或回复「是」") {
+		t.Fatalf("platform must ask intent confirm before the plan card:\n%s", joined)
 	}
-	var runCount int
-	if err := testPool.QueryRow(context.Background(), `
-SELECT count(*) FROM note_period_brief_run WHERE chat_session_id = $1`, sessionID).Scan(&runCount); err != nil {
-		t.Fatalf("count runs: %v", err)
+	if strings.Contains(joined, "开始采集") {
+		t.Fatalf("plan card copy must not appear before confirm:\n%s", joined)
 	}
-	if runCount != 0 {
-		t.Fatalf("写汇报 ask must not start a run, runs = %d", runCount)
-	}
-	var promptCount int
+	var clarifying int
 	if err := testPool.QueryRow(context.Background(), `
 SELECT count(*) FROM note_period_brief_prompt
-WHERE chat_session_id = $1 AND status = 'clarifying'`, sessionID).Scan(&promptCount); err != nil {
-		t.Fatalf("count prompts: %v", err)
+WHERE chat_session_id = $1 AND status = 'clarifying'`, sessionID).Scan(&clarifying); err != nil {
+		t.Fatalf("count clarifying: %v", err)
 	}
-	if promptCount != 1 {
-		t.Fatalf("写汇报 ask must open one clarifying plan, prompts = %d", promptCount)
+	if clarifying != 0 {
+		t.Fatalf("plan must stay closed until confirm, clarifying=%d", clarifying)
+	}
+	var awaiting int
+	if err := testPool.QueryRow(context.Background(), `
+SELECT count(*) FROM note_period_brief_prompt
+WHERE chat_session_id = $1 AND status = 'awaiting_intent'`, sessionID).Scan(&awaiting); err != nil {
+		t.Fatalf("count awaiting_intent: %v", err)
+	}
+	if awaiting != 1 {
+		t.Fatalf("want one awaiting_intent prompt, got %d", awaiting)
+	}
+
+	yes := sendNoteBubbleChat(t, sessionID, "是")
+	if yes.Pending {
+		t.Fatal("confirm yes must open the plan card without waking the assistant")
+	}
+	if err := testPool.QueryRow(context.Background(), `
+SELECT string_agg(content, E'\n' ORDER BY created_at, id)
+FROM chat_message WHERE chat_session_id = $1`, sessionID).Scan(&joined); err != nil {
+		t.Fatalf("load confirm transcript: %v", err)
+	}
+	if !strings.Contains(joined, "开始采集") {
+		t.Fatalf("after yes, platform must open the plan card:\n%s", joined)
+	}
+	if err := testPool.QueryRow(context.Background(), `
+SELECT count(*) FROM note_period_brief_prompt
+WHERE chat_session_id = $1 AND status = 'clarifying'`, sessionID).Scan(&clarifying); err != nil {
+		t.Fatalf("count clarifying after yes: %v", err)
+	}
+	if clarifying != 1 {
+		t.Fatalf("confirm yes must open one clarifying plan, got %d", clarifying)
+	}
+}
+
+func TestNoteBubbleChatDeclinesIntentAndWakesOriginalAsk(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	var sourcePageID string
+	if err := testPool.QueryRow(context.Background(), `
+INSERT INTO note_page (workspace_id, owner_user_id, title, content, sort_key, created_by, updated_by)
+VALUES ($1, $2, $3, '', lpad((extract(epoch from now()) * 1000000)::bigint::text, 20, '0'), $2, $2)
+RETURNING id`, testWorkspaceID, testUserID, "Decline page "+uuid.NewString()[:8]).Scan(&sourcePageID); err != nil {
+		t.Fatalf("create source page: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM note_page WHERE id = $1`, sourcePageID)
+	})
+
+	agentID := createHandlerTestAgent(t, "Notes Assistant "+uuid.NewString()[:8], nil)
+	sessionID := createHandlerTestChatSession(t, agentID)
+	if _, err := testPool.Exec(context.Background(), `
+UPDATE chat_session SET context_note_page_id = $2 WHERE id = $1`, sessionID, sourcePageID); err != nil {
+		t.Fatalf("bind note page: %v", err)
+	}
+
+	_ = sendNoteBubbleChat(t, sessionID, "帮我写汇报")
+	no := sendNoteBubbleChat(t, sessionID, "否")
+	if !no.Pending {
+		t.Fatal("decline must wake the notes assistant with the original ask")
+	}
+	var clarifying int
+	if err := testPool.QueryRow(context.Background(), `
+SELECT count(*) FROM note_period_brief_prompt
+WHERE chat_session_id = $1 AND status = 'clarifying'`, sessionID).Scan(&clarifying); err != nil {
+		t.Fatalf("count clarifying: %v", err)
+	}
+	if clarifying != 0 {
+		t.Fatalf("decline must not open a plan card, clarifying=%d", clarifying)
+	}
+}
+
+func TestNoteBubbleSatelliteWriteReportAlsoAsksIntent(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	var sourcePageID string
+	if err := testPool.QueryRow(context.Background(), `
+INSERT INTO note_page (workspace_id, owner_user_id, title, content, sort_key, created_by, updated_by)
+VALUES ($1, $2, $3, '', lpad((extract(epoch from now()) * 1000000)::bigint::text, 20, '0'), $2, $2)
+RETURNING id`, testWorkspaceID, testUserID, "Satellite page "+uuid.NewString()[:8]).Scan(&sourcePageID); err != nil {
+		t.Fatalf("create source page: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM note_page WHERE id = $1`, sourcePageID)
+	})
+
+	agentID := createHandlerTestAgent(t, "Notes Assistant "+uuid.NewString()[:8], nil)
+	sessionID := createHandlerTestChatSession(t, agentID)
+	if _, err := testPool.Exec(context.Background(), `
+UPDATE chat_session SET context_note_page_id = $2 WHERE id = $1`, sessionID, sourcePageID); err != nil {
+		t.Fatalf("bind note page: %v", err)
+	}
+
+	ask := sendNoteBubbleChat(t, sessionID, "写汇报")
+	if ask.Pending {
+		t.Fatal("写汇报 must soft-confirm on the platform path")
+	}
+	var joined string
+	if err := testPool.QueryRow(context.Background(), `
+SELECT string_agg(content, E'\n' ORDER BY created_at, id)
+FROM chat_message WHERE chat_session_id = $1`, sessionID).Scan(&joined); err != nil {
+		t.Fatalf("load transcript: %v", err)
+	}
+	if !strings.Contains(joined, "看起来你是想写汇报") {
+		t.Fatalf("exact 写汇报 (typed or FAB seed) must ask before the plan card:\n%s", joined)
+	}
+	var clarifying int
+	if err := testPool.QueryRow(context.Background(), `
+SELECT count(*) FROM note_period_brief_prompt
+WHERE chat_session_id = $1 AND status = 'clarifying'`, sessionID).Scan(&clarifying); err != nil {
+		t.Fatalf("count clarifying: %v", err)
+	}
+	if clarifying != 0 {
+		t.Fatalf("must not open clarifying card before confirm, clarifying=%d", clarifying)
+	}
+}
+
+func TestNoteBubbleRepeatWriteReportDoesNotSkipConfirm(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	var sourcePageID string
+	if err := testPool.QueryRow(context.Background(), `
+INSERT INTO note_page (workspace_id, owner_user_id, title, content, sort_key, created_by, updated_by)
+VALUES ($1, $2, $3, '', lpad((extract(epoch from now()) * 1000000)::bigint::text, 20, '0'), $2, $2)
+RETURNING id`, testWorkspaceID, testUserID, "Repeat ask page "+uuid.NewString()[:8]).Scan(&sourcePageID); err != nil {
+		t.Fatalf("create source page: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM note_page WHERE id = $1`, sourcePageID)
+	})
+
+	agentID := createHandlerTestAgent(t, "Notes Assistant "+uuid.NewString()[:8], nil)
+	sessionID := createHandlerTestChatSession(t, agentID)
+	if _, err := testPool.Exec(context.Background(), `
+UPDATE chat_session SET context_note_page_id = $2 WHERE id = $1`, sessionID, sourcePageID); err != nil {
+		t.Fatalf("bind note page: %v", err)
+	}
+
+	_ = sendNoteBubbleChat(t, sessionID, "写汇报")
+	again := sendNoteBubbleChat(t, sessionID, "写汇报")
+	if again.Pending {
+		t.Fatal("repeat 写汇报 must stay on soft-confirm, not wake or open the card")
+	}
+	var clarifying int
+	if err := testPool.QueryRow(context.Background(), `
+SELECT count(*) FROM note_period_brief_prompt
+WHERE chat_session_id = $1 AND status = 'clarifying'`, sessionID).Scan(&clarifying); err != nil {
+		t.Fatalf("count clarifying: %v", err)
+	}
+	if clarifying != 0 {
+		t.Fatalf("repeat 写汇报 must not open the plan card, clarifying=%d", clarifying)
+	}
+	var awaiting int
+	if err := testPool.QueryRow(context.Background(), `
+SELECT count(*) FROM note_period_brief_prompt
+WHERE chat_session_id = $1 AND status = 'awaiting_intent'`, sessionID).Scan(&awaiting); err != nil {
+		t.Fatalf("count awaiting_intent: %v", err)
+	}
+	if awaiting != 1 {
+		t.Fatalf("want one awaiting_intent prompt after repeat ask, got %d", awaiting)
 	}
 }
 

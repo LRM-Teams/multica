@@ -59,6 +59,7 @@ describe("ApiClient", () => {
 
   it("reads and writes the bubble session 写汇报 plan", async () => {
     const plan = {
+      status: "clarifying",
       window: "week",
       date: "2026-09-03",
       start_date: "",

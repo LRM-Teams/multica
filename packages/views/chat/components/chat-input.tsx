@@ -15,6 +15,7 @@ import { useChatStore, DRAFT_NEW_SESSION } from "@multica/core/chat";
 import { createLogger } from "@multica/core/logger";
 import { enterKey } from "@multica/core/platform";
 import type { UploadResult } from "@multica/core/hooks/use-file-upload";
+import type { NotePageRef } from "@multica/core/notes/page-ref";
 import type { MentionItem } from "../../editor/extensions/mention-suggestion";
 import { usePrefersReducedMotion } from "../../common/use-prefers-reduced-motion";
 import { useT } from "../../i18n";
@@ -64,6 +65,8 @@ interface ChatInputProps {
   allowEmptySend?: boolean;
   /** Rendered inside the composer card, above the editor (e.g. a quote chip). */
   composerPrefix?: ReactNode;
+  /** Accept a whole Notes page dragged from the tree into the composer. */
+  onNotePageDrop?: (ref: NotePageRef) => void;
 }
 
 export function ChatInput({
@@ -86,6 +89,7 @@ export function ChatInput({
   placeholder: placeholderOverride,
   allowEmptySend = false,
   composerPrefix,
+  onNotePageDrop,
 }: ChatInputProps) {
   const { t } = useT("chat");
   const prefersReducedMotion = usePrefersReducedMotion();
@@ -214,10 +218,13 @@ export function ChatInput({
   );
 
   // Drop zone wraps the rounded card so a drop anywhere on the input
-  // surface routes the file through the editor's upload extension (same
-  // handler as the in-editor paste path).
+  // surface routes files through the editor upload path, or note pages
+  // into the Notes assistant composer.
+  const dropEnabled = (!!onUploadFile || !!onNotePageDrop) && !disabled && !noAgent;
   const { isDragOver, dropZoneProps } = useFileDropZone({
     onDrop: (files) => files.forEach((f) => editorRef.current?.uploadFile(f)),
+    onNotePageDrop,
+    enabled: dropEnabled,
   });
 
   const handleSend = async () => {
@@ -306,7 +313,7 @@ export function ChatInput({
       )}
     >
       <div
-        {...(uploadEnabled ? dropZoneProps : {})}
+        {...(dropEnabled ? dropZoneProps : {})}
         className={cn(
           "relative mx-auto flex min-h-16 max-h-40 w-full max-w-4xl flex-col rounded-lg bg-card pb-9 border-1 border-border transition-colors focus-within:border-brand",
           // Visual + interaction lock when there's no agent. We don't
@@ -383,7 +390,7 @@ export function ChatInput({
             tooltip={`${t(($) => $.input.send_tooltip)} · ${enterKey}`}
           />
         </div>
-        {uploadEnabled && isDragOver && <FileDropOverlay />}
+        {dropEnabled && isDragOver && <FileDropOverlay />}
       </div>
     </div>
   );

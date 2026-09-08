@@ -186,7 +186,7 @@ func formatPeriodBriefSessionMaterialsBoard(materials []periodBriefSessionMateri
 		b.WriteString("\n")
 	}
 	b.WriteString("Match machine words to these rows by os, hostname, or collector name when answering questions about those harvests. Do not change the collect window, computers, or focus. Do not call start.\n")
-	b.WriteString("If the human asks 写汇报 / 重新采集 without naming a prior harvest, the platform opens the plan card; 开始采集 walks every selected computer and writes a new brief from that walk only. Do not emit chat XML. Do not rewrite <period_brief> as chat markdown.\n")
+	b.WriteString("If the human asks 写汇报 / 重新采集 without naming a prior harvest, the platform first soft-confirms (是/否, buttons or speech); 「是」 opens the plan card. 开始采集 walks every selected computer and writes a new brief from that walk only. Do not emit chat XML. Do not rewrite <period_brief> as chat markdown.\n")
 	b.WriteString("</period_brief_session_materials>\n\n")
 	return b.String()
 }

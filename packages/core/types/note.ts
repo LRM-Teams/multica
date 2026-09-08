@@ -253,7 +253,11 @@ export interface CreateNoteRetrospectiveResponse {
 }
 
 /** Period Work Brief synthesis (ADR 0019 / K0). */
+export type NotePeriodBriefPlanStatus = "clarifying" | "awaiting_intent";
+
 export interface NotePeriodBriefPlan {
+  /** clarifying = collect-scope card; awaiting_intent = 是/否 soft-confirm. */
+  status?: NotePeriodBriefPlanStatus | "";
   window: NotePeriodBriefWindow | "";
   date?: string;
   start_date?: string;

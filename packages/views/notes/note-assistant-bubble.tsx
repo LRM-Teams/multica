@@ -22,12 +22,20 @@ import {
 } from "@multica/core/notes/notes-assistant-agent";
 import { resolvePeriodBriefSynthesizerId } from "@multica/core/notes/period-brief-agent";
 import {
+  PERIOD_BRIEF_INTENT_NO,
+  PERIOD_BRIEF_INTENT_YES,
   PERIOD_BRIEF_SATELLITE_ASK,
+  isPeriodBriefAwaitingIntent,
+  isPeriodBriefClarifyingPlan,
   periodBriefRunLocksComposer,
 } from "@multica/core/notes/period-brief-compose";
 import { type PeriodBriefCollectorSlot } from "@multica/core/notes/period-brief-collectors";
 import { noteKeys, noteListOptions, notePeriodBriefActiveOptions, notePeriodBriefPlanOptions } from "@multica/core/notes/queries";
 import { abbreviateNoteSelection, attachNoteSelectionQuote, type NoteSelectionExcerpt } from "@multica/core/notes/selection-quote";
+import {
+  attachNotePageRefs,
+  type NotePageRef,
+} from "@multica/core/notes/page-ref";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { runtimeListOptions } from "@multica/core/runtimes";
 import { agentListOptions, memberListOptions, workspaceKeys } from "@multica/core/workspace/queries";
@@ -46,11 +54,14 @@ import { NoteHighlightsCompose } from "./note-highlights-compose";
 import {
   NotePeriodBriefCompose,
 } from "./note-period-brief-compose";
+import { NotePeriodBriefIntentConfirm } from "./note-period-brief-intent-confirm";
 import { NoteSelectionQuotePreview } from "./note-selection-quote-preview";
+import { NotePageRefPreview } from "./note-page-ref-preview";
 import { NotesAssistantSetupCard } from "./notes-assistant-setup-card";
 
 const logger = createLogger("chat.note-bubble");
 const EMPTY_SELECTION_EXCERPTS: NoteSelectionExcerpt[] = [];
+const EMPTY_PAGE_REFS: NotePageRef[] = [];
 
 function readSetupHintDismissed(workspaceId: string | undefined): boolean {
   if (!workspaceId || typeof window === "undefined") return false;
@@ -87,12 +98,18 @@ export function NoteAssistantBubble({
   const setNoteBubbleOpenPageId = useChatStore((s) => s.setNoteBubbleOpenPageId);
   const setNoteSelectionQuote = useChatStore((s) => s.setNoteSelectionQuote);
   const removeNoteSelectionExcerpt = useChatStore((s) => s.removeNoteSelectionExcerpt);
+  const addNotePageRef = useChatStore((s) => s.addNotePageRef);
+  const removeNotePageRef = useChatStore((s) => s.removeNotePageRef);
+  const setNotePageRefs = useChatStore((s) => s.setNotePageRefs);
   const setNoteBubbleActiveSession = useChatStore((s) => s.setNoteBubbleActiveSession);
   const bubbleSessionId = useChatStore((s) => s.noteBubbleActiveSessionByPage[pageId] ?? "");
   const quotePageId = useChatStore((s) => s.noteSelectionQuote?.pageId ?? null);
   const quoteExcerpts = useChatStore((s) => s.noteSelectionQuote?.excerpts);
   const quoteAskedAt = useChatStore((s) => s.noteSelectionQuote?.askedAt ?? 0);
   const excerptsForPage = quotePageId === pageId ? (quoteExcerpts ?? EMPTY_SELECTION_EXCERPTS) : EMPTY_SELECTION_EXCERPTS;
+  const pageRefBubbleId = useChatStore((s) => s.notePageRefs?.bubblePageId ?? null);
+  const pageRefs = useChatStore((s) => s.notePageRefs?.refs);
+  const refsForPage = pageRefBubbleId === pageId ? (pageRefs ?? EMPTY_PAGE_REFS) : EMPTY_PAGE_REFS;
   const { data: activePeriodBrief } = useQuery(notePeriodBriefActiveOptions(wsId, pageId));
   const { data: periodBriefPlanResponse } = useQuery({
     ...notePeriodBriefPlanOptions(wsId, bubbleSessionId),
@@ -145,7 +162,10 @@ export function NoteAssistantBubble({
   const hadPlanRef = React.useRef(false);
   const composerLocked =
     periodBriefRunLocksComposer(activePeriodBrief?.run?.status) || periodBriefSubmitting;
-  const showPlanCard = Boolean(currentPlan) && !composerLocked && !highlightsOpen;
+  const showIntentConfirm =
+    isPeriodBriefAwaitingIntent(currentPlan) && !composerLocked && !highlightsOpen;
+  const showPlanCard =
+    isPeriodBriefClarifyingPlan(currentPlan) && !composerLocked && !highlightsOpen;
   const isRunning = chatTaskRunning || composerLocked;
 
   React.useEffect(() => {
@@ -158,26 +178,63 @@ export function NoteAssistantBubble({
     if (!isOpen) toggleNoteBubble(pageId);
   }, [currentPlan, isOpen, pageId, toggleNoteBubble]);
 
+  const seedIntentReply = React.useCallback((text: string) => {
+    seedNonceRef.current += 1;
+    setPendingSend({
+      nonce: seedNonceRef.current,
+      text,
+    });
+  }, []);
+
   React.useEffect(() => {
     if (excerptsForPage.length === 0 || !quoteAskedAt) return;
     setComposerFocusToken((n) => n + 1);
   }, [excerptsForPage.length, quoteAskedAt]);
 
+  React.useEffect(() => {
+    if (refsForPage.length === 0) return;
+    setComposerFocusToken((n) => n + 1);
+  }, [refsForPage.length]);
+
   const wrapOutgoing = React.useCallback((content: string) => {
     const quote = useChatStore.getState().noteSelectionQuote;
-    if (!quote || quote.pageId !== pageId || quote.excerpts.length === 0) return content;
-    return attachNoteSelectionQuote(content, quote.excerpts.map((excerpt) => excerpt.text));
+    const withQuote =
+      quote && quote.pageId === pageId && quote.excerpts.length > 0
+        ? attachNoteSelectionQuote(content, quote.excerpts.map((excerpt) => excerpt.text))
+        : content;
+    const refs = useChatStore.getState().notePageRefs;
+    if (!refs || refs.bubblePageId !== pageId || refs.refs.length === 0) {
+      return withQuote;
+    }
+    return attachNotePageRefs(withQuote, refs.refs);
   }, [pageId]);
 
-  const clearSelectionQuote = React.useCallback(() => {
+  const clearComposerAttachments = React.useCallback(() => {
     const quote = useChatStore.getState().noteSelectionQuote;
     if (quote?.pageId === pageId) setNoteSelectionQuote(null);
-  }, [pageId, setNoteSelectionQuote]);
+    const refs = useChatStore.getState().notePageRefs;
+    if (refs?.bubblePageId === pageId) setNotePageRefs(null);
+  }, [pageId, setNoteSelectionQuote, setNotePageRefs]);
 
   const removeSelectionExcerpt = React.useCallback((excerptId: string) => {
     const quote = useChatStore.getState().noteSelectionQuote;
     if (quote?.pageId === pageId) removeNoteSelectionExcerpt(excerptId);
   }, [pageId, removeNoteSelectionExcerpt]);
+
+  const handleNotePageDrop = React.useCallback(
+    (ref: NotePageRef) => {
+      addNotePageRef(pageId, ref);
+    },
+    [addNotePageRef, pageId],
+  );
+
+  const handleRemovePageRef = React.useCallback(
+    (refPageId: string) => {
+      const refs = useChatStore.getState().notePageRefs;
+      if (refs?.bubblePageId === pageId) removeNotePageRef(refPageId);
+    },
+    [pageId, removeNotePageRef],
+  );
 
   // Prefer the live agent list. After create/restore, ensureResult.agent bridges
   // until the list invalidation lands. needs_setup clears that bridge.
@@ -455,7 +512,7 @@ export function NoteAssistantBubble({
       if (!isOpen) toggleNoteBubble(pageId);
       setHighlightsOpen(false);
       if (composerLocked) return;
-      if (currentPlan) return;
+      if (showPlanCard || showIntentConfirm) return;
       seedNonceRef.current += 1;
       setPendingSend({
         nonce: seedNonceRef.current,
@@ -507,20 +564,33 @@ export function NoteAssistantBubble({
         seedSend={highlightsOpen ? null : pendingSend}
         onSeedSendConsumed={handleSeedSendConsumed}
         transformOutgoing={wrapOutgoing}
-        onSendAccepted={clearSelectionQuote}
+        onSendAccepted={clearComposerAttachments}
+        onNotePageDrop={handleNotePageDrop}
         composerPrefix={
-          excerptsForPage.length > 0 ? (
-            <NoteSelectionQuotePreview
-              excerpts={excerptsForPage.map((excerpt) => ({
-                id: excerpt.id,
-                summary: abbreviateNoteSelection(excerpt.text),
-              }))}
-              onRemove={removeSelectionExcerpt}
-            />
+          excerptsForPage.length > 0 || refsForPage.length > 0 ? (
+            <>
+              {refsForPage.length > 0 ? (
+                <NotePageRefPreview refs={refsForPage} onRemove={handleRemovePageRef} />
+              ) : null}
+              {excerptsForPage.length > 0 ? (
+                <NoteSelectionQuotePreview
+                  excerpts={excerptsForPage.map((excerpt) => ({
+                    id: excerpt.id,
+                    summary: abbreviateNoteSelection(excerpt.text),
+                  }))}
+                  onRemove={removeSelectionExcerpt}
+                />
+              ) : null}
+            </>
           ) : null
         }
         transcriptAccessory={
-          showPlanCard && currentPlan ? (
+          showIntentConfirm ? (
+            <NotePeriodBriefIntentConfirm
+              onConfirm={() => seedIntentReply(PERIOD_BRIEF_INTENT_YES)}
+              onDecline={() => seedIntentReply(PERIOD_BRIEF_INTENT_NO)}
+            />
+          ) : showPlanCard && currentPlan ? (
             <NotePeriodBriefCompose
               active
               plan={currentPlan}

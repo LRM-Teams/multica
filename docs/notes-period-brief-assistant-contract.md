@@ -3,9 +3,11 @@
 **Status:** accepted product contract (2026-09-08). Replaces the
 2026-09-07 same-session always-re-walk wording where it conflicts;
 keeps the 2026-09-07 human-owns-scope / assistant-reads model.
-**Implementation:** one flow — speech / FAB 「写汇报」 opens the plan
-card; the human chooses range / 取消 / 开始采集; 开始采集 walks every
-selected computer then writes the brief from **this walk's** packs.
+**Implementation:** one flow — speech matching 写汇报 (including the
+FAB satellite seed 「写汇报」) first asks 「是 / 否」; 「是」 opens the
+plan card; 「否」 answers the original ask normally. The human then
+chooses range / 取消 / 开始采集; 开始采集 walks every selected computer
+then writes the brief from **this walk's** packs.
 Session harvests are read-only wake context and are **not** used for a
 new report unless the human **explicitly** asks to write from a prior
 harvest in this bubble. Plan and result cards are session state /
@@ -39,8 +41,9 @@ synthesizer write.
    synthesis after a walk (or an explicit reuse path the platform adds
    later).
 3. **The human owns collect scope.** Window, computers, focus, 取消,
-   and 开始采集 live on the plan card. Speech 「写汇报」 / 「重新采集」
-   only opens (or reopens) that card.
+   and 开始采集 live on the plan card. Speech matching 写汇报
+   (typed or FAB seed) soft-confirms first; 「是」 opens (or reopens)
+   that card. 「重新采集」 follows the same soft-confirm path.
 4. **The assistant reads, it does not collect.** It may call `plan`
    with only the session id when the card is missing, speak progress,
    and call insert. It does not PUT window / computers / focus and
@@ -61,8 +64,9 @@ synthesizer write.
    synthesizer process is actually in flight. It is not “an HTTP
    request has not returned.” Orphan synthesizing after a dead request
    is a platform bug; settle or unlock, do not block the next start.
-8. **The FAB satellite is a funnel.** It means 「写汇报」 and enters the
-   same intercept path. It is not a parallel “chips then POST” product.
+8. **The FAB satellite is a funnel.** It seeds the same 「写汇报」
+   speech path (soft-confirm first). It is not a parallel “chips then
+   POST” product.
 9. **Insert may target any note** the human can write. Non-issuing-page
    targets still require a human confirm.
 

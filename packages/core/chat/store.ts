@@ -5,6 +5,12 @@ import {
   removeNoteSelectionExcerpt as dropNoteSelectionExcerpt,
   type NoteSelectionQuote,
 } from "../notes/selection-quote";
+import {
+  appendNotePageRef,
+  removeNotePageRef as dropNotePageRef,
+  type NotePageRef,
+  type NotePageRefBundle,
+} from "../notes/page-ref";
 import { getCurrentSlug, registerForWorkspaceRehydration } from "../platform/workspace-storage";
 import { createLogger } from "../logger";
 
@@ -143,6 +149,12 @@ export interface ChatState {
    */
   noteSelectionQuote: NoteSelectionQuote | null;
   /**
+   * Whole note pages referenced in the Notes assistant composer (drag from
+   * the tree or future pickers). Session-only — never persisted. Cleared when
+   * the rail closes.
+   */
+  notePageRefs: NotePageRefBundle | null;
+  /**
    * Desktop Notes rail width in px. Shared so the page dock and the overlay
    * stay in lockstep while dragging either direction.
    */
@@ -165,6 +177,9 @@ export interface ChatState {
   setNoteSelectionQuote: (quote: NoteSelectionQuote | null) => void;
   askAboutNoteSelection: (pageId: string, text: string) => void;
   removeNoteSelectionExcerpt: (excerptId: string) => void;
+  setNotePageRefs: (bundle: NotePageRefBundle | null) => void;
+  addNotePageRef: (bubblePageId: string, ref: NotePageRef) => void;
+  removeNotePageRef: (pageId: string) => void;
   setNoteBubbleActiveSession: (pageId: string, sessionId: string | null) => void;
   setNoteBubbleSelectedAgent: (pageId: string, agentId: string | null) => void;
   setNoteBubbleSidebarWidth: (width: number) => void;
@@ -202,6 +217,7 @@ export function createChatStore(options: ChatStoreOptions) {
     dmBubbleActiveSessionByAgent: readStringMap(storage, wsKey(DM_BUBBLE_SESSIONS_KEY)),
     noteBubbleOpenPageId: null,
     noteSelectionQuote: null,
+    notePageRefs: null,
     noteBubbleActiveSessionByPage: readStringMap(storage, wsKey(NOTE_BUBBLE_SESSIONS_KEY)),
     noteBubbleSelectedAgentByPage: readStringMap(storage, wsKey(NOTE_BUBBLE_AGENTS_KEY)),
     noteBubbleSidebarWidth:
@@ -279,6 +295,7 @@ export function createChatStore(options: ChatStoreOptions) {
       set({
         noteBubbleOpenPageId: pageId,
         noteSelectionQuote: pageId ? get().noteSelectionQuote : null,
+        notePageRefs: pageId ? get().notePageRefs : null,
       });
     },
     toggleNoteBubble: (pageId) => {
@@ -289,6 +306,7 @@ export function createChatStore(options: ChatStoreOptions) {
       set({
         noteBubbleOpenPageId: next,
         noteSelectionQuote: next ? get().noteSelectionQuote : null,
+        notePageRefs: next ? get().notePageRefs : null,
       });
     },
     setNoteSelectionQuote: (quote) => {
@@ -322,6 +340,35 @@ export function createChatStore(options: ChatStoreOptions) {
         excerptCount: next?.excerpts.length ?? 0,
       });
       set({ noteSelectionQuote: next });
+    },
+    setNotePageRefs: (bundle) => {
+      logger.debug("setNotePageRefs", {
+        bubblePageId: bundle?.bubblePageId ?? null,
+        refCount: bundle?.refs.length ?? 0,
+      });
+      set({ notePageRefs: bundle });
+    },
+    addNotePageRef: (bubblePageId, ref) => {
+      const next = appendNotePageRef(get().notePageRefs, bubblePageId, ref);
+      if (!next) return;
+      logger.info("addNotePageRef", {
+        bubblePageId,
+        pageId: ref.pageId,
+        refCount: next.refs.length,
+      });
+      storage.removeItem(wsKey(NOTE_BUBBLE_OPEN_PAGE_KEY));
+      set({
+        noteBubbleOpenPageId: bubblePageId,
+        notePageRefs: next,
+      });
+    },
+    removeNotePageRef: (pageId) => {
+      const next = dropNotePageRef(get().notePageRefs, pageId);
+      logger.debug("removeNotePageRef", {
+        pageId,
+        refCount: next?.refs.length ?? 0,
+      });
+      set({ notePageRefs: next });
     },
     setNoteBubbleActiveSession: (pageId, sessionId) => {
       const prev = get().noteBubbleActiveSessionByPage[pageId] ?? null;
@@ -414,6 +461,7 @@ export function createChatStore(options: ChatStoreOptions) {
       dmBubbleActiveSessionByAgent: nextBubbleSessions,
       noteBubbleOpenPageId: null,
       noteSelectionQuote: null,
+      notePageRefs: null,
       noteBubbleActiveSessionByPage: nextNoteBubbleSessions,
       noteBubbleSelectedAgentByPage: nextNoteBubbleAgents,
     });

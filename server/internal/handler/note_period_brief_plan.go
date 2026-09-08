@@ -15,6 +15,8 @@ import (
 )
 
 type notePeriodBriefPlanJSON struct {
+	// Status is clarifying (collect-scope card) or awaiting_intent (是/否 confirm).
+	Status            string   `json:"status,omitempty"`
 	Window            string   `json:"window"`
 	Date              string   `json:"date,omitempty"`
 	StartDate         string   `json:"start_date,omitempty"`
@@ -43,13 +45,25 @@ func periodBriefPlanFromRow(row notePeriodBriefPromptRow) notePeriodBriefPlanJSO
 	if ids == nil {
 		ids = []string{}
 	}
+	status := strings.TrimSpace(row.Status)
+	if status == "" {
+		status = periodBriefPromptStatusClarifying
+	}
 	return notePeriodBriefPlanJSON{
+		Status:            status,
 		Window:            row.WindowKind,
 		Date:              row.WindowDate,
 		StartDate:         row.StartDate,
 		EndDate:           row.EndDate,
 		CollectorAgentIDs: ids,
 		Focus:             row.Focus,
+	}
+}
+
+func periodBriefIntentConfirmPlan() notePeriodBriefPlanJSON {
+	return notePeriodBriefPlanJSON{
+		Status:            periodBriefPromptStatusAwaitingIntent,
+		CollectorAgentIDs: []string{},
 	}
 }
 
@@ -67,8 +81,11 @@ func formatPeriodBriefCurrentPlanBoard(plan *notePeriodBriefPlanJSON) string {
 	b.WriteString("<period_brief_current_plan>\n")
 	if plan == nil {
 		b.WriteString("status: none\n")
-		b.WriteString("No current plan in this bubble. If the human asks 写汇报, the platform opens the plan card. If the card is missing, call `multica notes period-brief plan --chat-session-id <chat_session_id from note_chat_context>` this turn with only the session id (page id optional). Do not set window, computers, or focus. Do not call start.\n")
+		b.WriteString("No current plan in this bubble. If the human asks 写汇报, the platform soft-confirms (是/否) then opens the plan card. If the card is missing, call `multica notes period-brief plan --chat-session-id <chat_session_id from note_chat_context>` this turn with only the session id (page id optional). Do not set window, computers, or focus. Do not call start.\n")
 		b.WriteString("Do not query the database for the session id. Do not emit chat XML. Do not claim the card exists unless the tool returned a plan object (not null). The human edits the card and clicks 开始采集 or 取消.\n")
+	} else if strings.TrimSpace(plan.Status) == periodBriefPromptStatusAwaitingIntent {
+		b.WriteString("status: awaiting_intent\n")
+		b.WriteString("The platform asked whether to open 写汇报. The human answers 是 or 否 (buttons or speech). Do not PUT window/computers/focus. Do not call start. Do not emit chat XML.\n")
 	} else {
 		b.WriteString("status: draft\n")
 		fmt.Fprintf(&b, "window: %s\n", strings.TrimSpace(plan.Window))
@@ -90,6 +107,7 @@ func formatPeriodBriefCurrentPlanBoard(plan *notePeriodBriefPlanJSON) string {
 		fmt.Fprintf(&b, "focus: %s\n", focus)
 		b.WriteString("This is the current plan on the card. The human edits window, computers, and focus there. Do not PUT those fields. Do not call start.\n")
 		b.WriteString("开始采集 walks every selected computer and then writes the brief. 取消 closes the card. A conflict means a run is already live; wait.\n")
+		b.WriteString("The card becomes visible when this turn finishes (chat:done). In final output, tell them to confirm range/computers on the card — do not claim the card is already on screen mid-tool.\n")
 		b.WriteString("Do not emit chat XML.\n")
 	}
 	b.WriteString("</period_brief_current_plan>\n\n")
@@ -101,16 +119,29 @@ func (h *Handler) loadPeriodBriefPromptForSession(ctx context.Context, sessionID
 	err := h.DB.QueryRow(ctx, `
 SELECT id, workspace_id, owner_user_id, chat_session_id, source_page_id,
        window_kind, window_date, start_date, end_date, collector_agent_ids,
-       focus, awaiting_confirm, status
+       focus, COALESCE(source_ask, ''), awaiting_confirm, status
 FROM note_period_brief_prompt
-WHERE chat_session_id = $1 AND status = 'clarifying'
-ORDER BY created_at DESC
+WHERE chat_session_id = $1 AND status IN ('clarifying', 'awaiting_intent')
+ORDER BY CASE status WHEN 'clarifying' THEN 0 ELSE 1 END, created_at DESC
 LIMIT 1`, sessionID).Scan(
 		&row.ID, &row.WorkspaceID, &row.OwnerUserID, &row.ChatSessionID, &row.SourcePageID,
 		&row.WindowKind, &row.WindowDate, &row.StartDate, &row.EndDate, &row.CollectorAgentIDs,
-		&row.Focus, &row.AwaitingConfirm, &row.Status,
+		&row.Focus, &row.SourceAsk, &row.AwaitingConfirm, &row.Status,
 	)
 	return row, err
+}
+
+// loadPeriodBriefVisiblePrompt returns the bubble's clarifying card, else the
+// soft-confirm awaiting_intent row (same unique active-session slot).
+func (h *Handler) loadPeriodBriefVisiblePrompt(
+	ctx context.Context,
+	sessionID, workspaceID, userID pgtype.UUID,
+) (notePeriodBriefPromptRow, error) {
+	row, err := h.loadPeriodBriefPrompt(ctx, sessionID, workspaceID, userID)
+	if err == nil || !errors.Is(err, pgx.ErrNoRows) {
+		return row, err
+	}
+	return h.loadPeriodBriefAwaitingIntent(ctx, sessionID, workspaceID, userID)
 }
 
 func (h *Handler) loadHumanNoteBubbleSession(
@@ -239,7 +270,7 @@ func (h *Handler) GetNotePeriodBriefPlan(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusNotFound, "notes bubble session not found")
 		return
 	}
-	row, err := h.loadPeriodBriefPrompt(r.Context(), sessionID, workspaceID, userID)
+	row, err := h.loadPeriodBriefVisiblePrompt(r.Context(), sessionID, workspaceID, userID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeJSON(w, http.StatusOK, notePeriodBriefPlanResponse{Plan: nil})
 		return
@@ -287,7 +318,7 @@ func (h *Handler) PutNotePeriodBriefPlan(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
-	row, loadErr := h.loadPeriodBriefPrompt(r.Context(), sessionID, workspaceID, userID)
+	row, loadErr := h.loadPeriodBriefVisiblePrompt(r.Context(), sessionID, workspaceID, userID)
 	if loadErr != nil {
 		row = notePeriodBriefPromptRow{
 			WorkspaceID:   workspaceID,
@@ -333,7 +364,7 @@ func (h *Handler) DeleteNotePeriodBriefPlan(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	closedPlan := false
-	prompt, promptErr := h.loadPeriodBriefPrompt(r.Context(), sessionID, workspaceID, userID)
+	prompt, promptErr := h.loadPeriodBriefVisiblePrompt(r.Context(), sessionID, workspaceID, userID)
 	if promptErr != nil && !errors.Is(promptErr, pgx.ErrNoRows) {
 		writeError(w, http.StatusInternalServerError, "failed to load period brief plan")
 		return
@@ -382,7 +413,7 @@ func (h *Handler) GetAgentNotePeriodBriefPlan(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusNotFound, "notes bubble session not found")
 		return
 	}
-	row, err := h.loadPeriodBriefPrompt(r.Context(), sessionID, workspaceID, creatorID)
+	row, err := h.loadPeriodBriefVisiblePrompt(r.Context(), sessionID, workspaceID, creatorID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeJSON(w, http.StatusOK, notePeriodBriefPlanResponse{Plan: nil})
 		return
@@ -439,7 +470,7 @@ func (h *Handler) PutAgentNotePeriodBriefPlan(w http.ResponseWriter, r *http.Req
 			return
 		}
 	}
-	row, loadErr := h.loadPeriodBriefPrompt(r.Context(), sessionID, workspaceID, creatorID)
+	row, loadErr := h.loadPeriodBriefVisiblePrompt(r.Context(), sessionID, workspaceID, creatorID)
 	if loadErr != nil {
 		row = notePeriodBriefPromptRow{
 			WorkspaceID:   workspaceID,
@@ -459,7 +490,9 @@ func (h *Handler) PutAgentNotePeriodBriefPlan(w http.ResponseWriter, r *http.Req
 		return
 	}
 	plan := periodBriefPlanFromRow(row)
-	h.publishPeriodBriefPlanChanged(workspaceID, "agent", uuidToString(agentID), uuidToString(sessionID), uuidToString(creatorID), &plan)
+	// Do not publish notes:period_brief_plan here. The tool runs mid-turn;
+	// chat:done invalidates the plan query so the card appears with (or
+	// after) the assistant's spoken reply — not before it.
 	writeJSON(w, http.StatusOK, notePeriodBriefPlanResponse{Plan: &plan})
 }
 

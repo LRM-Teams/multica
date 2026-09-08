@@ -3,11 +3,13 @@
 **Status:** accepted product contract (2026-09-08). Replaces the
 2026-09-07 same-session always-re-walk wording where it conflicts;
 keeps the 2026-09-07 human-owns-scope / assistant-reads model.
-**Implementation:** one flow — speech matching 写汇报 (including the
-FAB satellite seed 「写汇报」) first asks 「是 / 否」; 「是」 opens the
-plan card; 「否」 answers the original ask normally. The human then
-chooses range / 取消 / 开始采集; 开始采集 walks every selected computer
-then writes the brief from **this walk's** packs.
+**Implementation:** one flow — ambiguous speech matching 写汇报
+(e.g. 「帮我写汇报」) first asks 「是 / 否」; 「是」 opens the plan
+card; 「否」 answers the original ask normally. Exact 「写汇报」
+(in-window quick action / short typed ask) opens the plan card
+directly. The human then chooses range / 取消 / 开始采集; 开始采集
+walks every selected computer then writes the brief from **this walk's**
+packs.
 Session harvests are read-only wake context and are **not** used for a
 new report unless the human **explicitly** asks to write from a prior
 harvest in this bubble. Plan and result cards are session state /
@@ -41,9 +43,10 @@ synthesizer write.
    synthesis after a walk (or an explicit reuse path the platform adds
    later).
 3. **The human owns collect scope.** Window, computers, focus, 取消,
-   and 开始采集 live on the plan card. Speech matching 写汇报
-   (typed or FAB seed) soft-confirms first; 「是」 opens (or reopens)
-   that card. 「重新采集」 follows the same soft-confirm path.
+   and 开始采集 live on the plan card. Ambiguous speech matching
+   写汇报 (e.g. 「帮我写汇报」) soft-confirms first; 「是」 opens
+   (or reopens) that card. Exact 「写汇报」 (quick action / short
+   typed ask) opens the card directly. 「重新采集」 soft-confirms.
 4. **The assistant reads, it does not collect.** It may call `plan`
    with only the session id when the card is missing, speak progress,
    and call insert. It does not PUT window / computers / focus and
@@ -64,9 +67,9 @@ synthesizer write.
    synthesizer process is actually in flight. It is not “an HTTP
    request has not returned.” Orphan synthesizing after a dead request
    is a platform bug; settle or unlock, do not block the next start.
-8. **The FAB satellite is a funnel.** It seeds the same 「写汇报」
-   speech path (soft-confirm first). It is not a parallel “chips then
-   POST” product.
+8. **The in-window 写汇报 button is a direct funnel.** It seeds exact
+   「写汇报」, which opens the plan card (no soft-confirm). It is not
+   a parallel “chips then POST” product.
 9. **Insert may target any note** the human can write. Non-issuing-page
    targets still require a human confirm.
 
@@ -185,7 +188,8 @@ Insert modes: `append` (heading + body under the target) and `child`
   official brief; **some ready** → new official brief from ready packs only
 - Pack harvest is Highlights that are not an empty-scan bullet;
   a later “no in-window” sentence does not wipe a ready pack
-- Speech / FAB 写汇报 opens the plan card (`tryHandlePeriodBriefPlanAsk`).
+- Speech 写汇报 opens the plan card (`tryHandlePeriodBriefPlanAsk`);
+  exact 「写汇报」 skips soft-confirm.
   开始采集 walks every selected computer, then synthesizes from this
   run’s packs. Session harvests are not used to skip a walk and are
   not default source for a new report

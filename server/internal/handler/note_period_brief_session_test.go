@@ -43,7 +43,7 @@ func TestLooksLikePeriodBriefPlanAsk(t *testing.T) {
 		"re-collect both machines",
 	} {
 		if !looksLikePeriodBriefPlanAsk(text) {
-			t.Fatalf("%q must open the plan card", text)
+			t.Fatalf("%q must match the plan-ask intercept", text)
 		}
 	}
 	for _, text := range []string{
@@ -52,7 +52,22 @@ func TestLooksLikePeriodBriefPlanAsk(t *testing.T) {
 		"这段笔记的标题怎么改",
 	} {
 		if looksLikePeriodBriefPlanAsk(text) {
-			t.Fatalf("%q must not open the plan card", text)
+			t.Fatalf("%q must not match the plan-ask intercept", text)
+		}
+	}
+}
+
+func TestPeriodBriefDirectOpenAsk(t *testing.T) {
+	t.Parallel()
+	if !periodBriefDirectOpenAsk("写汇报") {
+		t.Fatal("exact 写汇报 must open the card without soft-confirm")
+	}
+	if !periodBriefDirectOpenAsk("  写汇报  ") {
+		t.Fatal("trimmed 写汇报 must open the card")
+	}
+	for _, text := range []string{"帮我写汇报", "是", "重新采集", "写汇报吧"} {
+		if periodBriefDirectOpenAsk(text) {
+			t.Fatalf("%q must not skip soft-confirm", text)
 		}
 	}
 }

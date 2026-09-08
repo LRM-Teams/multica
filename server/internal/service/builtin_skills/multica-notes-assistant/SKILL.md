@@ -38,21 +38,23 @@ prior harvest in this bubble (e.g. 用上次采集 / 用某次写汇报采到的
 Do **not** change the collect window, computers, or focus. Do **not**
 call start.
 
-If they ask 写汇报 / 重新采集 **without** naming a prior harvest, the
-platform first asks whether they want the 写汇报 flow (typed or FAB
-seed 「写汇报」 alike). Reply 「是」 to open the plan card; reply 「否」
-and the assistant answers the original message normally. If you then
+If they ask 写汇报 / 重新采集 **without** naming a prior harvest:
+ambiguous phrasing (e.g. 「帮我写汇报」) soft-confirms first — reply
+「是」 to open the plan card; reply 「否」 and the assistant answers
+the original message normally. Exact 「写汇报」 (in-window button or
+the same short typed ask) opens the plan card directly. If you then
 open the card with `multica notes period-brief plan` (session id only),
 the card appears when **this turn finishes** — speak in final output
 first (confirm range/computers on the card), do not claim the card is
 already visible mid-tool. Do not PUT window, computers, or focus. They
 edit the card and choose 开始采集 or 取消. 开始采集 walks every
 selected computer, then writes the brief from **that walk only**.
-Same-session 写汇报 again soft-confirms; 开始采集 re-walks. Do not
-rewrite the official brief as chat markdown. Do not invent a dropped
-computer's work from memory. When they **explicitly** ask to generate
-content from a prior harvest, use session materials for that ask; do
-not open a new collect for that ask.
+Ambiguous same-session 写汇报 again soft-confirms; exact 「写汇报」
+opens the card again. 开始采集 re-walks. Do not rewrite the official
+brief as chat markdown. Do not invent a dropped computer's work from
+memory. When they **explicitly** ask to generate content from a prior
+harvest, use session materials for that ask; do not open a new collect
+for that ask.
 
 ## Delivery (standalone bubble)
 
@@ -105,9 +107,10 @@ that is enough.
 - **Compare / merge ideas** across a small set of pages you read
 - **写汇报** — the human owns collect scope. There is one current plan
   per bubble session. `<note_chat_context>` has `chat_session_id` and
-  `context_note_page_id`. When they ask 写汇报, the platform soft-
-  confirms first. If the plan board is `status: none` and they want the
-  flow, call `multica notes period-brief plan --chat-session-id <id>`
+  `context_note_page_id`. Ambiguous 写汇报 speech soft-confirms first;
+  exact 「写汇报」 (button / short ask) opens the plan card. If the
+  plan board is `status: none` and they want the flow, call
+  `multica notes period-brief plan --chat-session-id <id>`
   **this turn** with only the session id (page id optional). The tool
   must return a plan object, not `null`. The visible card lands when
   **this turn's final reply** is written (`chat:done`) — put the spoken
@@ -117,11 +120,12 @@ that is enough.
   database, docker, or the repo for the session id. Do not paste wake
   XML, tool narration, or English scratch work into the bubble. They
   edit the card and click 开始采集 (walk every selected computer, then
-  write the brief from that walk only) or 取消. Same-session 写汇报
-  again soft-confirms. Do not treat last run's packs as the new brief's
-  source unless they explicitly asked to use a prior harvest. If they
-  cancel the plan card or say 取消, the platform closes the plan and
-  stops any in-flight collect. Do not walk anyone's OS.
+  write the brief from that walk only) or 取消. Ambiguous same-session
+  写汇报 again soft-confirms; exact 「写汇报」 opens the card. Do not
+  treat last run's packs as the new brief's source unless they
+  explicitly asked to use a prior harvest. If they cancel the plan
+  card or say 取消, the platform closes the plan and stops any
+  in-flight collect. Do not walk anyone's OS.
 - **Progress `run_started`** — if `<period_brief_progress>` has
   `event: run_started`, restate the confirmed window, computers, and
   focus. Tell the human collection already started with those

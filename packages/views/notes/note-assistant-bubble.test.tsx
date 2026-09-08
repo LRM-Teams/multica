@@ -140,24 +140,36 @@ vi.mock("@multica/ui/lib/error-toast", () => ({
 
 vi.mock("./note-assistant-fab-cluster", () => ({
   NoteAssistantFabCluster: ({
-    onAction,
+    onOpen,
     isRunning,
   }: {
-    onAction: (action: "period_brief" | "highlights" | "chat") => void;
+    onOpen: () => void;
     isRunning: boolean;
   }) => (
-    <>
-      <button
-        type="button"
-        data-running={isRunning ? "true" : "false"}
-        onClick={() => onAction("period_brief")}
-      >
+    <button
+      type="button"
+      data-running={isRunning ? "true" : "false"}
+      onClick={onOpen}
+    >
+      open-chat
+    </button>
+  ),
+}));
+
+vi.mock("./note-assistant-quick-actions", () => ({
+  NoteAssistantQuickActions: ({
+    onAction,
+  }: {
+    onAction: (action: "period_brief" | "highlights") => void;
+  }) => (
+    <div data-testid="note-assistant-quick-actions">
+      <button type="button" onClick={() => onAction("period_brief")}>
         open-period
       </button>
       <button type="button" onClick={() => onAction("highlights")}>
         open-highlights
       </button>
-    </>
+    </div>
   ),
 }));
 
@@ -167,6 +179,7 @@ vi.mock("../chat/components/chat-window", () => ({
     transcriptAccessory,
     messageAccessory,
     composerPrefix,
+    threadActions,
     transformOutgoing,
     onSendOverride,
     onSendIntercept,
@@ -180,6 +193,7 @@ vi.mock("../chat/components/chat-window", () => ({
     transcriptAccessory?: ReactNode;
     messageAccessory?: (message: { id: string; content?: string; parts?: { type: string }[] }) => ReactNode;
     composerPrefix?: ReactNode;
+    threadActions?: ReactNode;
     transformOutgoing?: (content: string) => string;
     onSendOverride?: (text: string) => boolean | Promise<boolean>;
     onSendIntercept?: (text: string) => boolean;
@@ -206,6 +220,7 @@ vi.mock("../chat/components/chat-window", () => ({
           ))}
           {transcriptAccessory}
         </div>
+        <div data-testid="thread-actions-slot">{threadActions}</div>
         <div data-testid="composer-slot">{composerAccessory}</div>
       </div>
       {seedSend ? <div data-testid="seed-send">{seedSend.text}</div> : null}
@@ -574,7 +589,7 @@ describe("NoteAssistantBubble period brief", () => {
       { locale: "zh-Hans" },
     );
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "open-period" })).toHaveAttribute(
+      expect(screen.getByRole("button", { name: "open-chat" })).toHaveAttribute(
         "data-running",
         "true",
       );
@@ -618,7 +633,7 @@ describe("NoteAssistantBubble period brief", () => {
       { locale: "zh-Hans" },
     );
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "open-period" })).toHaveAttribute(
+      expect(screen.getByRole("button", { name: "open-chat" })).toHaveAttribute(
         "data-running",
         "true",
       );
@@ -633,6 +648,7 @@ describe("NoteAssistantBubble period brief", () => {
     const qc = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
+    chatState.noteBubbleOpenPageId = "page-1";
     renderWithI18n(
       <QueryClientProvider client={qc}>
         <NoteAssistantBubble pageId="page-1" pageTitle="Note" />
@@ -642,10 +658,8 @@ describe("NoteAssistantBubble period brief", () => {
 
     await waitFor(() => {
       expect(getActiveNotePeriodBrief).toHaveBeenCalled();
-      expect(screen.getByRole("button", { name: "open-period" })).toHaveAttribute(
-        "data-running",
-        "false",
-      );
+      expect(screen.queryByRole("button", { name: "open-chat" })).toBeNull();
+      expect(screen.getByRole("button", { name: "open-period" })).toBeTruthy();
     });
     await user.click(screen.getByRole("button", { name: "open-period" }));
     await waitFor(() => {
@@ -654,11 +668,12 @@ describe("NoteAssistantBubble period brief", () => {
     expect(screen.queryByTestId("period-brief-compose")).toBeNull();
   });
 
-  it("sends 写汇报 from the satellite without a local plan card", async () => {
+  it("sends 写汇报 from the in-window action without a local plan card", async () => {
     const user = userEvent.setup();
     const qc = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
+    chatState.noteBubbleOpenPageId = "page-1";
     renderWithI18n(
       <QueryClientProvider client={qc}>
         <NoteAssistantBubble pageId="page-1" pageTitle="Note" />
@@ -1105,6 +1120,7 @@ describe("NoteAssistantBubble highlights", () => {
   });
 
   function renderBubble() {
+    chatState.noteBubbleOpenPageId = "page-1";
     const qc = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
@@ -1126,7 +1142,6 @@ describe("NoteAssistantBubble highlights", () => {
       "请整理本笔记以及它的子笔记的重点。先用 notes 工具读取当前页及其子树，再按层级列出每页的核心结论、待办和未决问题。不要复述全文，写成可读提纲。",
     );
     expect(screen.queryByTestId("seed-send")).toBeNull();
-    expect(toggleNoteBubble).toHaveBeenCalledWith("page-1");
   });
 
   it("sends the edited prompt from the card", async () => {

@@ -19,7 +19,8 @@ var (
 	periodBriefIntentRe    = regexp.MustCompile(`(?i)(写|整理|做|生成|帮我).{0,12}(汇报|周报)|period\s*work\s*brief|period\s*brief|weekly\s*report|write\s+(a\s+)?(period\s+work\s+)?reports?|^(report|reports)$`)
 	periodBriefCancelRe    = regexp.MustCompile(`(?i)^(取消|算了|先不写|不用写了|不要写了)`)
 	periodBriefRecollectRe = regexp.MustCompile(`(?i)重新采集|再采集|再采一遍|再采一次|重采|重新走一遍|再扫一遍|re-?collect(?:ing)?|collect(?:ion)? again|walk again|re-?walk`)
-	// Soft-confirm after a 写汇报 detect (typed or FAB satellite seed).
+	// Soft-confirm after an ambiguous typed 写汇报 detect (e.g. 帮我写汇报).
+	// Exact 「写汇报」 (in-window quick action / short typed ask) opens the card.
 	periodBriefIntentYesRe = regexp.MustCompile(`(?i)^(是|好|好的|确认|可以|要|嗯|行|开始)([的了吧啊～~]*)?$`)
 	periodBriefIntentNoRe  = regexp.MustCompile(`(?i)^(否|不|不是|不要|不用|先不要|先不用)([的了吧啊～~]*)?$`)
 )
@@ -71,6 +72,12 @@ func looksLikePeriodBriefRecollectAsk(text string) bool {
 
 func looksLikePeriodBriefPlanAsk(text string) bool {
 	return looksLikePeriodBriefRequest(text) || looksLikePeriodBriefRecollectAsk(text)
+}
+
+// periodBriefDirectOpenAsk is the Notes bubble 「写汇报」 button (and the same
+// short typed phrase). Skip soft-confirm and open the collect-scope card.
+func periodBriefDirectOpenAsk(text string) bool {
+	return strings.TrimSpace(text) == "写汇报"
 }
 
 func periodBriefIntakeCancelled(text string) bool {
@@ -286,7 +293,14 @@ func (h *Handler) tryHandlePeriodBriefPlanAsk(
 			return periodBriefPlanAskOutcome{Handled: true}
 		}
 		if looksLikePeriodBriefPlanAsk(content) {
-			// Same funnel again while we asked — keep waiting; refresh the ask.
+			if periodBriefDirectOpenAsk(content) {
+				h.closePeriodBriefPrompt(r.Context(), pending.ID, "cancelled")
+				if !h.openPeriodBriefPlanCard(r.Context(), session, workspaceID, userID, pageID, userIDString) {
+					return periodBriefPlanAskOutcome{}
+				}
+				return periodBriefPlanAskOutcome{Handled: true}
+			}
+			// Same ambiguous funnel again while we asked — keep waiting; refresh the ask.
 			pending.SourceAsk = strings.TrimSpace(content)
 			pending.AwaitingConfirm = true
 			pending.Status = periodBriefPromptStatusAwaitingIntent
@@ -336,6 +350,13 @@ func (h *Handler) tryHandlePeriodBriefPlanAsk(
 			h.postPeriodBriefBubbleMessage(r.Context(), session.ID, workspaceID, session.CreatorID, userIDString, "assistant", "上一份写汇报还在进行中，结束后我们再开新的。")
 			return periodBriefPlanAskOutcome{Handled: true}
 		}
+	}
+
+	if periodBriefDirectOpenAsk(content) {
+		if !h.openPeriodBriefPlanCard(r.Context(), session, workspaceID, userID, pageID, userIDString) {
+			return periodBriefPlanAskOutcome{}
+		}
+		return periodBriefPlanAskOutcome{Handled: true}
 	}
 
 	row := notePeriodBriefPromptRow{

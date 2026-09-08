@@ -81,7 +81,7 @@ func formatPeriodBriefCurrentPlanBoard(plan *notePeriodBriefPlanJSON) string {
 	b.WriteString("<period_brief_current_plan>\n")
 	if plan == nil {
 		b.WriteString("status: none\n")
-		b.WriteString("No current plan in this bubble. If the human asks 写汇报, the platform soft-confirms (是/否) then opens the plan card. If the card is missing, call `multica notes period-brief plan --chat-session-id <chat_session_id from note_chat_context>` this turn with only the session id (page id optional). Do not set window, computers, or focus. Do not call start.\n")
+		b.WriteString("No current plan in this bubble. If the human asks 写汇报 ambiguously, the platform soft-confirms (是/否) then opens the plan card. Exact 「写汇报」 opens the card directly. If the card is missing, call `multica notes period-brief plan --chat-session-id <chat_session_id from note_chat_context>` this turn with only the session id (page id optional). Do not set window, computers, or focus. Do not call start.\n")
 		b.WriteString("Do not query the database for the session id. Do not emit chat XML. Do not claim the card exists unless the tool returned a plan object (not null). The human edits the card and clicks 开始采集 or 取消.\n")
 	} else if strings.TrimSpace(plan.Status) == periodBriefPromptStatusAwaitingIntent {
 		b.WriteString("status: awaiting_intent\n")

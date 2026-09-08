@@ -40,7 +40,7 @@ export function listPeriodBriefPlanGaps(input: {
   return gaps;
 }
 
-/** Satellite button: say 写汇报 into the same assistant path. */
+/** In-window 写汇报 button: exact phrase opens the collect card (no soft-confirm). */
 export const PERIOD_BRIEF_SATELLITE_ASK = "写汇报";
 
 /** Soft-confirm answers — same strings the platform speech path accepts. */

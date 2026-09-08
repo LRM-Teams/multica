@@ -131,6 +131,11 @@ export interface ChatWindowProps {
    */
   composerAccessory?: React.ReactNode;
   /**
+   * Notes quick actions (写汇报 / 要点). Centered in an empty thread;
+   * docked above the composer once the thread has content.
+   */
+  threadActions?: React.ReactNode;
+  /**
    * Local conversation turn after persisted messages (e.g. a pending
    * 写汇报 card before the compose turn lands). Treated as "has messages"
    * so an empty thread still shows the list instead of the empty state.
@@ -306,6 +311,7 @@ export function ChatWindow({
   seedSend,
   onSeedSendConsumed,
   composerAccessory,
+  threadActions,
   transcriptAccessory,
   messageAccessory,
   composerPlaceholder,
@@ -1225,6 +1231,17 @@ export function ChatWindow({
         />
       ) : mainPane === "spacer" ? (
         <div className={chatWindowMainPaneClassName(mainPane)} aria-hidden />
+      ) : threadActions ? (
+        <div
+          className={cn(
+            "flex min-h-0 flex-1 flex-col items-center overflow-y-auto",
+            isFullscreen ? "justify-start gap-3 px-4 py-5" : "justify-center gap-4 px-6 py-8",
+          )}
+        >
+          {React.isValidElement<{ layout?: "centered" | "docked" }>(threadActions)
+            ? React.cloneElement(threadActions, { layout: "centered" })
+            : threadActions}
+        </div>
       ) : (
         <EmptyState
           hasSessions={sessions.length > 0}
@@ -1236,6 +1253,13 @@ export function ChatWindow({
           }}
         />
       )}
+      {mainPane !== "empty" && threadActions ? (
+        <div className="shrink-0 px-4 pb-1 pt-1 sm:px-5">
+          {React.isValidElement<{ layout?: "centered" | "docked" }>(threadActions)
+            ? React.cloneElement(threadActions, { layout: "docked" })
+            : threadActions}
+        </div>
+      ) : null}
       {composerAccessory}
 
       {/* No-agent banner above the input. Presence (online/offline)

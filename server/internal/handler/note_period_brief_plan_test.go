@@ -305,14 +305,15 @@ func TestPeriodBriefSpeechOpensPlanCardWithoutStarting(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
-	for _, text := range []string{"写汇报", "下面重新采集，重新给我写一个汇报"} {
-		t.Run(text, func(t *testing.T) {
-			periodBriefSpeechOpensPlanCard(t, text)
-		})
-	}
+	t.Run("写汇报", func(t *testing.T) {
+		periodBriefSpeechOpensPlanCard(t, "写汇报", false)
+	})
+	t.Run("下面重新采集，重新给我写一个汇报", func(t *testing.T) {
+		periodBriefSpeechOpensPlanCard(t, "下面重新采集，重新给我写一个汇报", true)
+	})
 }
 
-func periodBriefSpeechOpensPlanCard(t *testing.T, text string) {
+func periodBriefSpeechOpensPlanCard(t *testing.T, text string, softConfirm bool) {
 	t.Helper()
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -360,7 +361,7 @@ func periodBriefSpeechOpensPlanCard(t *testing.T, text string) {
 
 	ask := sendNoteBubbleChat(t, sessionID, text)
 	if ask.Pending {
-		t.Fatalf("%q must soft-confirm on the platform path, not wake the assistant", text)
+		t.Fatalf("%q must stay on the platform path, not wake the assistant", text)
 	}
 	getAsk := newRequest(http.MethodGet, "/api/notes/period-briefs/plan?chat_session_id="+sessionID, nil)
 	getAskRec := httptest.NewRecorder()
@@ -369,13 +370,16 @@ func periodBriefSpeechOpensPlanCard(t *testing.T, text string) {
 	if err := json.NewDecoder(getAskRec.Body).Decode(&pending); err != nil {
 		t.Fatalf("decode pending plan: %v", err)
 	}
-	if pending.Plan == nil || pending.Plan.Status != periodBriefPromptStatusAwaitingIntent {
-		t.Fatalf("%q must soft-confirm first, got %+v", text, pending.Plan)
-	}
-
-	yes := sendNoteBubbleChat(t, sessionID, "是")
-	if yes.Pending {
-		t.Fatalf("confirm yes must open the plan card, not wake the assistant")
+	if softConfirm {
+		if pending.Plan == nil || pending.Plan.Status != periodBriefPromptStatusAwaitingIntent {
+			t.Fatalf("%q must soft-confirm first, got %+v", text, pending.Plan)
+		}
+		yes := sendNoteBubbleChat(t, sessionID, "是")
+		if yes.Pending {
+			t.Fatalf("confirm yes must open the plan card, not wake the assistant")
+		}
+	} else if pending.Plan == nil || pending.Plan.Status != periodBriefPromptStatusClarifying {
+		t.Fatalf("%q must open the clarifying card directly, got %+v", text, pending.Plan)
 	}
 
 	get := newRequest(http.MethodGet, "/api/notes/period-briefs/plan?chat_session_id="+sessionID, nil)

@@ -49,7 +49,11 @@ import { usePrefersReducedMotion } from "../common/use-prefers-reduced-motion";
 import { excludeChannelShellSessions } from "../chat/lib/exclude-channel-shell-sessions";
 import { ChatWindow } from "../chat/components/chat-window";
 import { noteAssistantSidebarClosesOnLeave } from "../chat/components/chat-window-layout";
-import { NoteAssistantFabCluster, type NoteAssistantFabAction } from "./note-assistant-fab-cluster";
+import { NoteAssistantFabCluster } from "./note-assistant-fab-cluster";
+import {
+  NoteAssistantQuickActions,
+  type NoteAssistantQuickAction,
+} from "./note-assistant-quick-actions";
 import { NoteHighlightsCompose } from "./note-highlights-compose";
 import {
   NotePeriodBriefCompose,
@@ -509,29 +513,28 @@ export function NoteAssistantBubble({
     return highlightsOpen;
   }, [highlightsOpen]);
 
-  const handleFabAction = (action: NoteAssistantFabAction) => {
-    logger.info("noteBubble.fab.action", { pageId, action, isOpen });
-    if (action === "period_brief") {
-      if (!isOpen) toggleNoteBubble(pageId);
-      setHighlightsOpen(false);
-      if (composerLocked) return;
-      if (showPlanCard || showIntentConfirm) return;
-      seedNonceRef.current += 1;
-      setPendingSend({
-        nonce: seedNonceRef.current,
-        text: PERIOD_BRIEF_SATELLITE_ASK,
-      });
-      return;
-    }
-    if (action === "highlights") {
-      if (!isOpen) toggleNoteBubble(pageId);
+  const handleQuickAction = React.useCallback(
+    (action: NoteAssistantQuickAction) => {
+      logger.info("noteBubble.quick.action", { pageId, action });
+      if (action === "period_brief") {
+        setHighlightsOpen(false);
+        if (composerLocked) return;
+        if (showPlanCard || showIntentConfirm) return;
+        seedNonceRef.current += 1;
+        setPendingSend({
+          nonce: seedNonceRef.current,
+          text: PERIOD_BRIEF_SATELLITE_ASK,
+        });
+        return;
+      }
       if (!composerLocked) {
         setHighlightsOpen(true);
       }
-      return;
-    }
-    toggleNoteBubble(pageId);
-  };
+    },
+    [composerLocked, pageId, showIntentConfirm, showPlanCard],
+  );
+
+  const showQuickActions = isOpen && !composerLocked;
 
   const titleHint = pageTitle?.trim() || t(($) => $.notes_page.assistant_bubble_untitled);
   const tooltip = isRunning
@@ -569,6 +572,14 @@ export function NoteAssistantBubble({
         transformOutgoing={wrapOutgoing}
         onSendAccepted={clearComposerAttachments}
         onNotePageDrop={handleNotePageDrop}
+        threadActions={
+          showQuickActions ? (
+            <NoteAssistantQuickActions
+              disabled={needsSetup}
+              onAction={handleQuickAction}
+            />
+          ) : null
+        }
         composerPrefix={
           excerptsForPage.length > 0 || refsForPage.length > 0 ? (
             <>
@@ -681,7 +692,7 @@ export function NoteAssistantBubble({
           isRunning={isRunning}
           unreadCount={unreadSessionCount}
           reducedMotion={prefersReducedMotion}
-          onAction={handleFabAction}
+          onOpen={() => toggleNoteBubble(pageId)}
         />
       )}
     </>

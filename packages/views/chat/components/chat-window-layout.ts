@@ -5,9 +5,11 @@ export type ChatWindowMainPane = "skeleton" | "messages" | "empty" | "spacer";
 /**
  * Message-area slot. Composer-pinned accessories (Highlights / setup)
  * never replace this pane. 写汇报 chips live in the transcript
- * (`transcriptAccessory`) so they scroll with the thread. An empty
- * thread with only a composer accessory uses a flex spacer so the
- * input stays pinned to the bottom.
+ * (`transcriptAccessory`) so they scroll with the thread. Notes quick
+ * actions (`threadActions`) center in an empty thread and dock above
+ * the composer once there is content. An empty thread with only a
+ * composer accessory uses a flex spacer so the input stays pinned to
+ * the bottom.
  */
 export function chatWindowMainPane(
   showSkeleton: boolean,

@@ -497,11 +497,55 @@ func (h *Handler) postPeriodBriefResultMessage(ctx context.Context, run notePeri
 	if run.SourcePageID.Valid {
 		_ = h.DB.QueryRow(ctx, `SELECT title FROM note_page WHERE id = $1`, run.SourcePageID).Scan(&sourceTitle)
 	}
+	content := "汇报稿整理完成了。"
+	if note := h.periodBriefResultFailureNotice(ctx, run); note != "" {
+		content = content + note
+	}
 	h.postPeriodBriefBubbleMessage(ctx, run.ChatSessionID, run.WorkspaceID, run.OwnerUserID, userIDString, "assistant",
-		"汇报稿整理完成了。",
+		content,
 		periodBriefCollapsiblePart(uuidToString(run.DraftPageID), title, body),
 		periodBriefInsertActionsPart(uuidToString(run.ID), uuidToString(run.SourcePageID), sourceTitle),
 	)
+}
+
+// periodBriefResultFailureNotice names collectors that ended without a pack on
+// a failed/cancelled job so the result card does not look fully green.
+func (h *Handler) periodBriefResultFailureNotice(ctx context.Context, run notePeriodBriefRunRow) string {
+	failedIDs := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, ref := range run.Collectors {
+		id := strings.TrimSpace(ref.AgentID)
+		if id == "" || periodBriefPackIsCarried(ref) {
+			continue
+		}
+		if periodBriefPackHasHarvest(ref.PackMarkdown) {
+			continue
+		}
+		jobID := strings.TrimSpace(ref.JobID)
+		if jobID == "" {
+			continue
+		}
+		projected, err := h.noteWorkerJobResponse(ctx, run.WorkspaceID, run.OwnerUserID, parseUUID(jobID))
+		if err != nil {
+			continue
+		}
+		switch projected.Status {
+		case "failed", "cancelled":
+			// keep
+		default:
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		failedIDs = append(failedIDs, id)
+	}
+	if len(failedIDs) == 0 {
+		return ""
+	}
+	spoken := joinPeriodBriefSpokenNames(h.periodBriefCollectorSpokenNames(ctx, run.WorkspaceID, failedIDs))
+	return periodBriefResultFailureSuffix(spoken)
 }
 
 func (h *Handler) periodBriefResultMarkdown(ctx context.Context, run notePeriodBriefRunRow, harvested string, writeAfter time.Time) (string, string) {

@@ -47,8 +47,12 @@ type NoteWorkerJobResponse struct {
 	ChannelMessageID *string `json:"channel_message_id,omitempty"`
 	ChatSessionID    *string `json:"chat_session_id,omitempty"`
 	FailureReason    *string `json:"failure_reason,omitempty"`
-	CreatedAt        string  `json:"created_at"`
-	UpdatedAt        string  `json:"updated_at"`
+	// Error is the free-form inbox/runtime error string (agent_inbox_event.error).
+	// Period Brief classification needs this — failure_reason alone is often
+	// agent_error.unknown while the body carries "No API key".
+	Error     *string `json:"error,omitempty"`
+	CreatedAt string  `json:"created_at"`
+	UpdatedAt string  `json:"updated_at"`
 }
 
 // noteWorkerStatusFromTask maps agent_inbox_event lifecycle onto Worker job
@@ -96,6 +100,7 @@ func (h *Handler) noteWorkerJobResponse(ctx context.Context, workspaceID, userID
 		chatSessionID       pgtype.UUID
 		instruction, status string
 		failure             *string
+		taskError           *string
 		createdAt           pgtype.Timestamptz
 		updatedAt           pgtype.Timestamptz
 		taskStatus          pgtype.Text
@@ -107,13 +112,13 @@ func (h *Handler) noteWorkerJobResponse(ctx context.Context, workspaceID, userID
 SELECT
   j.id, j.workspace_id, j.page_id, j.agent_id, j.instruction, j.status, j.task_id,
   j.channel_id, j.channel_message_id, j.failure_reason, j.created_at, j.updated_at,
-  e.status, e.terminal_outcome, e.started_at, e.failure_reason, e.chat_session_id
+  e.status, e.terminal_outcome, e.started_at, e.failure_reason, e.chat_session_id, e.error
 FROM note_worker_job j
 LEFT JOIN agent_inbox_event e ON e.id = j.task_id
 WHERE j.id = $1 AND j.workspace_id = $2 AND j.creator_id = $3`, jobID, workspaceID, userID).Scan(
 		&id, &wsID, &pageID, &agentID, &instruction, &status, &taskID,
 		&channelID, &channelMessageID, &failure, &createdAt, &updatedAt,
-		&taskStatus, &terminalOutcome, &startedAt, &taskFailure, &chatSessionID,
+		&taskStatus, &terminalOutcome, &startedAt, &taskFailure, &chatSessionID, &taskError,
 	)
 	if err != nil {
 		return resp, err
@@ -148,6 +153,9 @@ WHERE id = $3`, projected, taskFailure, id)
 	}
 	if failure != nil && strings.TrimSpace(*failure) != "" {
 		resp.FailureReason = failure
+	}
+	if taskError != nil && strings.TrimSpace(*taskError) != "" {
+		resp.Error = taskError
 	}
 	if taskID.Valid {
 		s := uuidToString(taskID)

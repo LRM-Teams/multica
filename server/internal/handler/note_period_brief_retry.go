@@ -142,7 +142,7 @@ func (h *Handler) retryNotePeriodBriefCollectors(
 
 	resp := retryNotePeriodBriefCollectorsResponse{
 		DraftPageID: uuidToString(run.DraftPageID),
-		Message:     "Retried collectors dispatched. Stop and wait — platform re-wakes the synthesizer when packs settle.",
+		Message:     "Retried collectors dispatched. Platform settles packs and re-wakes the synthesizer when ready.",
 	}
 	refs := append([]notePeriodBriefCollectorRef(nil), run.Collectors...)
 	jobs := make([]NoteWorkerJobResponse, 0, len(refs))
@@ -160,8 +160,14 @@ func (h *Handler) retryNotePeriodBriefCollectors(
 		if projected.FailureReason != nil {
 			failReason = *projected.FailureReason
 		}
+		errorText := failReason
+		if projected.Error != nil {
+			if detail := strings.TrimSpace(*projected.Error); detail != "" {
+				errorText = detail
+			}
+		}
 		packReady := strings.TrimSpace(ref.PackMarkdown) != ""
-		d := periodBriefRetryDisposition(projected.Status, failReason, packReady)
+		d := periodBriefRetryDisposition(projected.Status, failReason, errorText, packReady)
 		if packReady || d.Status == "ready" {
 			resp.Skipped = append(resp.Skipped, notePeriodBriefRetrySkipped{AgentID: ref.AgentID, Reason: "already ready"})
 			continue
@@ -262,6 +268,60 @@ FROM note_page WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`,
 		return resp, nil, nil
 	}
 	return resp, allJobs, nil
+}
+
+func abandonPeriodBriefOutstandingRetries(packs []notePeriodBriefPackResult, why string) {
+	why = strings.TrimSpace(why)
+	for i := range packs {
+		if !periodBriefCollectorNeedsAssistantRetry(packs[i]) {
+			continue
+		}
+		packs[i].Retryable = false
+		if packs[i].AbandonWhy == "" {
+			packs[i].AbandonWhy = why
+		}
+		if packs[i].Detail == "" {
+			packs[i].Detail = why
+		}
+	}
+}
+
+// settlePeriodBriefCollectorsWithOneRetry waits for the first wave, then the
+// platform itself dispatches the one allowed retry for retryable failures.
+// Callers must not wait on the Notes Assistant to invoke retry-collectors.
+func (h *Handler) settlePeriodBriefCollectorsWithOneRetry(
+	ctx context.Context,
+	workspaceID, userID pgtype.UUID,
+	userIDString string,
+	draftPageID pgtype.UUID,
+	collectorJobs []NoteWorkerJobResponse,
+) []notePeriodBriefPackResult {
+	packResults := h.awaitPeriodBriefCollectorPacks(ctx, workspaceID, userID, draftPageID, collectorJobs)
+	h.attachPeriodBriefRetryCounts(ctx, workspaceID, draftPageID, packResults)
+	if periodBriefAllCollectorResultsFinal(packResults) {
+		return packResults
+	}
+
+	run, err := h.loadNotePeriodBriefRunByDraft(ctx, workspaceID, draftPageID)
+	if err != nil || !periodBriefRunLocksComposerStatus(run.Status) {
+		abandonPeriodBriefOutstandingRetries(packResults, "period brief run is not running for platform retry")
+		return packResults
+	}
+	h.wakePeriodBriefProgress(ctx, run, userIDString, "collect_retrying", packResults)
+
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/api/notes/period-briefs/retry", nil)
+	_, jobs, retryErr := h.retryNotePeriodBriefCollectors(ctx, req, workspaceID, run, nil, middleware.AgentPrincipal{})
+	if retryErr != nil || len(jobs) == 0 {
+		abandonPeriodBriefOutstandingRetries(packResults, "platform could not dispatch the one allowed retry")
+		return packResults
+	}
+
+	packResults = h.awaitPeriodBriefCollectorPacks(ctx, workspaceID, userID, draftPageID, jobs)
+	h.attachPeriodBriefRetryCounts(ctx, workspaceID, draftPageID, packResults)
+	if !periodBriefAllCollectorResultsFinal(packResults) {
+		abandonPeriodBriefOutstandingRetries(packResults, "collector still unsettled after the one allowed retry")
+	}
+	return packResults
 }
 
 // dispatchNotePeriodBriefCollectorOntoDraft reuses the draft page (retry path).

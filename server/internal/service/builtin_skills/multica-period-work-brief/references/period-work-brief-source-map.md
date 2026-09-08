@@ -10,19 +10,20 @@ to these sources.
 | Failed job still ready if `--note-write` landed | `classifyPeriodBriefCollectorOutcome` (`packReady` first); `TestCreateNotePeriodBriefHarvestsNoteWriteAfterFailedTask` |
 | Collect / retry / synth one-shot session | `persistPeriodBriefNoteBriefContext`; daemon `ForceFreshSession` |
 | Status board fields (status/retryable/abandon_why) | `formatNotePeriodBriefPacks`, `classifyPeriodBriefCollectorOutcome` |
-| Permanent vs retryable classification | `server/internal/handler/note_period_brief_classify.go` |
+| Permanent vs retryable classification | `server/internal/handler/note_period_brief_classify.go`; inbox `error` body via `NoteWorkerJobResponse.Error` (`TestClassifyPeriodBriefCollectorOutcomeUnknownReasonUsesErrorBody`) |
 | Clean complete + no pack is settled empty (no retry) | `classifyPeriodBriefCollectorOutcome` (`completed` with empty error); `TestClassifyPeriodBriefCollectorOutcomeEmptyCompleted` |
-| One Notes-Assistant retry per collector; inbox does not auto-retry | `notePeriodBriefCollectorMaxRetries`; `SetAgentTaskMaxAttempts(..., 1)` |
-| Retry-only wake vs write wake | `notePeriodBriefRetryInstruction`; `dispatchNotePeriodBriefWorker(..., retryOnly)`; harvest `created_at >= writeAfter` |
+| One platform retry per collector; inbox does not auto-retry | `notePeriodBriefCollectorMaxRetries`; `settlePeriodBriefCollectorsWithOneRetry`; `SetAgentTaskMaxAttempts(..., 1)` |
+| Retry-only instruction kept for manual retry API | `notePeriodBriefRetryInstruction`; harvest `created_at >= writeAfter` |
 | Atomic per-collector pack write | `mergeNotePeriodBriefCollector`; await matches `pack_job_id` |
-| Narrow retry API | `POST /api/agent/notes/period-briefs/{draftPageId}/retry-collectors` → `RetryAgentNotePeriodBriefCollectors` |
+| Narrow retry API (optional / manual; platform owns the default retry) | `POST /api/agent/notes/period-briefs/{draftPageId}/retry-collectors` → `RetryAgentNotePeriodBriefCollectors` |
 | Collector submit-pack API | `POST /api/agent/notes/period-briefs/{draftPageId}/submit-pack` → `SubmitAgentNotePeriodBriefPack` |
 | Human stop cancels the run | `POST /api/notes/period-briefs/{runId}/cancel` → `CancelNotePeriodBrief`; pack/retry 409 after `cancelled` |
 | CLI | `multica notes period-brief retry-collectors` → `server/cmd/multica/cmd_notes.go` |
 | Optional human focus + collect plan | `normalizePeriodBriefUserFocus`; `applyNotePeriodBriefCollectPlan`; `<focus>` in `buildNotePeriodBriefPrompt` |
 | Collect-plan wake (earlier) | `multica-period-work-plan`; `submit-collect-plan` |
 | Durable run + retry counts | `note_period_brief_run` migration `414_note_period_brief_run` |
-| Product contract | `docs/adr/0019-runtime-agent-collectors-period-brief.md` |
+| Partial harvest writes from ready packs; no ready pack blocks | `periodBriefOfficialBriefBlocked`; `formatNotePeriodBriefPacks`; `TestAcceptPartialHarvestWritesFromReadyPacks` |
+| Product contract | `docs/adr/0019-runtime-agent-collectors-period-brief.md`; `docs/notes-period-brief-assistant-contract.md` |
 | Collector skill (do not confuse) | `multica-period-work-collect` |
 
 ## Delivery

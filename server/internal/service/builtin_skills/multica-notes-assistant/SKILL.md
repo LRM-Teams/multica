@@ -31,17 +31,23 @@ are not this artifact.
 If `<period_brief_session_materials>` is present, each ready pack is a
 row with name, id, os, and hostname — not pack bodies. Match the human's
 machine words (an OS, a hostname, or a collector name) to those rows when
-answering. Session harvests, `<period_brief>` in residue, and the current
-note page are readable context. Do **not** change the collect window,
-computers, or focus. Do **not** call start.
+answering about those harvests. Do **not** use session harvests as source
+for a new report unless the human **explicitly** asks to write from a
+prior harvest in this bubble (e.g. 用上次采集 / 用某次写汇报采到的).
+`<period_brief>` in residue and the current note page stay readable.
+Do **not** change the collect window, computers, or focus. Do **not**
+call start.
 
-If they ask 写汇报 / 重新采集, the platform opens the plan card. Call
-`multica notes period-brief plan` **this turn** with only
-`--chat-session-id` if the card is missing. Do not PUT window, computers,
-or focus. They edit the card and choose 开始采集 or 取消. 开始采集 walks
-every selected computer, then writes the brief. Same-session 写汇报 again
-reopens the card; 开始采集 re-walks. Do not rewrite the official brief as
-chat markdown. Do not invent a dropped computer's work from memory.
+If they ask 写汇报 / 重新采集 **without** naming a prior harvest, the
+platform opens the plan card. Call `multica notes period-brief plan`
+**this turn** with only `--chat-session-id` if the card is missing. Do
+not PUT window, computers, or focus. They edit the card and choose
+开始采集 or 取消. 开始采集 walks every selected computer, then writes
+the brief from **that walk only**. Same-session 写汇报 again reopens
+the card; 开始采集 re-walks. Do not rewrite the official brief as chat
+markdown. Do not invent a dropped computer's work from memory. When they
+**explicitly** ask to generate content from a prior harvest, use session
+materials for that ask; do not open a new collect for that ask.
 
 ## Delivery (standalone bubble)
 
@@ -96,8 +102,10 @@ that is enough.
   computers, or focus. Do not call start. Do not query the database,
   docker, or the repo for the session id. Do not paste wake XML, tool
   narration, or English scratch work into the bubble. They edit the card
-  and click 开始采集 (walk every selected computer, then write the brief)
-  or 取消. Same-session 写汇报 again reopens the card. If they cancel
+  and click 开始采集 (walk every selected computer, then write the brief
+  from that walk only) or 取消. Same-session 写汇报 again reopens the
+  card. Do not treat last run's packs as the new brief's source unless
+  they explicitly asked to use a prior harvest. If they cancel
   the plan card or say 取消, the platform closes the plan and stops any
   in-flight collect. Do not walk anyone's OS.
 - **Progress `run_started`** — if `<period_brief_progress>` has
@@ -148,5 +156,5 @@ a share.
 | `notes period-brief plan` / `insert` | Chat XML to start collect or insert |
 | Final-output rewrite proposals | Editor structured `note_ai_job` actions |
 
-Period Brief no-fence cards. Period Brief plan card from session id. Period Brief missing harvest keeps prior brief. Period Brief card owns collect scope. Source map: `references/notes-assistant-source-map.md`.
+Period Brief no-fence cards. Period Brief plan card from session id. Period Brief partial harvest writes from ready packs. Period Brief card owns collect scope. Period Brief prior harvest reuse needs explicit ask. Source map: `references/notes-assistant-source-map.md`.
 Contract: `docs/notes-period-brief-assistant-contract.md`.

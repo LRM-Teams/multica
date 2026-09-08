@@ -29,7 +29,7 @@ const (
 // waited on until ready / failed / cancelled / empty (completed without pack).
 // Hitting this ceiling marks remaining runners as stalled — never silent empty.
 // Overridable in tests.
-var notePeriodBriefCollectorMaxWait = 2 * time.Hour
+var notePeriodBriefCollectorMaxWait = 15 * time.Minute
 
 // When true (production default), CreateNotePeriodBrief returns after dispatching
 // collectors and finishes synthesis in a background goroutine. Waiting inline
@@ -351,7 +351,7 @@ RETURNING id, workspace_id, parent_id, owner_user_id, title, icon, content, sort
 		if !ok {
 			return
 		}
-		packResults := h.awaitPeriodBriefCollectorPacks(r.Context(), workspaceID, userID, draft.ID, collectorJobs)
+		packResults := h.settlePeriodBriefCollectorsWithOneRetry(r.Context(), workspaceID, userID, userIDString, draft.ID, collectorJobs)
 		page, job, usedOut, emptyOut, skippedOut, ok := h.synthesizeNotePeriodBrief(
 			w, r, workspaceID, userID, userIDString, agentID, folderID, draft, window, channelID, factsText, packResults, used, empty, skipped,
 		)
@@ -414,7 +414,7 @@ RETURNING id, workspace_id, parent_id, owner_user_id, title, icon, content, sort
 		return
 	}
 
-	packResults := h.awaitPeriodBriefCollectorPacks(r.Context(), workspaceID, userID, draft.ID, collectorJobs)
+	packResults := h.settlePeriodBriefCollectorsWithOneRetry(r.Context(), workspaceID, userID, userIDString, draft.ID, collectorJobs)
 	page, job, usedOut, emptyOut, skippedOut, ok := h.synthesizeNotePeriodBrief(
 		w, r, workspaceID, userID, userIDString, agentID, folderID, draft, window, channelID, factsText, packResults, used, empty, skipped,
 	)
@@ -541,12 +541,11 @@ func (h *Handler) finishNotePeriodBriefAfterCollectors(
 	collectorJobs []NoteWorkerJobResponse,
 	used, empty, skipped []string,
 ) {
-	// Wait until collectors settle; absolute ceiling only marks stalled.
+	// Wait until collectors settle (and platform owns the one allowed retry).
 	ctx, cancel := context.WithTimeout(ctx, notePeriodBriefCollectorMaxWait+time.Minute)
 	defer cancel()
 
-	packResults := h.awaitPeriodBriefCollectorPacks(ctx, workspaceID, userID, draft.ID, collectorJobs)
-	h.attachPeriodBriefRetryCounts(ctx, workspaceID, draft.ID, packResults)
+	packResults := h.settlePeriodBriefCollectorsWithOneRetry(ctx, workspaceID, userID, userIDString, draft.ID, collectorJobs)
 	packsText := formatNotePeriodBriefPacks(packResults)
 	packsReady := 0
 	for _, pack := range packResults {
@@ -570,7 +569,7 @@ UPDATE note_page SET content = $1, updated_at = now(), updated_by = $2 WHERE id 
 		content, userID, draft.ID, workspaceID)
 	draft.Content = content
 
-	_, retryOnly, blocked, ok := h.beginPeriodBriefPostCollect(ctx, workspaceID, draft.ID, userIDString, packResults)
+	_, _, blocked, ok := h.beginPeriodBriefPostCollect(ctx, workspaceID, draft.ID, userIDString, packResults)
 	if !ok || blocked {
 		return
 	}
@@ -581,13 +580,8 @@ UPDATE note_page SET content = $1, updated_at = now(), updated_by = $2 WHERE id 
 	}
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/api/notes/period-briefs", nil)
-	_, _ = h.dispatchNotePeriodBriefWorker(rec, req, workspaceID, userID, userIDString, folderID, draft, agent, window.Label, channelID, factsText, packsText, retryOnly)
-	if retryOnly {
-		return
-	}
+	_, _ = h.dispatchNotePeriodBriefWorker(rec, req, workspaceID, userID, userIDString, folderID, draft, agent, window.Label, channelID, factsText, packsText, false)
 	if run, err := h.loadNotePeriodBriefRunByDraft(ctx, workspaceID, draft.ID); err == nil {
-		// Keep pack_markdown for same-session reuse. Ignore --note-write
-		// that landed before this wake (retry-only turn).
 		h.completePeriodBriefRunAfterSynth(ctx, run, userIDString, time.Now())
 	}
 }
@@ -645,7 +639,7 @@ UPDATE note_page SET content = $1, updated_at = now(), updated_by = $2 WHERE id 
 	}
 	draft.Content = content
 
-	_, retryOnly, blocked, ok := h.beginPeriodBriefPostCollect(r.Context(), workspaceID, draft.ID, userIDString, packResults)
+	_, _, blocked, ok := h.beginPeriodBriefPostCollect(r.Context(), workspaceID, draft.ID, userIDString, packResults)
 	if blocked {
 		return draft, NoteWorkerJobResponse{}, used, empty, skipped, true
 	}
@@ -659,15 +653,16 @@ UPDATE note_page SET content = $1, updated_at = now(), updated_by = $2 WHERE id 
 		writeError(w, http.StatusNotFound, "agent not found")
 		return notePageRow{}, NoteWorkerJobResponse{}, nil, nil, nil, false
 	}
-	job, ok := h.dispatchNotePeriodBriefWorker(w, r, workspaceID, userID, userIDString, folderID, draft, agent, window.Label, channelID, factsText, packsText, retryOnly)
+	job, ok := h.dispatchNotePeriodBriefWorker(w, r, workspaceID, userID, userIDString, folderID, draft, agent, window.Label, channelID, factsText, packsText, false)
 	if !ok {
 		return notePageRow{}, NoteWorkerJobResponse{}, nil, nil, nil, false
 	}
 	return draft, job, used, empty, skipped, true
 }
 
-// beginPeriodBriefPostCollect advances a settled collect into retry, a write
-// wake, or a missing-harvest abort. blocked means no new official brief.
+// beginPeriodBriefPostCollect advances a settled collect into a write wake or
+// a missing-harvest abort. The platform already owns the one allowed retry in
+// settlePeriodBriefCollectorsWithOneRetry — retryOnly here means fail closed.
 func (h *Handler) beginPeriodBriefPostCollect(
 	ctx context.Context,
 	workspaceID, draftID pgtype.UUID,
@@ -679,16 +674,21 @@ func (h *Handler) beginPeriodBriefPostCollect(
 	if err != nil || !periodBriefRunLocksComposerStatus(run.Status) {
 		return run, retryOnly, false, false
 	}
-	if !retryOnly && periodBriefOfficialBriefBlocked(packResults) {
+	if retryOnly {
+		abandonPeriodBriefOutstandingRetries(packResults, "collector results were not final after platform retry")
+		h.failPeriodBriefRunMissingHarvest(ctx, run, userIDString, packResults)
+		return run, false, true, true
+	}
+	if periodBriefOfficialBriefBlocked(packResults) {
 		h.failPeriodBriefRunMissingHarvest(ctx, run, userIDString, packResults)
 		return run, false, true, true
 	}
 	advanced, advErr := h.tryAdvancePeriodBriefRunStatus(ctx, run.ID, "synthesizing")
 	if advErr != nil || !advanced {
-		return run, retryOnly, false, false
+		return run, false, false, false
 	}
 	h.wakePeriodBriefProgress(ctx, run, userIDString, "materials_ready", packResults)
-	return run, retryOnly, false, true
+	return run, false, false, true
 }
 
 func (h *Handler) failPeriodBriefRunMissingHarvest(
@@ -1168,6 +1168,12 @@ func (h *Handler) awaitPeriodBriefCollectorPacks(
 			if projected.FailureReason != nil {
 				failReason = strings.TrimSpace(*projected.FailureReason)
 			}
+			errorText := failReason
+			if projected.Error != nil {
+				if detail := strings.TrimSpace(*projected.Error); detail != "" {
+					errorText = detail
+				}
+			}
 			packReady := false
 			if runErr == nil {
 				if ref, _, ok := findCollectorRef(run.Collectors, job.AgentID); ok {
@@ -1181,7 +1187,7 @@ func (h *Handler) awaitPeriodBriefCollectorPacks(
 
 			timedOut := pastCeiling && !packReady &&
 				(status == "" || status == "pending" || status == "dispatched" || status == "running")
-			d := classifyPeriodBriefCollectorOutcome(status, failReason, failReason, packReady, timedOut)
+			d := classifyPeriodBriefCollectorOutcome(status, failReason, errorText, packReady, timedOut)
 			out[i].Status = d.Status
 			out[i].Retryable = d.Retryable
 			out[i].AbandonWhy = d.AbandonWhy
@@ -1311,8 +1317,11 @@ func formatNotePeriodBriefPacks(packs []notePeriodBriefPackResult) string {
 	b.WriteString("Platform waited until each collector settled (ready/failed/cancelled/empty/stalled).\n")
 	if periodBriefAllCollectorResultsFinal(packs) {
 		b.WriteString("Collector results are final. Write the Brief. Do not call retry-collectors.\n")
+		if periodBriefAnyCollectorReady(packs) && periodBriefAnyCollectorFailed(packs) {
+			b.WriteString("Partial harvest: write the Brief from ready packs only. Mention failed computers briefly; do not invent their OS work.\n")
+		}
 	} else {
-		b.WriteString("Inbox will not auto-retry. retryable=true and retry_count 0 → MUST call the retry CLI once, then stop. Do not write the Brief yet.\n")
+		b.WriteString("Platform owns the one allowed collector retry. Do not call retry-collectors from this wake.\n")
 	}
 	b.WriteString("After that one retry settles, the collector result is final. Permanent failures: abandon; do not invent OS work.\n")
 	if len(packs) == 0 {

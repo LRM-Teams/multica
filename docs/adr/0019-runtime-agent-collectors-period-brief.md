@@ -189,8 +189,12 @@ The platform **waits until each collector settles**. A pack is **ready** when
 `submit-pack`) — including when the inbox task later fails
 (`api_invalid_request` / Pi `input[n].status` 400). It does **not**
 treat “N minutes elapsed while still running” as empty. An absolute safety
-ceiling only marks remaining runners as **stalled**. Pack markdown is
-kept after the synthesizer wake so the same bubble session can reuse it.
+ceiling (**15 minutes**) only marks remaining runners as **stalled**.
+It does not fail a still-running collector early. Pack markdown is kept
+after the synthesizer wake as session harvest context; a new 开始采集
+always re-walks and synthesizes from **this run's** packs. Partial
+harvest (some ready, some failed after the one allowed retry) still
+writes an official brief from ready packs only.
 
 Each collect, retry, and synthesizer wake sets `force_fresh_session=true`.
 These are one-shot prompts: they must not resume a prior Pi conversation.

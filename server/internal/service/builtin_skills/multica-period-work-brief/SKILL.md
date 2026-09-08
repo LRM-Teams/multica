@@ -1,6 +1,6 @@
 ---
 name: multica-period-work-brief
-description: "Use when the Notes Assistant (笔记助手) is woken as the 写汇报 synthesizer from platform Facts and collector packs. Covers audience-facing reporting (no evidence layer), honoring optional human <focus>, fixed section shape (Summary with Work Summary + Next Steps; optional Technique / Achievements / Research), titles, Mermaid for intuition, status board, abandon vs one Notes-Assistant retry-collectors call, and --note-write delivery under 工作介绍/. Do not use for Notes FAB bubble chat (multica-notes-assistant), collect-plan command (multica-period-work-plan), or collecting OS work (multica-period-work-collect)."
+description: "Use when the Notes Assistant (笔记助手) is woken as the 写汇报 synthesizer from platform Facts and collector packs. Covers audience-facing reporting (no evidence layer), honoring optional human <focus>, fixed section shape (Summary with Work Summary + Next Steps; optional Technique / Achievements / Research), titles, Mermaid for intuition, status board, abandon permanent failures; platform owns one collector retry, and --note-write delivery under 工作介绍/. Do not use for Notes FAB bubble chat (multica-notes-assistant), collect-plan command (multica-period-work-plan), or collecting OS work (multica-period-work-collect)."
 user-invocable: false
 allowed-tools: Bash(multica *)
 ---
@@ -9,11 +9,10 @@ allowed-tools: Bash(multica *)
 
 You turn **platform Facts** + **collector packs** into one Period Work Brief
 **for other people to read** (manager / colleague). The platform waits until
-collectors settle before waking you — you do **not** busy-wait. Inbox will
-**not** auto-retry. There are two synthesizer wakes: a **retry-only** wake
-(`retry-collectors` once, then stop — no `--note-write`) and a later **write**
-wake (results are final; narrate for humans). Do not paste packs or show how
-you verified anything.
+collectors settle (and owns the one allowed collector retry) before waking
+you — you do **not** busy-wait and you do **not** call `retry-collectors`.
+This wake is the **write** wake (results are final; narrate for humans). Do
+not paste packs or show how you verified anything.
 
 ## Audience (non-negotiable)
 
@@ -180,38 +179,12 @@ For abandoned collectors: write the Brief from Facts + ready packs, and add a
 short “未纳入采集” note naming the machine and reason. **Never invent** that
 machine’s OS work.
 
-## When to retry (narrow tool only)
+## Platform owns the one retry
 
-Transient / recoverable:
-
-- `runtime_offline` / daemon disconnect
-- Network / capacity / provider 5xx
-- `empty` pack only when the board says `retryable: true` (completed
-  turn still carried an error). Clean complete + no pack is settled
-  empty — write the Brief; do not retry
-- `stalled` (safety ceiling) when still `retryable: true`
-
-Call **once** per wake when needed:
-
-```bash
-multica notes period-brief retry-collectors \
-  --draft-page-id <draft page id from wake> \
-  [--collector-agent-id <id>]...
-```
-
-Rules:
-
-1. On a **retry-only** wake (instruction says do not `--note-write`): if any
-   collector is `retryable: true` and `retry_count` is 0, you **MUST** call
-   this CLI once now and **stop**. Do not write the Brief.
-2. Prefer listing specific `--collector-agent-id` values; omit to retry all eligible.
-3. Inbox will **not** auto-retry collectors. Platform rejects permanent failures
-   and a second retry — do not argue.
-4. After a successful retry response: **stop and wait**. Platform re-wakes you
-   for the **write** wake when that attempt settles. Then the result is final —
-   write the Brief; do not retry again.
-5. On a **write** wake, do **not** call retry-collectors. Deliver the Brief.
-6. Never re-collect the OS yourself unless the wake explicitly makes you a collector.
+Transient failures (`runtime_offline`, capacity, stalled, retryable empty)
+are retried **once by the platform** before this write wake. Do **not** call
+`retry-collectors`. The status board on this wake is final: write the Brief
+from ready packs, note abandoned machines briefly, never invent OS work.
 
 ## Deliver the Brief
 

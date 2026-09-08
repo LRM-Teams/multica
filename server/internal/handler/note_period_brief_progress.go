@@ -37,7 +37,7 @@ func formatPeriodBriefProgressBoard(board periodBriefProgressBoard) string {
 	var b strings.Builder
 	b.WriteString("<period_brief_progress>\n")
 	if event == "run_started" {
-		b.WriteString("This is a progress wake on the Notes FAB bubble session. Restate the confirmed window, selected computers, and focus. Tell the human collection already started with these conditions and ask them to wait. Collectors are already running. Settled computers with status carried were reused from an earlier collect in this session — say they are kept, not re-scanned. Do not start synthesis. Do not collect OS work. Do not emit chat XML.\n")
+		b.WriteString("This is a progress wake on the Notes FAB bubble session. Restate the confirmed window, selected computers, and focus. Tell the human collection already started with these conditions and ask them to wait. Collectors are already running. Do not start synthesis. Do not collect OS work. Do not emit chat XML.\n")
 	} else {
 		b.WriteString("This is a progress wake on the Notes FAB bubble session. Write one short reminder in final assistant output. Do not start synthesis. Do not collect OS work. Do not emit chat XML.\n")
 	}
@@ -180,11 +180,33 @@ func (h *Handler) wakePeriodBriefProgress(
 		return
 	}
 	fallback := periodBriefProgressFallbackCopy(event, packs)
-	if event == "collect_failed" {
-		spoken := joinPeriodBriefSpokenNames(h.periodBriefCollectorSpokenNames(ctx, run.WorkspaceID, periodBriefFailedCollectorIDs(packs)))
-		fallback = periodBriefMissingHarvestProgressCopy(spoken)
+	failedIDs := periodBriefFailedCollectorIDs(packs)
+	if periodBriefAnyCollectorFailed(packs) {
+		spoken := joinPeriodBriefSpokenNames(h.periodBriefCollectorSpokenNames(ctx, run.WorkspaceID, failedIDs))
+		if event == "collect_failed" {
+			fallback = periodBriefMissingHarvestProgressCopy(spoken)
+		} else if event == "materials_ready" && periodBriefAnyCollectorReady(packs) {
+			fallback = periodBriefPartialHarvestProgressCopy(spoken)
+		}
 	}
-	h.armPeriodBriefProgressSilenceFence(ctx, run, userIDString, fallback)
+
+	// Failure-bearing beats must land as durable platform lines. Silence-fence
+	// recovery races with pack_received's generic "采集有了新进展" and can leave
+	// the human with a finished brief and no failure notice.
+	switch event {
+	case "collect_failed", "collect_retrying":
+		h.postPeriodBriefBubbleMessage(ctx, run.ChatSessionID, run.WorkspaceID, run.OwnerUserID, userIDString, "assistant", fallback)
+	case "materials_ready":
+		if periodBriefAnyCollectorFailed(packs) {
+			h.postPeriodBriefBubbleMessage(ctx, run.ChatSessionID, run.WorkspaceID, run.OwnerUserID, userIDString, "assistant", fallback)
+		} else {
+			h.armPeriodBriefProgressSilenceFence(ctx, run, userIDString, fallback)
+		}
+	case "pack_received":
+		// Wake only — do not silence-fence a generic progress line.
+	default:
+		h.armPeriodBriefProgressSilenceFence(ctx, run, userIDString, fallback)
+	}
 }
 
 func (h *Handler) wakePeriodBriefRunStarted(
@@ -202,6 +224,9 @@ func (h *Handler) wakePeriodBriefRunStarted(
 func periodBriefProgressFallbackCopy(event string, packs []notePeriodBriefPackResult) string {
 	if event == "materials_ready" || event == "collect_failed" {
 		return periodBriefMaterialsProgressCopy(packs)
+	}
+	if event == "collect_retrying" {
+		return "有采集没有成功，正在再发起一次采集。"
 	}
 	if event == "run_started" {
 		return "已按这些条件开始采集，请稍等。"

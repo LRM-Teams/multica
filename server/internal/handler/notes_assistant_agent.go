@@ -20,7 +20,7 @@ const (
 	notesAssistantAgentDisplayName = "笔记助手"
 	notesAssistantAgentTemplate    = "notes-assistant"
 	// Detects personas that still teach chat XML as 写汇报 dispatch.
-	notesAssistantInstructionsCapabilityMarker = "Period Brief card owns collect scope"
+	notesAssistantInstructionsCapabilityMarker = "Period Brief prior harvest reuse needs explicit ask"
 )
 
 // EnsureNotesAssistantAgentResponse is returned by POST /api/agents/notes-assistant.

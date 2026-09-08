@@ -5,6 +5,16 @@ import (
 	"testing"
 )
 
+func TestPeriodBriefPartialHarvestProgressCopy(t *testing.T) {
+	t.Parallel()
+	if got := periodBriefPartialHarvestProgressCopy("采集 · Pi (lijian)"); !strings.Contains(got, "采集 · Pi (lijian)") || !strings.Contains(got, "只根据已经采到的材料") {
+		t.Fatalf("partial copy = %q", got)
+	}
+	if got := periodBriefResultFailureSuffix("采集 · Pi (lijian)"); !strings.Contains(got, "采集 · Pi (lijian)") || !strings.Contains(got, "只根据成功的电脑整理") {
+		t.Fatalf("result suffix = %q", got)
+	}
+}
+
 func TestPeriodBriefFailureIsPermanentNoAPIKey(t *testing.T) {
 	t.Parallel()
 	permanent, kind, why := periodBriefFailureIsPermanent("pi exited: No API key", "")
@@ -16,6 +26,43 @@ func TestPeriodBriefFailureIsPermanentNoAPIKey(t *testing.T) {
 	}
 	if why == "" {
 		t.Fatal("expected abandon why")
+	}
+}
+
+// TestClassifyPeriodBriefCollectorOutcomeUnknownReasonUsesErrorBody pins the
+// Windows Pi failure we saw in production: inbox failure_reason stays
+// agent_error.unknown while error carries "No API key found for openai".
+// Without the error body, the platform wrongly asks for one assistant retry
+// and then never surfaces a final collect_failed if retry never runs.
+func TestClassifyPeriodBriefCollectorOutcomeUnknownReasonUsesErrorBody(t *testing.T) {
+	t.Parallel()
+	d := classifyPeriodBriefCollectorOutcome(
+		"failed",
+		"agent_error.unknown",
+		"Pi RPC prompt: No API key found for openai.\n\nUse /login to log into a provider via OAuth or API key.",
+		false,
+		false,
+	)
+	if d.Status != "failed" || d.Retryable {
+		t.Fatalf("disposition = %+v, want permanent failed", d)
+	}
+	if d.FailureKind != "config" {
+		t.Fatalf("failure_kind = %q, want config", d.FailureKind)
+	}
+	if periodBriefCollectorNeedsAssistantRetry(notePeriodBriefPackResult{
+		Status: d.Status, Retryable: d.Retryable, RetryCount: 0,
+	}) {
+		t.Fatal("permanent No API key must not request assistant retry")
+	}
+	if got := periodBriefMaterialsProgressCopy([]notePeriodBriefPackResult{{
+		Status: d.Status, Retryable: d.Retryable, RetryCount: 0,
+	}}); !strings.Contains(got, "正式稿没有更新") {
+		t.Fatalf("permanent failure copy = %q", got)
+	}
+	if strings.Contains(periodBriefMaterialsProgressCopy([]notePeriodBriefPackResult{{
+		Status: d.Status, Retryable: d.Retryable, RetryCount: 0,
+	}}), "再发起一次采集") {
+		t.Fatal("permanent failure must not promise another collect")
 	}
 }
 
@@ -103,11 +150,11 @@ func TestClassifyPeriodBriefCollectorOutcomeEmptyCompletedWithError(t *testing.T
 
 func TestPeriodBriefRetryDispositionAllowsRunningAfterWaitReleased(t *testing.T) {
 	t.Parallel()
-	d := periodBriefRetryDisposition("dispatched", "", false)
+	d := periodBriefRetryDisposition("dispatched", "", "", false)
 	if d.Status != "stalled" || !d.Retryable {
 		t.Fatalf("still-running inbox after wait released must be retryable: %+v", d)
 	}
-	ready := periodBriefRetryDisposition("running", "", true)
+	ready := periodBriefRetryDisposition("running", "", "", true)
 	if ready.Status != "ready" || ready.Retryable {
 		t.Fatalf("ready pack must not retry: %+v", ready)
 	}
@@ -146,8 +193,8 @@ func TestPeriodBriefCollectorNeedsAssistantRetryOnce(t *testing.T) {
 	if got := periodBriefMaterialsProgressCopy([]notePeriodBriefPackResult{
 		{Status: "ready"},
 		{Status: "failed", Retryable: false, RetryCount: 1},
-	}); !strings.Contains(got, "正式稿没有更新") {
-		t.Fatalf("partial harvest after a failed computer must not pretend all materials arrived: %q", got)
+	}); !strings.Contains(got, "只根据已经采到的材料") {
+		t.Fatalf("partial harvest must synthesize from ready packs: %q", got)
 	}
 	if strings.Contains(periodBriefMaterialsProgressCopy([]notePeriodBriefPackResult{
 		{Status: "ready"},
@@ -155,11 +202,17 @@ func TestPeriodBriefCollectorNeedsAssistantRetryOnce(t *testing.T) {
 	}), "收到了所有需要的材料") {
 		t.Fatal("must not say all materials arrived when a selected computer failed")
 	}
-	if !periodBriefOfficialBriefBlocked([]notePeriodBriefPackResult{
+	if periodBriefOfficialBriefBlocked([]notePeriodBriefPackResult{
 		{Status: "ready"},
 		{Status: "failed", Retryable: false, RetryCount: 0},
 	}) {
-		t.Fatal("a failed selected computer must block the official brief")
+		t.Fatal("partial ready harvest must not block the official brief")
+	}
+	if !periodBriefOfficialBriefBlocked([]notePeriodBriefPackResult{
+		{Status: "failed", Retryable: false, RetryCount: 1},
+		{Status: "stalled", Retryable: false, RetryCount: 1},
+	}) {
+		t.Fatal("no ready pack must block the official brief")
 	}
 	if periodBriefOfficialBriefBlocked([]notePeriodBriefPackResult{
 		{Status: "ready"},

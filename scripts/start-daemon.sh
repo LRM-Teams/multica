@@ -11,6 +11,9 @@ PROFILE=""
 FOREGROUND=false
 FORCE_BUILD=false
 RESTART=true
+# computer stop can return before the resident exits (graceful shutdown /
+# finishing a task). Wait this long before giving up on a clean stop.
+STOP_WAIT_SECONDS="${MULTICA_COMPUTER_STOP_WAIT_SECONDS:-60}"
 
 usage() {
   cat <<'EOF'
@@ -63,7 +66,6 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-profile_args=()
 if [ -n "$PROFILE" ]; then
   # Machine-wide Computer ignores --profile; keep config switch for non-computer
   # CLI use only. Default ~/.multica/config.json is what the resident reads.
@@ -93,13 +95,64 @@ export MULTICA_COMPUTER_LAUNCH_BIN="$MULTICA_BIN"
 # CLI renamed daemon → computer; keep script name for existing make/docs callers.
 daemon_cmd=( "$MULTICA_BIN" computer )
 
+computer_status_json() {
+  # status exits non-zero when disconnected; still emit JSON on stdout.
+  "${daemon_cmd[@]}" status --output json 2>/dev/null || true
+}
+
+computer_is_running() {
+  local json
+  json="$(computer_status_json)"
+  # Match both compact and spaced JSON encodings of status=running|starting.
+  printf '%s' "$json" | grep -Eq '"status"[[:space:]]*:[[:space:]]*"(running|starting)"'
+}
+
+wait_until_computer_stopped() {
+  local waited=0
+  if ! computer_is_running; then
+    return 0
+  fi
+  echo "==> Waiting for Computer to finish stopping (up to ${STOP_WAIT_SECONDS}s)"
+  while [ "$waited" -lt "$STOP_WAIT_SECONDS" ]; do
+    if ! computer_is_running; then
+      echo "    Computer stopped after ${waited}s"
+      return 0
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  echo "Computer is still running after ${STOP_WAIT_SECONDS}s; start may fail with already running" >&2
+  return 1
+}
+
 stop_running_daemon() {
   # Always ask stop. `daemon/computer status` exits non-zero when the resident
   # is alive but disconnected from the backend (typical after a prod restart),
   # so grepping status with `set -o pipefail` used to skip stop, then start
   # failed with "already running" and start-prod tore down the whole stack.
+  #
+  # `computer stop` can also return success while shutdown is still in flight
+  # ("Computer is still stopping"). Wait until status is no longer running
+  # before start, otherwise the first start-daemon.sh attempt fails and only
+  # the second run succeeds.
   echo "==> Stopping running daemon (if any)"
-  "${daemon_cmd[@]}" stop
+  "${daemon_cmd[@]}" stop || true
+  wait_until_computer_stopped || true
+}
+
+start_daemon() {
+  echo "==> Starting daemon ($MULTICA_BIN)"
+  echo "    launch binary: $MULTICA_COMPUTER_LAUNCH_BIN"
+  if "${daemon_cmd[@]}" start; then
+    return 0
+  fi
+  # Last-chance: stop returned early, process died a moment later, or a
+  # lingering pid raced us. One more stop+wait+start avoids the "first run
+  # fails, second succeeds" loop.
+  echo "==> Start reported failure; retrying stop → wait → start once" >&2
+  "${daemon_cmd[@]}" stop || true
+  wait_until_computer_stopped || true
+  "${daemon_cmd[@]}" start
 }
 
 if [ "$RESTART" = true ]; then
@@ -112,9 +165,7 @@ if [ "$FOREGROUND" = true ]; then
 fi
 
 if [ "$RESTART" = true ]; then
-  echo "==> Starting daemon ($MULTICA_BIN)"
-  echo "    launch binary: $MULTICA_COMPUTER_LAUNCH_BIN"
-  "${daemon_cmd[@]}" start
+  start_daemon
 else
   echo "==> Starting daemon ($MULTICA_BIN)"
   if ! "${daemon_cmd[@]}" start; then

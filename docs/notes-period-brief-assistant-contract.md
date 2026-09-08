@@ -1,12 +1,14 @@
 # Notes Assistant and 写汇报
 
-**Status:** accepted product contract (2026-09-07). Replaces the
-2026-09-03 assistant-executes-start model and the 2026-09-02
-conductor / fence model.
+**Status:** accepted product contract (2026-09-08). Replaces the
+2026-09-07 same-session always-re-walk wording where it conflicts;
+keeps the 2026-09-07 human-owns-scope / assistant-reads model.
 **Implementation:** one flow — speech / FAB 「写汇报」 opens the plan
 card; the human chooses range / 取消 / 开始采集; 开始采集 walks every
-selected computer then writes the brief. Session harvests are
-read-only wake context. Plan and result cards are session state /
+selected computer then writes the brief from **this walk's** packs.
+Session harvests are read-only wake context and are **not** used for a
+new report unless the human **explicitly** asks to write from a prior
+harvest in this bubble. Plan and result cards are session state /
 platform parts, not chat XML.
 Acceptance is the human path (speech / one plan card / one result card),
 not leftover fences.
@@ -24,23 +26,44 @@ synthesizer write.
 ## Decisions (locked)
 
 1. **One collect → brief pipeline.** 开始采集 always walks every
-   selected computer, then the synthesizer writes the official brief.
-   Same-session packs are not reused to skip a walk.
-2. **The human owns collect scope.** Window, computers, focus, 取消,
+   selected computer, then the synthesizer writes the official brief
+   from **this run's** packs only. Same-session packs are not reused
+   to skip a walk. A plain 「写汇报」 / 「重新采集」 without naming a
+   prior harvest must not treat last run's packs as source for the new
+   brief.
+2. **Explicit prior-harvest reuse (bubble only).** If the human
+   clearly asks to generate report content from a prior harvest in
+   this bubble (e.g. 用上次采集 / 用某次写汇报采到的), the assistant
+   may use session materials for that ask. That is not a substitute for
+   开始采集, and it does not invent a new result card without platform
+   synthesis after a walk (or an explicit reuse path the platform adds
+   later).
+3. **The human owns collect scope.** Window, computers, focus, 取消,
    and 开始采集 live on the plan card. Speech 「写汇报」 / 「重新采集」
    only opens (or reopens) that card.
-3. **The assistant reads, it does not collect.** It may call `plan`
+4. **The assistant reads, it does not collect.** It may call `plan`
    with only the session id when the card is missing, speak progress,
    and call insert. It does not PUT window / computers / focus and
    does not call start.
-4. **Lock means work is running.** Composer lock is
+5. **Partial harvest still writes.** After the one allowed retry, if
+   at least one selected computer is `ready`, the synthesizer writes a
+   new official brief from ready packs only and speaks which computers
+   failed. A new official brief is blocked only when **no** ready pack
+   remains (all failed / stalled / cancelled / empty of usable
+   harvest).
+6. **Settle ceiling is 15 minutes.** Platform waits for real
+   ready / failed / cancelled / empty. It does **not** fail a still-
+   running collector early. Past 15 minutes, remaining runners are
+   marked `stalled` (then retry / partial / missing-harvest rules
+   apply).
+7. **Lock means work is running.** Composer lock is
    `planning | collecting | synthesizing` only while a collector or
    synthesizer process is actually in flight. It is not “an HTTP
    request has not returned.” Orphan synthesizing after a dead request
    is a platform bug; settle or unlock, do not block the next start.
-5. **The FAB satellite is a funnel.** It means 「写汇报」 and enters the
+8. **The FAB satellite is a funnel.** It means 「写汇报」 and enters the
    same intercept path. It is not a parallel “chips then POST” product.
-6. **Insert may target any note** the human can write. Non-issuing-page
+9. **Insert may target any note** the human can write. Non-issuing-page
    targets still require a human confirm.
 
 ## What the human sees
@@ -50,7 +73,7 @@ synthesizer write.
 2. **One plan card.** Time range and computers for this run. **取消**
    dismisses the plan and stops any in-flight collect / synthesize on
    that note page. **开始采集** walks every selected computer, then
-   writes the brief.
+   writes the brief from this walk.
 3. **One result card.** The brief plus insert actions. Progress is
    spoken by the assistant. While collectors or the synthesizer are
    in flight, the bubble keeps the same in-thread running indicator
@@ -84,17 +107,6 @@ Worker tools stay Worker-only: `submit-pack`, `submit-collect-plan`,
 Progress wakes are FAB standalone turns on the **bubble** session.
 They must not resume a Worker Pi conversation.
 
-## Wakes
-
-One Agent (`notes-assistant`). Four wake kinds:
-
-| Wake | When | Delivery | Fresh Pi? |
-|---|---|---|---|
-| FAB chat | Ordinary bubble send | Standalone final output; start / insert via tools | No |
-| Progress | In-flight run event | Standalone final output on the same `chat_session` | No |
-| Collect-plan | Confirmed plan still needs roster partitioning | Worker `note_worker` | Yes |
-| Synthesizer | Collectors settled | Worker `note_worker` | Yes |
-
 ## Plan
 
 Complete when both are set:
@@ -125,8 +137,9 @@ path.
 
 ## Brief, session harvests, insert
 
-Synthesis is unchanged: platform waits for collectors, then the
-write Worker. The finished brief appears as the result card.
+Synthesis is unchanged in shape: platform waits for collectors (≤15
+minutes safety ceiling), then the write Worker. The finished brief
+appears as the result card.
 
 Session harvests (latest ready pack per owned computer in this
 bubble) are **read-only** context the assistant can see. The materials
@@ -134,14 +147,18 @@ board labels each pack with name, id, os, and hostname so speech about a
 machine can match a row without dumping pack bodies. They do not skip
 the next walk. 「写汇报」 / 「重新采集」 in the same bubble reopens the
 plan card; 开始采集 walks every selected computer and writes a new
-official brief. The result card (with insert) is the official brief —
-not a chat markdown rewrite. A new bubble session is a clean slate.
+official brief from **that walk only**. Only when the human
+**explicitly** asks to use a prior harvest in this bubble may the
+assistant draw on those packs for that ask. The result card (with
+insert) is the official brief — not a chat markdown rewrite. A new
+bubble session is a clean slate.
 
-A selected computer that still has no pack after the one allowed
-retry does **not** produce a new official result card. Remaining
-ready harvests stay in the session; the previous brief (if any)
-stays. Speak the failure. Empty-scan detection looks at
-Highlights bullets, not a substring anywhere in the pack.
+After collectors are final: if **any** selected computer is `ready`,
+write a new official result card from ready packs and speak failures.
+If **none** are ready after the one allowed retry, do **not** post a
+new official result card; the previous brief (if any) stays; speak the
+failure. Empty-scan detection looks at Highlights bullets, not a
+substring anywhere in the pack.
 
 After `awaiting_confirm` / `done`:
 
@@ -157,15 +174,17 @@ Insert modes: `append` (heading + body under the target) and `child`
 ## Platform still owns
 
 - Collector provision / Computer-owner gate / collect-roots file
-- `submit-pack`, pack harvest, settle / stall ceiling
-- One assistant retry per collector; inbox does not auto-retry.
-  After that retry, a selected computer with no pack does not
-  become a new official brief
+- `submit-pack`, pack harvest, settle / **15-minute** stall ceiling
+- Platform owns **one** collector retry after transient failure; inbox
+  does not auto-retry and the Notes Assistant is not required to call
+  `retry-collectors`. After that retry, **no ready pack** → no new
+  official brief; **some ready** → new official brief from ready packs only
 - Pack harvest is Highlights that are not an empty-scan bullet;
   a later “no in-window” sentence does not wipe a ready pack
 - Speech / FAB 写汇报 opens the plan card (`tryHandlePeriodBriefPlanAsk`).
-  开始采集 walks every selected computer, then synthesizes. Session
-  harvests are not used to skip a walk
+  开始采集 walks every selected computer, then synthesizes from this
+  run’s packs. Session harvests are not used to skip a walk and are
+  not default source for a new report
 - Lock only while a collector or synthesizer job is **actually running**.
   A written orphan is settled (`awaiting_confirm`); a dead lock with no
   live job is abandoned. Stop settles a written orphan instead of
@@ -179,7 +198,9 @@ Insert modes: `append` (heading + body under the target) and `child`
 
 - Answering from packs, the finished brief, and the current note page
 - Opening the plan card with `plan` if it is missing
-- Speaking each progress beat
+- Speaking each progress beat (including partial failures)
+- Using session harvests for a new report **only** when the human
+  explicitly asks to write from a prior harvest
 - Resolving an insert target from speech
 
 ## Non-goals

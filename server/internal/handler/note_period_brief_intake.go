@@ -160,7 +160,9 @@ LIMIT 1`, sessionID, workspaceID, userID, status).Scan(
 	return row, err
 }
 
-func (h *Handler) loadLatestPeriodBriefPromptAnyStatus(
+// loadLatestPeriodBriefPromptForSeed restores the last real collect draft,
+// skipping soft-confirm awaiting_intent rows (empty window).
+func (h *Handler) loadLatestPeriodBriefPromptForSeed(
 	ctx context.Context,
 	sessionID, workspaceID, userID pgtype.UUID,
 ) (notePeriodBriefPromptRow, error) {
@@ -171,8 +173,10 @@ SELECT id, workspace_id, owner_user_id, chat_session_id, source_page_id,
        focus, COALESCE(source_ask, ''), awaiting_confirm, status
 FROM note_period_brief_prompt
 WHERE chat_session_id = $1 AND workspace_id = $2 AND owner_user_id = $3
+  AND status <> $4
+  AND trim(window_kind) <> ''
 ORDER BY created_at DESC
-LIMIT 1`, sessionID, workspaceID, userID).Scan(
+LIMIT 1`, sessionID, workspaceID, userID, periodBriefPromptStatusAwaitingIntent).Scan(
 		&row.ID, &row.WorkspaceID, &row.OwnerUserID, &row.ChatSessionID, &row.SourcePageID,
 		&row.WindowKind, &row.WindowDate, &row.StartDate, &row.EndDate, &row.CollectorAgentIDs,
 		&row.Focus, &row.SourceAsk, &row.AwaitingConfirm, &row.Status,
@@ -365,10 +369,8 @@ func (h *Handler) seedPeriodBriefPlan(
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return notePeriodBriefPromptRow{}, err
 	}
-	prev, prevErr := h.loadLatestPeriodBriefPromptAnyStatus(ctx, sessionID, workspaceID, userID)
-	if prevErr == nil &&
-		prev.Status != periodBriefPromptStatusAwaitingIntent &&
-		strings.TrimSpace(prev.WindowKind) != "" {
+	prev, prevErr := h.loadLatestPeriodBriefPromptForSeed(ctx, sessionID, workspaceID, userID)
+	if prevErr == nil {
 		prev.ID = pgtype.UUID{}
 		prev.Status = periodBriefPromptStatusClarifying
 		prev.SourcePageID = pageID

@@ -155,6 +155,7 @@ func formatPeriodBriefSessionMaterialsBoard(materials []periodBriefSessionMateri
 	b.WriteString(periodBriefSessionMaterialsOpen)
 	b.WriteString("\n")
 	b.WriteString("Ready computer harvests already in this bubble session. Read-only context — do not dump pack bodies here.\n")
+	b.WriteString("Default: a new 写汇报 / 重新采集 must NOT use these packs as source for a new report. Only use them when the human explicitly asks to write from a prior harvest in this bubble (e.g. 用上次采集 / 用某次写汇报采到的).\n")
 	b.WriteString("computers:\n")
 	for _, material := range materials {
 		name := firstNonEmpty(material.Label, material.AgentID)
@@ -184,8 +185,8 @@ func formatPeriodBriefSessionMaterialsBoard(materials []periodBriefSessionMateri
 		b.WriteString(inLatest)
 		b.WriteString("\n")
 	}
-	b.WriteString("Match machine words to these rows by os, hostname, or collector name when answering questions. Do not change the collect window, computers, or focus. Do not call start.\n")
-	b.WriteString("If the human asks 写汇报 / 重新采集, the platform opens the plan card. They choose the range and whether to continue. 开始采集 walks every selected computer, then writes the brief. Do not emit chat XML. Do not rewrite <period_brief> as chat markdown.\n")
+	b.WriteString("Match machine words to these rows by os, hostname, or collector name when answering questions about those harvests. Do not change the collect window, computers, or focus. Do not call start.\n")
+	b.WriteString("If the human asks 写汇报 / 重新采集 without naming a prior harvest, the platform opens the plan card; 开始采集 walks every selected computer and writes a new brief from that walk only. Do not emit chat XML. Do not rewrite <period_brief> as chat markdown.\n")
 	b.WriteString("</period_brief_session_materials>\n\n")
 	return b.String()
 }

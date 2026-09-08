@@ -310,16 +310,16 @@ LIMIT 1`, secondResp.ChatSessionID).Scan(&resultParts); err != nil {
 	}
 }
 
-// TestAcceptFailedAddedComputerKeepsPriorBrief: 「再采集 windows 然后整合」
-// must not replace the official brief when a selected computer fails with no
-// pack, even though every selected computer is re-walked.
-func TestAcceptFailedAddedComputerKeepsPriorBrief(t *testing.T) {
+// TestAcceptPartialHarvestWritesFromReadyPacks: 「再采集 windows 然后整合」
+// still re-walks every selected computer; when one fails with no pack but
+// another is ready, the platform writes a new official brief from ready packs.
+func TestAcceptPartialHarvestWritesFromReadyPacks(t *testing.T) {
 	periodBriefAcceptSetup(t)
 
-	sourcePageID := insertPeriodBriefFixtureDraft(t, "Accept fail added computer")
-	synthID := createHandlerTestAgent(t, "Accept Fail Synth "+uuid.NewString()[:8], nil)
-	ubuntu := createPeriodBriefCollectorTestAgent(t, "Accept Fail Ubuntu")
-	lijian := createPeriodBriefCollectorTestAgent(t, "Accept Fail Lijian")
+	sourcePageID := insertPeriodBriefFixtureDraft(t, "Accept partial harvest")
+	synthID := createHandlerTestAgent(t, "Accept Partial Synth "+uuid.NewString()[:8], nil)
+	ubuntu := createPeriodBriefCollectorTestAgent(t, "Accept Partial Ubuntu")
+	lijian := createPeriodBriefCollectorTestAgent(t, "Accept Partial Lijian")
 	injectPeriodBriefCollectorPackMarkdown(t, ubuntu, periodBriefHarvestPack("ubuntu-first"))
 
 	day := time.Now().UTC().Format("2006-01-02")
@@ -372,8 +372,8 @@ WHERE chat_session_id = $1 AND role = 'assistant' AND content LIKE '汇报稿整
 		secondResp.ChatSessionID).Scan(&resultCount); err != nil {
 		t.Fatalf("count result cards: %v", err)
 	}
-	if resultCount != 1 {
-		t.Fatalf("failed added computer must keep the prior official brief, result cards=%d", resultCount)
+	if resultCount != 2 {
+		t.Fatalf("partial ready harvest must post a new official brief, result cards=%d", resultCount)
 	}
 	var status string
 	if err := testPool.QueryRow(context.Background(), `
@@ -381,8 +381,8 @@ SELECT status FROM note_period_brief_run WHERE chat_session_id = $1 ORDER BY cre
 		secondResp.ChatSessionID).Scan(&status); err != nil {
 		t.Fatalf("load latest run: %v", err)
 	}
-	if status != "cancelled" {
-		t.Fatalf("failed added computer status = %s, want cancelled", status)
+	if status != "awaiting_confirm" && status != "done" && status != "synthesizing" {
+		t.Fatalf("partial ready harvest status = %s, want synthesizing/awaiting_confirm/done", status)
 	}
 }
 

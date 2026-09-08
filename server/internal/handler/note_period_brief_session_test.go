@@ -90,6 +90,8 @@ func TestFormatPeriodBriefSessionMaterialsBoardIsReadOnly(t *testing.T) {
 		"hostname: web-01",
 		"in_latest_run: yes",
 		"os, hostname, or collector name",
+		"must NOT use these packs",
+		"explicitly asks",
 		"Do not call start",
 		"写汇报",
 		"开始采集",

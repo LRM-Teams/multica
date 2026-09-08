@@ -437,10 +437,12 @@ func TestPeriodBriefPackAndAppendInsert(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
+	// Return after dispatch so submit-pack can land while the run is still
+	// collecting. MaxWait=0 + sync finish cancels missing-harvest before submit.
 	prevWait := notePeriodBriefCollectorMaxWait
-	notePeriodBriefCollectorMaxWait = 0
+	notePeriodBriefCollectorMaxWait = 5 * time.Second
 	prevBG := notePeriodBriefFinishInBackground
-	notePeriodBriefFinishInBackground = false
+	notePeriodBriefFinishInBackground = true
 	t.Cleanup(func() {
 		notePeriodBriefCollectorMaxWait = prevWait
 		notePeriodBriefFinishInBackground = prevBG
@@ -478,16 +480,24 @@ RETURNING id`, testWorkspaceID, testUserID, "Source page "+uuid.NewString()[:8],
 	}
 
 	packBody := "# 采集包 from bubble\n\n## Highlights\n- harvested pending proposal\n"
-	submitReq := withURLParam(withAgentCredentialPrincipal(
-		newRequest(http.MethodPost, "/api/agent/notes/period-briefs/"+created.Page.ID+"/submit-pack", map[string]any{
-			"markdown": packBody,
-		}),
-		collectorID, testWorkspaceID, testUserID,
-	), "draftPageId", created.Page.ID)
-	submitRec := httptest.NewRecorder()
-	testHandler.SubmitAgentNotePeriodBriefPack(submitRec, submitReq)
-	if submitRec.Code != http.StatusOK {
-		t.Fatalf("submit-pack = %d: %s", submitRec.Code, submitRec.Body.String())
+	deadline := time.Now().Add(3 * time.Second)
+	var submitRec *httptest.ResponseRecorder
+	for {
+		submitReq := withURLParam(withAgentCredentialPrincipal(
+			newRequest(http.MethodPost, "/api/agent/notes/period-briefs/"+created.Page.ID+"/submit-pack", map[string]any{
+				"markdown": packBody,
+			}),
+			collectorID, testWorkspaceID, testUserID,
+		), "draftPageId", created.Page.ID)
+		submitRec = httptest.NewRecorder()
+		testHandler.SubmitAgentNotePeriodBriefPack(submitRec, submitReq)
+		if submitRec.Code == http.StatusOK {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("submit-pack = %d: %s", submitRec.Code, submitRec.Body.String())
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 
 	var packParts []byte
@@ -738,57 +748,31 @@ RETURNING id`, testWorkspaceID, testUserID, "Retry page "+uuid.NewString()[:8]).
 	}
 
 	joined := loadPeriodBriefBubbleTranscript(t, created.ChatSessionID)
-	if strings.Contains(joined, "再发起一次采集") || strings.Contains(joined, "收到了所有需要的材料") {
-		t.Fatalf("platform must not post canned progress; wake the assistant instead:\n%s", joined)
-	}
 	if strings.Contains(joined, "汇报稿整理完成了") {
-		t.Fatalf("must not finish the Brief before the assistant retry:\n%s", joined)
+		t.Fatalf("a failed collect must not post an official brief:\n%s", joined)
 	}
-	var bubbleWakes int
+
+	var status string
+	var retryCount int
 	if err := testPool.QueryRow(context.Background(), `
-SELECT count(*) FROM agent_inbox_event
-WHERE chat_session_id = $1 AND force_fresh_session = false`, created.ChatSessionID).Scan(&bubbleWakes); err != nil {
-		t.Fatalf("count progress wakes: %v", err)
+SELECT status, COALESCE((collectors->0->>'retry_count')::int, 0)
+FROM note_period_brief_run WHERE draft_page_id = $1`, created.Page.ID).Scan(&status, &retryCount); err != nil {
+		t.Fatalf("load run: %v", err)
 	}
-	if bubbleWakes < 1 {
-		t.Fatal("first stall must wake the Notes Assistant on the bubble session")
+	if status != "cancelled" {
+		t.Fatalf("after platform one-retry with no pack, want cancelled, got %s:\n%s", status, joined)
 	}
-
-	retryReq := withURLParam(withAgentCredentialPrincipal(
-		newRequest(http.MethodPost, "/api/agent/notes/period-briefs/"+created.Page.ID+"/retry-collectors", map[string]any{}),
-		synthID, testWorkspaceID, testUserID,
-	), "draftPageId", created.Page.ID)
-	retryRec := httptest.NewRecorder()
-	testHandler.RetryAgentNotePeriodBriefCollectors(retryRec, retryReq)
-	if retryRec.Code != http.StatusOK {
-		t.Fatalf("retry-collectors = %d: %s", retryRec.Code, retryRec.Body.String())
+	if retryCount != 1 {
+		t.Fatalf("platform must dispatch the one allowed retry, retry_count=%d", retryCount)
 	}
-	var retryResp retryNotePeriodBriefCollectorsResponse
-	if err := json.Unmarshal(retryRec.Body.Bytes(), &retryResp); err != nil {
-		t.Fatalf("decode retry: %v body=%s", err, retryRec.Body.String())
+	var collectorJobs int
+	if err := testPool.QueryRow(context.Background(), `
+SELECT count(*) FROM note_worker_job
+WHERE page_id = $1 AND agent_id = $2`, created.Page.ID, collectorID).Scan(&collectorJobs); err != nil {
+		t.Fatalf("count collector jobs: %v", err)
 	}
-	if len(retryResp.Retried) == 0 {
-		t.Fatalf("assistant retry must re-dispatch: %#v", retryResp)
-	}
-
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		var status string
-		if err := testPool.QueryRow(context.Background(), `
-SELECT status FROM note_period_brief_run WHERE draft_page_id = $1`, created.Page.ID).Scan(&status); err != nil {
-			t.Fatalf("load run status: %v", err)
-		}
-		joined = loadPeriodBriefBubbleTranscript(t, created.ChatSessionID)
-		if strings.Contains(joined, "汇报稿整理完成了") {
-			t.Fatalf("a failed collect must not post an official brief:\n%s", joined)
-		}
-		if status == "cancelled" {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("after one assistant retry with no pack, want cancelled, got %s:\n%s", status, joined)
-		}
-		time.Sleep(40 * time.Millisecond)
+	if collectorJobs < 2 {
+		t.Fatalf("want initial + platform retry collector jobs, got %d", collectorJobs)
 	}
 }
 

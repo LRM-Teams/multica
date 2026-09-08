@@ -12,8 +12,8 @@ import (
 
 // notePeriodBriefCollectorRef is durable per-collector state for one Brief run.
 // PackMarkdown is the implicit collector artifact (not a Notes page). Kept
-// after synthesis so a later collect in the same bubble session can reuse
-// computers that were not re-selected.
+// after synthesis as session harvest context for Q&A and explicit prior-harvest
+// asks; a new 开始采集 always re-walks and does not skip collect from these packs.
 type notePeriodBriefCollectorRef struct {
 	AgentID      string `json:"agent_id"`
 	PackPageID   string `json:"pack_page_id,omitempty"` // legacy; unused for new runs

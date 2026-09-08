@@ -6,8 +6,10 @@ import (
 	"github.com/multica-ai/multica/server/pkg/taskfailure"
 )
 
-// Max retries the Notes Assistant may trigger per collector within one Brief
-// run (initial dispatch does not count). Inbox must not auto-retry collectors.
+// Max retries the platform may trigger per collector within one Brief run
+// (initial dispatch does not count). Inbox must not auto-retry collectors;
+// the platform dispatches this one retry itself — do not wait on the Notes
+// Assistant tool call.
 const notePeriodBriefCollectorMaxRetries = 1
 
 // periodBriefCollectorDisposition is the platform verdict exposed on the
@@ -174,17 +176,17 @@ func periodBriefFailureIsPermanent(combined, failureReason string) (permanent bo
 // periodBriefRetryDisposition is the retry-collectors verdict. After the
 // platform already released a slot to the Notes Assistant, a still-running
 // inbox row must not block the one allowed retry.
-func periodBriefRetryDisposition(jobStatus, failureReason string, packReady bool) periodBriefCollectorDisposition {
-	d := classifyPeriodBriefCollectorOutcome(jobStatus, failureReason, failureReason, packReady, false)
+func periodBriefRetryDisposition(jobStatus, failureReason, errorText string, packReady bool) periodBriefCollectorDisposition {
+	d := classifyPeriodBriefCollectorOutcome(jobStatus, failureReason, errorText, packReady, false)
 	if packReady || d.Status == "ready" || d.Status != "running" {
 		return d
 	}
-	return classifyPeriodBriefCollectorOutcome(jobStatus, failureReason, failureReason, false, true)
+	return classifyPeriodBriefCollectorOutcome(jobStatus, failureReason, errorText, false, true)
 }
 
-// periodBriefCollectorNeedsAssistantRetry is true when the Notes Assistant
-// still owes exactly one retry-collectors call for this slot. After that
-// attempt settles (ready or failed), the result is received.
+// periodBriefCollectorNeedsAssistantRetry is true when this slot still owes
+// the one allowed platform retry. Named for the historical assistant tool;
+// the platform now dispatches that retry itself.
 func periodBriefCollectorNeedsAssistantRetry(pack notePeriodBriefPackResult) bool {
 	if !pack.Retryable || pack.RetryCount >= notePeriodBriefCollectorMaxRetries {
 		return false
@@ -215,6 +217,16 @@ func periodBriefAnyCollectorReady(packs []notePeriodBriefPackResult) bool {
 	return false
 }
 
+func periodBriefAnyCollectorFailed(packs []notePeriodBriefPackResult) bool {
+	for _, pack := range packs {
+		switch pack.Status {
+		case "failed", "stalled", "cancelled":
+			return true
+		}
+	}
+	return false
+}
+
 func periodBriefFailedCollectorIDs(packs []notePeriodBriefPackResult) []string {
 	out := make([]string, 0)
 	seen := make(map[string]struct{}, len(packs))
@@ -238,10 +250,14 @@ func periodBriefFailedCollectorIDs(packs []notePeriodBriefPackResult) []string {
 }
 
 // periodBriefOfficialBriefBlocked is true when every collector result is
-// received and at least one selected computer failed, stalled, or cancelled
-// with no pack. Remaining ready harvests must not become a new official brief.
+// received and there is no ready pack — nothing usable to synthesize into a
+// new official brief. Partial success (some ready, some failed) is not blocked;
+// the synthesizer writes from ready packs only and speaks the failures.
 func periodBriefOfficialBriefBlocked(packs []notePeriodBriefPackResult) bool {
 	if !periodBriefAllCollectorResultsFinal(packs) {
+		return false
+	}
+	if periodBriefAnyCollectorReady(packs) {
 		return false
 	}
 	for _, pack := range packs {
@@ -256,19 +272,38 @@ func periodBriefOfficialBriefBlocked(packs []notePeriodBriefPackResult) bool {
 func periodBriefMissingHarvestProgressCopy(spoken string) string {
 	spoken = strings.TrimSpace(spoken)
 	if spoken == "" {
-		return "有采集没有成功，正式稿没有更新。可以再说一次采集。"
+		return "这次采集都没有成功，没有可用材料，正式稿没有更新。可以再说一次采集。"
 	}
 	return spoken + "没有采到材料，正式稿没有更新。可以再说一次采集。"
 }
 
+func periodBriefPartialHarvestProgressCopy(spoken string) string {
+	spoken = strings.TrimSpace(spoken)
+	if spoken == "" {
+		return "有电脑采集失败了；下面只根据已经采到的材料整理汇报稿。"
+	}
+	return spoken + "采集失败了；下面只根据已经采到的材料整理汇报稿。"
+}
+
+func periodBriefResultFailureSuffix(spoken string) string {
+	spoken = strings.TrimSpace(spoken)
+	if spoken == "" {
+		return "有电脑这次没有采到材料，稿子只根据成功的电脑整理。"
+	}
+	return spoken + "这次没有采到材料，稿子只根据成功的电脑整理。"
+}
+
 func periodBriefMaterialsProgressCopy(packs []notePeriodBriefPackResult) string {
 	if !periodBriefAllCollectorResultsFinal(packs) {
-		return "有采集没有成功，笔记助手会再发起一次采集。"
+		return "有采集没有成功，正在再发起一次采集。"
 	}
 	if periodBriefOfficialBriefBlocked(packs) {
 		return periodBriefMissingHarvestProgressCopy("")
 	}
 	if periodBriefAnyCollectorReady(packs) {
+		if periodBriefAnyCollectorFailed(packs) {
+			return periodBriefPartialHarvestProgressCopy("")
+		}
 		return "我已经收到了所有需要的材料，下面将根据这些材料整理一份汇报稿。"
 	}
 	if len(packs) == 0 {

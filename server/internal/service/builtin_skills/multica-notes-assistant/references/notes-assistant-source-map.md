@@ -9,9 +9,10 @@ to these sources.
 | Bubble binds `chat_session.context_note_page_id` | migration `420_chat_session_context_note_page`; `CreateChatSession` |
 | Wake prefix `<note_chat_context>` (session id, root id/title; no full subtree dump) | `buildNoteChatWakePrefix` |
 | Wake prefix `<period_brief_residue>` after a session 写汇报 | `formatPeriodBriefChatResidue`; `loadPeriodBriefChatResidue`; persist `result_page_id` / `result_mode` in `applyPeriodBriefInsert`; persist `result_markdown` in `postPeriodBriefResultMessage`; migrations `465_note_period_brief_run_result`, `466_note_period_brief_run_result_markdown` |
-| Session harvests are read-only context | `loadPeriodBriefSessionMaterials`; `periodBriefPackMachineIdentity`; `formatPeriodBriefSessionMaterialsBoard` (`os` / `hostname`) |
-| Speech / FAB 写汇报 opens the plan card; 开始采集 walks every selected computer then synthesizes | `tryHandlePeriodBriefPlanAsk`; `looksLikePeriodBriefPlanAsk`; `POST /api/notes/period-briefs` (`CreateNotePeriodBrief`); Highlights decide harvest (`periodBriefPackHasHarvest`); a selected computer that failed with no pack after retry does not post a new official brief (`periodBriefOfficialBriefBlocked`) |
-| Stale instructions refresh marker | `notesAssistantInstructionsCapabilityMarker` (`Period Brief card owns collect scope`) |
+| Session harvests are read-only context; prior harvest reuse needs an explicit ask | `loadPeriodBriefSessionMaterials`; `periodBriefPackMachineIdentity`; `formatPeriodBriefSessionMaterialsBoard` (`os` / `hostname`) |
+| Speech / FAB 写汇报 opens the plan card; 开始采集 walks every selected computer then synthesizes from this run only | `tryHandlePeriodBriefPlanAsk`; `looksLikePeriodBriefPlanAsk`; `POST /api/notes/period-briefs` (`CreateNotePeriodBrief`); Highlights decide harvest (`periodBriefPackHasHarvest`); no ready pack after retry blocks a new official brief (`periodBriefOfficialBriefBlocked`); partial ready still synthesizes |
+| Collector settle safety ceiling | `notePeriodBriefCollectorMaxWait` (15m); still-running past ceiling → `stalled` |
+| Stale instructions refresh marker | `notesAssistantInstructionsCapabilityMarker` (`Period Brief prior harvest reuse needs explicit ask`) |
 | Wake prefix `<period_brief_progress>` during an in-flight run | `formatPeriodBriefProgressBoard`; `loadOpenPeriodBriefRunForSession`; `wakePeriodBriefProgress`; `buildNoteChatWakePrefix` |
 | Complete Start restates plan then waits | `wakePeriodBriefRunStarted`; `<period_brief_progress>` `event: run_started` |
 | Lock means a collector or synthesizer is actually running | `reconcilePeriodBriefLock`; `periodBriefHasLiveWorker`; written orphan → settle; dead lock → abandon; 409 only while a worker job is live |

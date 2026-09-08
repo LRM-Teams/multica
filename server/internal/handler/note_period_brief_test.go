@@ -106,7 +106,7 @@ func TestCreateNotePeriodBriefRejectsEmptyCollectors(t *testing.T) {
 	}
 }
 
-func TestCreateNotePeriodBriefOrchestratesCollectorsThenSynthesizerWithoutDigest(t *testing.T) {
+func TestCreateNotePeriodBriefBlocksOfficialBriefWithoutReadyPacks(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -139,8 +139,10 @@ func TestCreateNotePeriodBriefOrchestratesCollectorsThenSynthesizerWithoutDigest
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.Job.AgentID != synthID {
-		t.Fatalf("synthesizer job agent = %s, want %s", resp.Job.AgentID, synthID)
+	// No ready pack after the platform's one retry → missing-harvest; do not
+	// wake the synthesizer. The draft still records collector outcomes.
+	if resp.Job.AgentID != "" || resp.Job.TaskID != nil {
+		t.Fatalf("missing harvest must not dispatch synthesizer: %#v", resp.Job)
 	}
 	if len(resp.CollectorAgentIDs) != 2 {
 		t.Fatalf("collector_agent_ids = %#v", resp.CollectorAgentIDs)
@@ -168,36 +170,14 @@ func TestCreateNotePeriodBriefOrchestratesCollectorsThenSynthesizerWithoutDigest
 		t.Fatalf("draft missing collector packs: %s", resp.Page.Content)
 	}
 
-	var wake map[string]any
-	var contextRaw []byte
+	var runStatus string
 	if err := testPool.QueryRow(context.Background(), `
-SELECT context FROM agent_inbox_event WHERE id = $1`, *resp.Job.TaskID).Scan(&contextRaw); err != nil {
-		t.Fatalf("load wake context: %v", err)
+SELECT status FROM note_period_brief_run WHERE draft_page_id = $1`, resp.Page.ID).Scan(&runStatus); err != nil {
+		t.Fatalf("load run status: %v", err)
 	}
-	if err := json.Unmarshal(contextRaw, &wake); err != nil {
-		t.Fatalf("unmarshal wake: %v", err)
+	if runStatus != "cancelled" {
+		t.Fatalf("missing harvest run status = %q, want cancelled", runStatus)
 	}
-	prompt, _ := wake["prompt"].(string)
-	if strings.Contains(prompt, "<digest>") || strings.Contains(prompt, "Machine Work Digest") {
-		t.Fatalf("synthesizer wake must not include Host Digest: %s", prompt)
-	}
-	if !strings.Contains(prompt, "<packs>") || !strings.Contains(prompt, "</packs>") {
-		t.Fatalf("synthesizer wake missing packs partition: %s", prompt)
-	}
-	if !strings.Contains(prompt, "<facts>") {
-		t.Fatalf("synthesizer wake missing facts: %s", prompt)
-	}
-	if !strings.Contains(prompt, "collector packs") {
-		t.Fatalf("system contract should mention collector packs: %s", prompt)
-	}
-	folderID := ""
-	if resp.Page.ParentID != nil {
-		folderID = *resp.Page.ParentID
-	}
-	if folderID == "" || !strings.Contains(prompt, "--note-write --note-page-id "+folderID) {
-		t.Fatalf("wake must note-write to folder: %s", prompt)
-	}
-	assertPeriodBriefInboxForceFresh(t, *resp.Job.TaskID)
 	for _, job := range resp.CollectorJobs {
 		if job.TaskID == nil {
 			t.Fatalf("collector job missing task_id: %#v", job)
@@ -211,34 +191,6 @@ SELECT max_attempts FROM agent_inbox_event WHERE id = $1`, *job.TaskID).Scan(&ma
 		if maxAttempts != 1 {
 			t.Fatalf("collector inbox max_attempts = %d, want 1 (no automatic re-collect)", maxAttempts)
 		}
-	}
-	if resp.Job.ChannelMessageID == nil {
-		t.Fatal("expected synthesizer channel_message_id")
-	}
-	var partsRaw []byte
-	if err := testPool.QueryRow(context.Background(), `
-SELECT parts FROM channel_message WHERE id = $1`, *resp.Job.ChannelMessageID).Scan(&partsRaw); err != nil {
-		t.Fatalf("load synthesizer channel parts: %v", err)
-	}
-	var parts []map[string]any
-	if err := json.Unmarshal(partsRaw, &parts); err != nil {
-		t.Fatalf("unmarshal parts: %v", err)
-	}
-	foundSticky := false
-	for _, part := range parts {
-		if part["type"] != "note_brief" {
-			continue
-		}
-		foundSticky = true
-		if part["ref_id"] != folderID {
-			t.Fatalf("sticky note_brief ref_id = %v, want folder %s", part["ref_id"], folderID)
-		}
-		if part["ref_id"] == resp.Page.ID {
-			t.Fatalf("sticky must not point at draft page %s", resp.Page.ID)
-		}
-	}
-	if !foundSticky {
-		t.Fatalf("expected note_brief sticky on folder: %s", partsRaw)
 	}
 }
 
@@ -737,8 +689,10 @@ func TestCreateNotePeriodBriefFocusFallsBackWhenPlanMissing(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.Job.AgentID != synthID {
-		t.Fatalf("synthesizer job agent = %s, want %s", resp.Job.AgentID, synthID)
+	// Plan missing → fall back to all selected collectors. With MaxWait=0
+	// there is no ready pack, so the official brief stays blocked.
+	if resp.Job.AgentID != "" || resp.Job.TaskID != nil {
+		t.Fatalf("missing harvest must not dispatch synthesizer: %#v", resp.Job)
 	}
 	if len(resp.CollectorJobs) != 2 {
 		t.Fatalf("missing plan should fall back to all selected collectors: %#v", resp.CollectorJobs)

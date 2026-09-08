@@ -4,6 +4,7 @@ import {
   appendNotePageRef,
   attachNotePageRefs,
   encodeNotePageDragPayload,
+  isNotePageId,
   parseNotePageDragPayload,
   removeNotePageRef,
 } from "./page-ref";
@@ -21,6 +22,12 @@ describe("note page drag payload", () => {
     expect(parseNotePageDragPayload("")).toBeNull();
     expect(parseNotePageDragPayload("{")).toBeNull();
     expect(parseNotePageDragPayload(JSON.stringify({ title: "x" }))).toBeNull();
+  });
+
+  it("detects UUID page ids used as text/plain fallback", () => {
+    expect(isNotePageId("a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11")).toBe(true);
+    expect(isNotePageId("not-a-uuid")).toBe(false);
+    expect(isNotePageId("12345")).toBe(false);
   });
 });
 

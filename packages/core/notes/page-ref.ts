@@ -7,6 +7,10 @@
 export const NOTE_PAGE_DRAG_MIME = "application/x-multica-note-page";
 export const NOTE_PAGE_REF_MAX = 8;
 
+/** Multica note page ids are UUIDs (tree reorder uses text/plain = id). */
+const NOTE_PAGE_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 export type NotePageRef = {
   pageId: string;
   title: string;
@@ -17,6 +21,10 @@ export type NotePageRefBundle = {
   bubblePageId: string;
   refs: NotePageRef[];
 };
+
+export function isNotePageId(value: string): boolean {
+  return NOTE_PAGE_ID_RE.test(value.trim());
+}
 
 export function encodeNotePageDragPayload(ref: NotePageRef): string {
   return JSON.stringify({

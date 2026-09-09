@@ -12,6 +12,111 @@ import (
 	"github.com/google/uuid"
 )
 
+func TestFilterPeriodBriefCollectorIDsAgainstOwned(t *testing.T) {
+	owned := []periodBriefOwnedCollector{
+		{ID: "live-a", Label: "A"},
+		{ID: "live-b", Label: "B"},
+	}
+	got := filterPeriodBriefCollectorIDsAgainstOwned(
+		[]string{"live-a", "ghost", "live-a", " live-b ", ""},
+		owned,
+	)
+	want := []string{"live-a", "live-b"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("filter = %#v, want %#v", got, want)
+	}
+	if len(filterPeriodBriefCollectorIDsAgainstOwned([]string{"ghost"}, owned)) != 0 {
+		t.Fatal("ghost-only selection must become empty")
+	}
+}
+
+func TestNoteBubbleWriteReportDropsDeletedCollectorsFromPriorRun(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	pageID := insertPeriodBriefFixtureDraft(t, "Ghost collector seed")
+	folderID := insertPeriodBriefFixtureDraft(t, "Ghost collector folder")
+	draftID := insertPeriodBriefFixtureDraft(t, "Ghost collector draft")
+	synthID := createHandlerTestAgent(t, "Notes Assistant Ghost Seed "+uuid.NewString()[:8], nil)
+	liveCollector := createPeriodBriefCollectorTestAgent(t, "Live Laptop")
+	ghostCollector := createPeriodBriefCollectorTestAgent(t, "Ghost Laptop")
+
+	collectorsJSON, err := json.Marshal([]map[string]any{
+		{"agent_id": liveCollector, "job_id": uuid.NewString()},
+		{"agent_id": ghostCollector, "job_id": uuid.NewString()},
+	})
+	if err != nil {
+		t.Fatalf("marshal collectors: %v", err)
+	}
+	var runID string
+	if err := testPool.QueryRow(context.Background(), `
+INSERT INTO note_period_brief_run (
+  workspace_id, owner_user_id, draft_page_id, folder_page_id, synthesizer_agent_id,
+  window_label, window_start, window_end, timezone, window_kind,
+  facts_text, collectors, status, source_page_id, created_at, updated_at
+) VALUES (
+  $1, $2, $3, $4, $5,
+  'week', now() - interval '7 days', now(), 'UTC', 'week',
+  '', $6::jsonb, 'done', $7, now() - interval '1 day', now() - interval '1 day'
+)
+RETURNING id`, testWorkspaceID, testUserID, draftID, folderID, synthID, string(collectorsJSON), pageID).Scan(&runID); err != nil {
+		t.Fatalf("insert prior run: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM note_period_brief_run WHERE id = $1`, runID)
+	})
+	if _, err := testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, ghostCollector); err != nil {
+		t.Fatalf("delete ghost collector: %v", err)
+	}
+
+	sessionID := createNoteBubbleSession(t, synthID, pageID)
+	ask := sendNoteBubbleChat(t, sessionID, "写汇报")
+	if ask.Pending {
+		t.Fatal("exact 写汇报 must open the plan card")
+	}
+
+	var collectors []string
+	if err := testPool.QueryRow(context.Background(), `
+SELECT collector_agent_ids FROM note_period_brief_prompt
+WHERE chat_session_id = $1 AND status = 'clarifying'
+ORDER BY created_at DESC LIMIT 1`, sessionID).Scan(&collectors); err != nil {
+		t.Fatalf("load seeded plan: %v", err)
+	}
+	if len(collectors) != 1 || collectors[0] != liveCollector {
+		t.Fatalf("seeded collectors = %#v, want [%s] without deleted agent", collectors, liveCollector)
+	}
+}
+
+func TestPutNotePeriodBriefPlanDropsDeletedCollectors(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	pageID := insertPeriodBriefFixtureDraft(t, "Put drops ghost")
+	agentID := createHandlerTestAgent(t, "Notes Assistant Put Ghost "+uuid.NewString()[:8], nil)
+	sessionID := createNoteBubbleSession(t, agentID, pageID)
+	liveCollector := createPeriodBriefCollectorTestAgent(t, "Put Live")
+	ghostID := uuid.NewString()
+
+	put := newRequest(http.MethodPut, "/api/notes/period-briefs/plan", map[string]any{
+		"chat_session_id":     sessionID,
+		"window":              "week",
+		"collector_agent_ids": []string{ghostID, liveCollector},
+	})
+	putRec := httptest.NewRecorder()
+	testHandler.PutNotePeriodBriefPlan(putRec, put)
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("put plan = %d: %s", putRec.Code, putRec.Body.String())
+	}
+	var saved notePeriodBriefPlanResponse
+	if err := json.NewDecoder(putRec.Body).Decode(&saved); err != nil {
+		t.Fatalf("decode put: %v", err)
+	}
+	if saved.Plan == nil || len(saved.Plan.CollectorAgentIDs) != 1 || saved.Plan.CollectorAgentIDs[0] != liveCollector {
+		t.Fatalf("put must drop ghost collectors, got %#v", saved.Plan)
+	}
+}
+
 func TestGetNotePeriodBriefPlanEmpty(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

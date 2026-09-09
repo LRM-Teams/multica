@@ -137,6 +137,28 @@ export function togglePeriodBriefCollectorId(
   return [...selected, agentId];
 }
 
+/** Drop collector IDs that are no longer in the owned/live candidate set. */
+export function retainOwnedPeriodBriefCollectorIds(
+  selected: readonly string[],
+  ownedIds: readonly string[],
+): string[] {
+  if (selected.length === 0) {
+    return [];
+  }
+  const allowed = new Set(ownedIds);
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const id of selected) {
+    const trimmed = id.trim();
+    if (!trimmed || !allowed.has(trimmed) || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    out.push(trimmed);
+  }
+  return out;
+}
+
 /** Daemon id used to read/write Computer-local Period Work collect roots. */
 export function periodBriefCollectorDaemonId(
   agent: Pick<PeriodBriefCollectorCandidate, "runtime_id">,

@@ -22,6 +22,7 @@ import {
   periodBriefCollectorNameForSeed,
   periodBriefMachineDaemonId,
   periodBriefSlotDaemonId,
+  retainOwnedPeriodBriefCollectorIds,
   togglePeriodBriefCollectorId,
 } from "./period-brief-collectors";
 import {
@@ -124,6 +125,9 @@ describe("defaultPeriodBriefCollectorIds", () => {
     expect(isPeriodBriefCollectorOnline(offline)).toBe(false);
     expect(togglePeriodBriefCollectorId(["local-1"], "off-1")).toEqual(["local-1", "off-1"]);
     expect(togglePeriodBriefCollectorId(["local-1", "off-1"], "local-1")).toEqual(["off-1"]);
+    expect(
+      retainOwnedPeriodBriefCollectorIds(["local-1", "ghost", "local-1"], ["local-1", "off-1"]),
+    ).toEqual(["local-1"]);
   });
 
   it("excludes collectors on computers owned by someone else when userId is set", () => {

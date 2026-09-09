@@ -378,6 +378,89 @@ func (h *Handler) tryHandlePeriodBriefPlanAsk(
 	return periodBriefPlanAskOutcome{Handled: true}
 }
 
+// filterPeriodBriefCollectorIDsAgainstOwned keeps only IDs that still resolve
+// to an owned Period Work collector. Historical runs / drafts can retain
+// agent_ids after the Agent row was hard-deleted; those must not re-enter a plan.
+func filterPeriodBriefCollectorIDsAgainstOwned(
+	ids []string,
+	owned []periodBriefOwnedCollector,
+) []string {
+	if len(ids) == 0 {
+		return []string{}
+	}
+	allowed := make(map[string]struct{}, len(owned))
+	for _, collector := range owned {
+		allowed[collector.ID] = struct{}{}
+	}
+	out := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		trimmed := strings.TrimSpace(id)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := allowed[trimmed]; !ok {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
+}
+
+func ownedPeriodBriefCollectorIDs(owned []periodBriefOwnedCollector) []string {
+	ids := make([]string, 0, len(owned))
+	for _, collector := range owned {
+		ids = append(ids, collector.ID)
+	}
+	return ids
+}
+
+func sanitizePeriodBriefPlanCollectors(
+	row *notePeriodBriefPromptRow,
+	owned []periodBriefOwnedCollector,
+	fillOwnedWhenEmpty bool,
+) {
+	row.CollectorAgentIDs = filterPeriodBriefCollectorIDsAgainstOwned(row.CollectorAgentIDs, owned)
+	if fillOwnedWhenEmpty && len(row.CollectorAgentIDs) == 0 {
+		row.CollectorAgentIDs = ownedPeriodBriefCollectorIDs(owned)
+	}
+}
+
+// healPeriodBriefPlanCollectors drops deleted collector IDs from an open draft
+// and persists when the set changed, so GET / start do not keep serving ghosts.
+func (h *Handler) healPeriodBriefPlanCollectors(
+	ctx context.Context,
+	workspaceID, userID pgtype.UUID,
+	row *notePeriodBriefPromptRow,
+) {
+	before := append([]string(nil), row.CollectorAgentIDs...)
+	owned := h.listOwnedPeriodBriefCollectors(ctx, workspaceID, userID)
+	sanitizePeriodBriefPlanCollectors(row, owned, false)
+	if periodBriefCollectorIDsEqual(before, row.CollectorAgentIDs) {
+		return
+	}
+	if err := h.upsertPeriodBriefPrompt(ctx, row); err != nil {
+		slog.Warn("period brief plan failed to drop deleted collectors", "error", err)
+		row.CollectorAgentIDs = before
+	}
+}
+
+func periodBriefCollectorIDsEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func (h *Handler) seedPeriodBriefPlan(
 	ctx context.Context,
 	sessionID, workspaceID, userID, pageID pgtype.UUID,
@@ -385,6 +468,7 @@ func (h *Handler) seedPeriodBriefPlan(
 ) (notePeriodBriefPromptRow, error) {
 	row, err := h.loadPeriodBriefPrompt(ctx, sessionID, workspaceID, userID)
 	if err == nil {
+		sanitizePeriodBriefPlanCollectors(&row, owned, true)
 		return row, nil
 	}
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
@@ -396,6 +480,7 @@ func (h *Handler) seedPeriodBriefPlan(
 		prev.Status = periodBriefPromptStatusClarifying
 		prev.SourcePageID = pageID
 		prev.SourceAsk = ""
+		sanitizePeriodBriefPlanCollectors(&prev, owned, true)
 		return prev, nil
 	}
 	if prevErr != nil && !errors.Is(prevErr, pgx.ErrNoRows) {
@@ -415,13 +500,7 @@ func (h *Handler) seedPeriodBriefPlan(
 			row = periodBriefPlanFromRun(full, sessionID, pageID)
 		}
 	}
-	if len(row.CollectorAgentIDs) == 0 {
-		ids := make([]string, 0, len(owned))
-		for _, collector := range owned {
-			ids = append(ids, collector.ID)
-		}
-		row.CollectorAgentIDs = ids
-	}
+	sanitizePeriodBriefPlanCollectors(&row, owned, true)
 	return row, nil
 }
 

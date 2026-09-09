@@ -16,6 +16,7 @@ import {
   periodBriefCollectorDaemonId,
   periodBriefCollectorLabel,
   periodBriefSlotDaemonId,
+  retainOwnedPeriodBriefCollectorIds,
   togglePeriodBriefCollectorId,
   type PeriodBriefCollectorSlot,
 } from "@multica/core/notes/period-brief-collectors";
@@ -190,7 +191,14 @@ export function NotePeriodBriefCompose({
     () => listOwnedPeriodBriefCollectorSlots(runtimes, agents, currentUserId, computers),
     [agents, computers, currentUserId, runtimes],
   );
-  const collectorIds = collectorOverride ?? (plan ? plan.collector_agent_ids : defaultCollectors);
+  const ownedCollectorIds = useMemo(
+    () => collectorAgents.map((agent) => agent.id),
+    [collectorAgents],
+  );
+  const collectorIds = retainOwnedPeriodBriefCollectorIds(
+    collectorOverride ?? (plan ? plan.collector_agent_ids : defaultCollectors),
+    ownedCollectorIds,
+  );
 
   const interactive = active && !disabled;
   const prevInteractiveRef = useRef(interactive);
@@ -219,6 +227,7 @@ export function NotePeriodBriefCompose({
     setWindowKind(kind);
     if (plan.start_date) setStartDate(plan.start_date);
     if (plan.end_date) setEndDate(plan.end_date);
+    // Keep the server list as-is; collectorIds drops deleted IDs at read time.
     setCollectorOverride(plan.collector_agent_ids);
   }, [plan, planKey]);
 
@@ -424,10 +433,11 @@ export function NotePeriodBriefCompose({
                     className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm hover:bg-muted/70"
                     onClick={() =>
                       setCollectorOverride((current) => {
-                        const next = togglePeriodBriefCollectorId(
+                        const base = retainOwnedPeriodBriefCollectorIds(
                           current ?? (plan ? plan.collector_agent_ids : defaultCollectors),
-                          agent.id,
+                          ownedCollectorIds,
                         );
+                        const next = togglePeriodBriefCollectorId(base, agent.id);
                         emitPlan({
                           window: windowKind,
                           date: selection.date,

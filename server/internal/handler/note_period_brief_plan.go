@@ -221,6 +221,8 @@ func (h *Handler) mergePeriodBriefStartRequestFromPlan(
 	if len(req.CollectorAgentIDs) == 0 {
 		req.CollectorAgentIDs = append([]string(nil), plan.CollectorAgentIDs...)
 	}
+	owned := h.listOwnedPeriodBriefCollectors(r.Context(), workspaceID, userID)
+	req.CollectorAgentIDs = filterPeriodBriefCollectorIDsAgainstOwned(req.CollectorAgentIDs, owned)
 	if strings.TrimSpace(req.Focus) == "" {
 		req.Focus = plan.Focus
 	}
@@ -279,6 +281,7 @@ func (h *Handler) GetNotePeriodBriefPlan(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "failed to load period brief plan")
 		return
 	}
+	h.healPeriodBriefPlanCollectors(r.Context(), workspaceID, userID, &row)
 	plan := periodBriefPlanFromRow(row)
 	writeJSON(w, http.StatusOK, notePeriodBriefPlanResponse{Plan: &plan})
 }
@@ -333,6 +336,7 @@ func (h *Handler) PutNotePeriodBriefPlan(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	sanitizePeriodBriefPlanCollectors(&row, h.listOwnedPeriodBriefCollectors(r.Context(), workspaceID, userID), false)
 	if err := h.upsertPeriodBriefPrompt(r.Context(), &row); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save period brief plan")
 		return
@@ -423,6 +427,7 @@ func (h *Handler) GetAgentNotePeriodBriefPlan(w http.ResponseWriter, r *http.Req
 		return
 	}
 	_ = pageID
+	h.healPeriodBriefPlanCollectors(r.Context(), workspaceID, creatorID, &row)
 	plan := periodBriefPlanFromRow(row)
 	writeJSON(w, http.StatusOK, notePeriodBriefPlanResponse{Plan: &plan})
 }
@@ -485,6 +490,7 @@ func (h *Handler) PutAgentNotePeriodBriefPlan(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	sanitizePeriodBriefPlanCollectors(&row, h.listOwnedPeriodBriefCollectors(r.Context(), workspaceID, creatorID), false)
 	if err := h.upsertPeriodBriefPrompt(r.Context(), &row); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save period brief plan")
 		return

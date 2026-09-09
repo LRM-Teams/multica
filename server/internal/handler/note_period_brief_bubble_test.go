@@ -936,6 +936,9 @@ WHERE page_id = $1 AND agent_id = $2`, created.Page.ID, collectorID).Scan(&colle
 	if collectorJobs < 2 {
 		t.Fatalf("want initial + platform retry collector jobs, got %d", collectorJobs)
 	}
+	if !strings.Contains(joined, "正在再采一次") {
+		t.Fatalf("mid-flight retry must post a bubble line, transcript:\n%s", joined)
+	}
 }
 
 func loadPeriodBriefBubbleTranscript(t *testing.T, sessionID string) string {

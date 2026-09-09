@@ -57,11 +57,14 @@ synthesizer write.
    failed. A new official brief is blocked only when **no** ready pack
    remains (all failed / stalled / cancelled / empty of usable
    harvest).
-6. **Settle ceiling is 15 minutes.** Platform waits for real
+6. **Settle ceiling is 15 minutes per wave.** Platform waits for real
    ready / failed / cancelled / empty. It does **not** fail a still-
    running collector early. Past 15 minutes, remaining runners are
    marked `stalled` (then retry / partial / missing-harvest rules
-   apply).
+   apply). The finish waiter budgets **two** such ceilings (first
+   wave + the one platform retry) so a long first wave cannot cancel
+   the retry mid-flight and leave the run stuck in `collecting`.
+   Post-collect synthesis does not inherit the wait deadline.
 7. **Lock means work is running.** Composer lock is
    `planning | collecting | synthesizing` only while a collector or
    synthesizer process is actually in flight. It is not “an HTTP
@@ -72,6 +75,14 @@ synthesizer write.
    a parallel “chips then POST” product.
 9. **Insert may target any note** the human can write. Non-issuing-page
    targets still require a human confirm.
+10. **One collector failure is spoken immediately.** When any selected
+    computer settles as failed / stalled / cancelled (or retryable
+    empty), the platform posts a bubble line right away — siblings may
+    still be running. If that slot is retryable and has not used its
+    one platform retry, the platform also re-dispatches it immediately
+    (max one retry per collector). Permanent config/auth failures are
+    spoken and not retried. End-of-run partial / missing-harvest lines
+    still apply after all slots are final.
 
 ## What the human sees
 
@@ -137,6 +148,12 @@ The platform updates the run and wakes the assistant with a short
 untrusted board (who settled, who is waiting). Pack bodies stay
 collapsed cards. The assistant speaks one reminder. It does not
 start synthesis. It does not emit chat XML.
+
+**Per-collector failure:** as soon as one computer settles failed /
+stalled / cancelled (or retryable empty), the platform posts a durable
+bubble line naming that collector. Retryable slots get one immediate
+re-dispatch (`暂时失败了，正在再采一次`); final failures get
+`采集失败了，不会自动重试`. This does not wait for other computers.
 
 **Silence fence:** if a progress wake produces no assistant row, the
 platform may post one fallback line. That is recovery, not the happy

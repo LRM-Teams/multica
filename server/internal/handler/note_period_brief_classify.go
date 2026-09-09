@@ -285,6 +285,39 @@ func periodBriefPartialHarvestProgressCopy(spoken string) string {
 	return spoken + "采集失败了；下面只根据已经采到的材料整理汇报稿。"
 }
 
+// periodBriefCollectorMidFlightRetryCopy is posted as soon as one collector
+// settles retryable while siblings may still be running.
+func periodBriefCollectorMidFlightRetryCopy(spoken string) string {
+	spoken = strings.TrimSpace(spoken)
+	if spoken == "" {
+		return "有电脑暂时失败了，正在再采一次。"
+	}
+	return spoken + "暂时失败了，正在再采一次。"
+}
+
+// periodBriefCollectorMidFlightFinalFailCopy is posted when a collector
+// settles as a final failure (not retryable, or the one retry already used).
+func periodBriefCollectorMidFlightFinalFailCopy(spoken string) string {
+	spoken = strings.TrimSpace(spoken)
+	if spoken == "" {
+		return "有电脑采集失败了，不会自动重试。"
+	}
+	return spoken + "采集失败了，不会自动重试。"
+}
+
+// periodBriefPackIsFailureSpeak reports outcomes the human should hear about
+// mid-flight. Clean empty harvests are silent (not a hang).
+func periodBriefPackIsFailureSpeak(pack notePeriodBriefPackResult) bool {
+	switch pack.Status {
+	case "failed", "stalled", "cancelled":
+		return true
+	case "empty":
+		return pack.Retryable
+	default:
+		return false
+	}
+}
+
 func periodBriefResultFailureSuffix(spoken string) string {
 	spoken = strings.TrimSpace(spoken)
 	if spoken == "" {

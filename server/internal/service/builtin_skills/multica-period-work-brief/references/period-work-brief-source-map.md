@@ -12,7 +12,7 @@ to these sources.
 | Status board fields (status/retryable/abandon_why) | `formatNotePeriodBriefPacks`, `classifyPeriodBriefCollectorOutcome` |
 | Permanent vs retryable classification | `server/internal/handler/note_period_brief_classify.go`; inbox `error` body via `NoteWorkerJobResponse.Error` (`TestClassifyPeriodBriefCollectorOutcomeUnknownReasonUsesErrorBody`) |
 | Clean complete + no pack is settled empty (no retry) | `classifyPeriodBriefCollectorOutcome` (`completed` with empty error); `TestClassifyPeriodBriefCollectorOutcomeEmptyCompleted` |
-| One platform retry per collector; inbox does not auto-retry | `notePeriodBriefCollectorMaxRetries`; `settlePeriodBriefCollectorsWithOneRetry`; `SetAgentTaskMaxAttempts(..., 1)` |
+| One platform retry per collector as soon as that slot settles retryable (siblings may still run); inbox does not auto-retry; finish waiter budgets 2× collect ceiling | `notePeriodBriefCollectorMaxRetries`; `awaitPeriodBriefCollectorPacks` eager retry; `settlePeriodBriefCollectorsWithOneRetry`; `notePeriodBriefFinishWaitBudget`; `SetAgentTaskMaxAttempts(..., 1)` |
 | Retry-only instruction kept for manual retry API | `notePeriodBriefRetryInstruction`; harvest `created_at >= writeAfter` |
 | Atomic per-collector pack write | `mergeNotePeriodBriefCollector`; await matches `pack_job_id` |
 | Narrow retry API (optional / manual; platform owns the default retry) | `POST /api/agent/notes/period-briefs/{draftPageId}/retry-collectors` → `RetryAgentNotePeriodBriefCollectors` |

@@ -286,9 +286,10 @@ func abandonPeriodBriefOutstandingRetries(packs []notePeriodBriefPackResult, why
 	}
 }
 
-// settlePeriodBriefCollectorsWithOneRetry waits for the first wave, then the
-// platform itself dispatches the one allowed retry for retryable failures.
-// Callers must not wait on the Notes Assistant to invoke retry-collectors.
+// settlePeriodBriefCollectorsWithOneRetry waits for collectors and, as soon as
+// any one settles retryable, posts a bubble line and dispatches that collector's
+// one allowed retry without waiting for siblings. Permanent failures are spoken
+// immediately and not retried. Inbox must not auto-retry.
 func (h *Handler) settlePeriodBriefCollectorsWithOneRetry(
 	ctx context.Context,
 	workspaceID, userID pgtype.UUID,
@@ -296,27 +297,7 @@ func (h *Handler) settlePeriodBriefCollectorsWithOneRetry(
 	draftPageID pgtype.UUID,
 	collectorJobs []NoteWorkerJobResponse,
 ) []notePeriodBriefPackResult {
-	packResults := h.awaitPeriodBriefCollectorPacks(ctx, workspaceID, userID, draftPageID, collectorJobs)
-	h.attachPeriodBriefRetryCounts(ctx, workspaceID, draftPageID, packResults)
-	if periodBriefAllCollectorResultsFinal(packResults) {
-		return packResults
-	}
-
-	run, err := h.loadNotePeriodBriefRunByDraft(ctx, workspaceID, draftPageID)
-	if err != nil || !periodBriefRunLocksComposerStatus(run.Status) {
-		abandonPeriodBriefOutstandingRetries(packResults, "period brief run is not running for platform retry")
-		return packResults
-	}
-	h.wakePeriodBriefProgress(ctx, run, userIDString, "collect_retrying", packResults)
-
-	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/api/notes/period-briefs/retry", nil)
-	_, jobs, retryErr := h.retryNotePeriodBriefCollectors(ctx, req, workspaceID, run, nil, middleware.AgentPrincipal{})
-	if retryErr != nil || len(jobs) == 0 {
-		abandonPeriodBriefOutstandingRetries(packResults, "platform could not dispatch the one allowed retry")
-		return packResults
-	}
-
-	packResults = h.awaitPeriodBriefCollectorPacks(ctx, workspaceID, userID, draftPageID, jobs)
+	packResults := h.awaitPeriodBriefCollectorPacks(ctx, workspaceID, userID, userIDString, draftPageID, collectorJobs)
 	h.attachPeriodBriefRetryCounts(ctx, workspaceID, draftPageID, packResults)
 	if !periodBriefAllCollectorResultsFinal(packResults) {
 		abandonPeriodBriefOutstandingRetries(packResults, "collector still unsettled after the one allowed retry")

@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/messageparts"
+	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -31,6 +32,14 @@ const (
 // Overridable in tests.
 var notePeriodBriefCollectorMaxWait = 15 * time.Minute
 
+// notePeriodBriefFinishWaitBudget covers one collect wave plus the one allowed
+// platform retry (each may use a full collector max-wait), with a small
+// cushion for bookkeeping. Must not be maxWait+1m alone — that aborts the
+// retry wave when the first wave runs long, leaving the run stuck in
+// collecting while inbox events finish unobserved.
+func notePeriodBriefFinishWaitBudget() time.Duration {
+	return 2*notePeriodBriefCollectorMaxWait + time.Minute
+}
 // When true (production default), CreateNotePeriodBrief returns after dispatching
 // collectors and finishes synthesis in a background goroutine. Waiting inline
 // caused Next.js rewrite proxies to abort with opaque HTTP 500.
@@ -542,10 +551,13 @@ func (h *Handler) finishNotePeriodBriefAfterCollectors(
 	used, empty, skipped []string,
 ) {
 	// Wait until collectors settle (and platform owns the one allowed retry).
-	ctx, cancel := context.WithTimeout(ctx, notePeriodBriefCollectorMaxWait+time.Minute)
-	defer cancel()
+	waitCtx, cancel := context.WithTimeout(ctx, notePeriodBriefFinishWaitBudget())
+	packResults := h.settlePeriodBriefCollectorsWithOneRetry(waitCtx, workspaceID, userID, userIDString, draft.ID, collectorJobs)
+	cancel()
+	// Post-collect writes must not inherit a cancelled wait deadline — otherwise
+	// a long first wave + retry leaves the run stuck in collecting forever.
+	ctx = context.WithoutCancel(ctx)
 
-	packResults := h.settlePeriodBriefCollectorsWithOneRetry(ctx, workspaceID, userID, userIDString, draft.ID, collectorJobs)
 	packsText := formatNotePeriodBriefPacks(packResults)
 	packsReady := 0
 	for _, pack := range packResults {
@@ -1128,14 +1140,22 @@ type notePeriodBriefPackResult struct {
 }
 
 // awaitPeriodBriefCollectorPacks waits until each collector settles (ready /
-// failed / cancelled / empty). Ready packs come from run.collectors[].pack_markdown
-// (submit-pack). Hitting notePeriodBriefCollectorMaxWait marks still-running
-// collectors as stalled — never silent empty.
+// failed / cancelled / empty / stalled). Ready packs come from
+// run.collectors[].pack_markdown (submit-pack). Hitting
+// notePeriodBriefCollectorMaxWait marks still-running collectors as stalled.
+//
+// As soon as a slot settles retryable, the platform posts a bubble line and
+// dispatches that collector's one allowed retry (siblings may still be
+// running). A retry started at/after the ceiling gets a fresh wait window,
+// matching the former end-of-wave retry await.
 func (h *Handler) awaitPeriodBriefCollectorPacks(
 	ctx context.Context,
-	workspaceID, userID, draftPageID pgtype.UUID,
-	jobs []NoteWorkerJobResponse,
+	workspaceID, userID pgtype.UUID,
+	userIDString string,
+	draftPageID pgtype.UUID,
+	seedJobs []NoteWorkerJobResponse,
 ) []notePeriodBriefPackResult {
+	jobs := append([]NoteWorkerJobResponse(nil), seedJobs...)
 	out := make([]notePeriodBriefPackResult, len(jobs))
 	for i, job := range jobs {
 		out[i] = notePeriodBriefPackResult{
@@ -1148,14 +1168,19 @@ func (h *Handler) awaitPeriodBriefCollectorPacks(
 		return out
 	}
 	deadline := time.Now().Add(notePeriodBriefCollectorMaxWait)
+	announced := map[string]bool{}
 	for {
 		pastCeiling := time.Now().After(deadline)
 		allSettled := true
 		run, runErr := h.loadNotePeriodBriefRunByDraft(ctx, workspaceID, draftPageID)
-		for i, job := range jobs {
+		if runErr == nil {
+			h.attachPeriodBriefRetryCounts(ctx, workspaceID, draftPageID, out)
+		}
+		for i := range jobs {
 			if isPeriodBriefPackSettled(out[i].Status) {
 				continue
 			}
+			job := jobs[i]
 			out[i].Content = ""
 			out[i].Title = ""
 
@@ -1195,22 +1220,76 @@ func (h *Handler) awaitPeriodBriefCollectorPacks(
 			out[i].FailureKind = d.FailureKind
 			if !isPeriodBriefPackSettled(out[i].Status) {
 				allSettled = false
+				continue
 			}
-		}
-		if allSettled || pastCeiling {
-			if pastCeiling {
-				for i := range out {
-					if out[i].Status == "running" || out[i].Status == "pending" {
-						d := classifyPeriodBriefCollectorOutcome("running", out[i].Detail, out[i].Detail, false, true)
-						out[i].Status = d.Status
-						out[i].Retryable = d.Retryable
-						out[i].AbandonWhy = d.AbandonWhy
-						out[i].Detail = d.Detail
-						out[i].FailureKind = d.FailureKind
+
+			if !periodBriefPackIsFailureSpeak(out[i]) || announced[out[i].AgentID] {
+				continue
+			}
+
+			if periodBriefCollectorNeedsAssistantRetry(out[i]) && runErr == nil &&
+				periodBriefRunLocksComposerStatus(run.Status) {
+				spoken := joinPeriodBriefSpokenNames(h.periodBriefCollectorSpokenNames(ctx, workspaceID, []string{out[i].AgentID}))
+				h.postPeriodBriefBubbleMessage(ctx, run.ChatSessionID, run.WorkspaceID, run.OwnerUserID, userIDString, "assistant",
+					periodBriefCollectorMidFlightRetryCopy(spoken))
+				announced[out[i].AgentID] = true
+
+				req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/api/notes/period-briefs/retry", nil)
+				resp, _, retryErr := h.retryNotePeriodBriefCollectors(ctx, req, workspaceID, run, []string{out[i].AgentID}, middleware.AgentPrincipal{})
+				if retryErr == nil && len(resp.Retried) > 0 {
+					item := resp.Retried[0]
+					jobs[i] = NoteWorkerJobResponse{
+						ID:      item.JobID,
+						AgentID: item.AgentID,
+						Status:  "running",
 					}
+					out[i] = notePeriodBriefPackResult{
+						AgentID:    item.AgentID,
+						PageID:     uuidToString(draftPageID),
+						Status:     "running",
+						RetryCount: item.RetryCount,
+					}
+					delete(announced, item.AgentID) // allow a final-fail line if retry also fails
+					allSettled = false
+					if pastCeiling {
+						deadline = time.Now().Add(notePeriodBriefCollectorMaxWait)
+					}
+					continue
+				}
+				abandonPeriodBriefOutstandingRetries([]notePeriodBriefPackResult{out[i]}, "platform could not dispatch the one allowed retry")
+				out[i].Retryable = false
+				h.postPeriodBriefBubbleMessage(ctx, run.ChatSessionID, run.WorkspaceID, run.OwnerUserID, userIDString, "assistant",
+					periodBriefCollectorMidFlightFinalFailCopy(spoken))
+				continue
+			}
+
+			spoken := joinPeriodBriefSpokenNames(h.periodBriefCollectorSpokenNames(ctx, workspaceID, []string{out[i].AgentID}))
+			h.postPeriodBriefBubbleMessage(ctx, run.ChatSessionID, run.WorkspaceID, run.OwnerUserID, userIDString, "assistant",
+				periodBriefCollectorMidFlightFinalFailCopy(spoken))
+			announced[out[i].AgentID] = true
+		}
+		if allSettled {
+			break
+		}
+		if pastCeiling && time.Now().After(deadline) {
+			// Still past the (possibly extended) ceiling with runners left —
+			// force-stall them so the next iteration can eager-retry or finalize.
+			forced := false
+			for i := range out {
+				if out[i].Status == "running" || out[i].Status == "pending" {
+					d := classifyPeriodBriefCollectorOutcome("running", out[i].Detail, out[i].Detail, false, true)
+					out[i].Status = d.Status
+					out[i].Retryable = d.Retryable
+					out[i].AbandonWhy = d.AbandonWhy
+					out[i].Detail = d.Detail
+					out[i].FailureKind = d.FailureKind
+					forced = true
 				}
 			}
-			break
+			if !forced {
+				break
+			}
+			continue
 		}
 		timer := time.NewTimer(notePeriodBriefCollectorPollEvery)
 		select {

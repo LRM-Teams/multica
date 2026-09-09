@@ -182,9 +182,10 @@ machine’s OS work.
 ## Platform owns the one retry
 
 Transient failures (`runtime_offline`, capacity, stalled, retryable empty)
-are retried **once by the platform** before this write wake. Do **not** call
-`retry-collectors`. The status board on this wake is final: write the Brief
-from ready packs, note abandoned machines briefly, never invent OS work.
+are retried **once by the platform as soon as that collector settles**
+(other computers may still be running) — before this write wake. Do **not**
+call `retry-collectors`. The status board on this wake is final: write the
+Brief from ready packs, note abandoned machines briefly, never invent OS work.
 
 ## Deliver the Brief
 

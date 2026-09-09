@@ -11,7 +11,7 @@ to these sources.
 | `POST /api/notes/period-briefs` orchestrates collectors then synthesizer | `server/internal/handler/note_period_brief.go` `CreateNotePeriodBrief` |
 | Collectors only on Computers the caller owns | `EnsurePeriodBriefCollectors` (`ListAgentRuntimesByOwner`); `parsePeriodBriefCollectorAgentIDs` runtime `owner_id` check; FE `listOwnedPeriodBriefCollectorAgents` |
 | Pack stored on run JSONB (not Notes page) | `SubmitAgentNotePeriodBriefPack`; `notePeriodBriefCollectorRef.PackMarkdown` |
-| Settle reads `pack_markdown`; 15m stall ceiling | `awaitPeriodBriefCollectorPacks`; `notePeriodBriefCollectorMaxWait` |
+| Settle reads `pack_markdown`; 15m stall ceiling per wave; finish waiter budgets 2× ceiling + 1m; mid-flight fail speaks + one eager retry | `awaitPeriodBriefCollectorPacks`; `notePeriodBriefCollectorMaxWait`; `notePeriodBriefFinishWaitBudget`; `periodBriefCollectorMidFlightRetryCopy` |
 | Packs purged after synth wake | `clearCollectorPackMarkdown` when status → `done` |
 | Collector must add `## Work groups` + optional Mermaid (evidence remains required) | ADR 0019 Detail level; this skill `SKILL.md` pack shape; `notePeriodBriefCollectorInstruction` |
 | Product contract | `docs/adr/0019-runtime-agent-collectors-period-brief.md` |

@@ -288,3 +288,19 @@ func TestClassifyPeriodBriefCollectorOutcomeStalled(t *testing.T) {
 		t.Fatalf("%+v", d)
 	}
 }
+
+func TestPeriodBriefCollectorMidFlightCopy(t *testing.T) {
+	t.Parallel()
+	if got := periodBriefCollectorMidFlightRetryCopy("采集 · Pi (lijian)"); !strings.Contains(got, "采集 · Pi (lijian)") || !strings.Contains(got, "正在再采一次") {
+		t.Fatalf("retry copy = %q", got)
+	}
+	if got := periodBriefCollectorMidFlightFinalFailCopy("采集 · Pi (lijian)"); !strings.Contains(got, "采集 · Pi (lijian)") || !strings.Contains(got, "不会自动重试") {
+		t.Fatalf("final fail copy = %q", got)
+	}
+	if periodBriefPackIsFailureSpeak(notePeriodBriefPackResult{Status: "empty", Retryable: false}) {
+		t.Fatal("clean empty must stay silent mid-flight")
+	}
+	if !periodBriefPackIsFailureSpeak(notePeriodBriefPackResult{Status: "failed", Retryable: true}) {
+		t.Fatal("failed must speak mid-flight")
+	}
+}
